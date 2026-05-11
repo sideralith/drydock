@@ -46,9 +46,10 @@ ln -s ~/drydock/bin/drydock ~/.local/bin/drydock
 drydock build
 ```
 
-Host-side runtime dirs (`~/.engram-container/`, `~/.claude-container/`) are
-auto-created on first `drydock run`/`shell`/`sync` if missing. You can force
-them with `drydock setup` but you rarely need to.
+Host-side runtime state (`~/.engram-container/`, `~/.claude-container/`,
+`~/.claude-container.json`) is auto-created on first `drydock run`/`shell`/
+`sync` if missing. You can force it with `drydock setup` but you rarely need
+to.
 
 ## Use it on a project
 
@@ -92,8 +93,15 @@ HOST                                CONTAINER (debian:12-slim)
                                        (auto-triggered on first run)
 
 ~/.claude/                          ~/.claude/  (container-specific)
-  (host Claude's config)              ← bind from ~/.claude-container/
-                                       Skills, plugins, hooks visible
+  (host Claude's config dir)          ← bind from ~/.claude-container/
+                                       Skills, plugins, hooks, settings visible
+
+~/.claude.json                      ~/.claude.json  (container-specific)
+  (project list, onboarding flags,    ← bind from ~/.claude-container.json
+   MCP servers, OAuth account)          Without this, Claude Code in the
+                                        container can't find its config file,
+                                        creates a fresh ephemeral one, and
+                                        "settings don't persist". MUST mount.
 
 ~/.claude/hooks/  ─────────────────→ ~/.claude/hooks/ :ro
   (authoritative)                     (RO overlay — agent can't self-edit)
@@ -202,6 +210,7 @@ places. Read this once so you know the right place for each action.
 | `/plugin install <x>` inside Claude | `~/.claude/plugins/` | **NO** — separate |
 | Create/edit skill in `~/.claude/skills/` | `~/.claude/skills/` | **NO** — separate |
 | Edit `~/.claude/CLAUDE.md` or `settings.json` (global) | `~/.claude/` | **NO** — separate |
+| Onboarding flags, "seen hints", project registry, MCP servers, OAuth | `~/.claude.json` | **NO** — separate (`~/.claude-container.json`) |
 | Edit `~/.claude/hooks/` | blocked from container (RO overlay) | host-only |
 | Edits to `.claude/settings.json` of project | repo at `$PROJECT_DIR` | **YES** — same mount |
 | engram memories (`mem_save`) | `~/.engram/engram.db` | **NO** — separate DBs |
@@ -298,6 +307,25 @@ needed.
 The binary lives at `~/.local/bin/claude` on host, bind-mounted into
 container. If PATH doesn't include `~/.local/bin`, check `ENV PATH` in the
 Dockerfile.
+
+### "Claude configuration file not found at: /home/rai/.claude.json" / settings don't persist
+
+Claude Code reads config from TWO locations: the `~/.claude/` **directory**
+(skills, plugins, settings.json) AND the `~/.claude.json` **file** (project
+list, onboarding flags, MCP servers, OAuth). drydock must mount both. If
+`~/.claude-container.json` doesn't exist on host, Claude Code inside the
+container can't find `~/.claude.json`, creates a fresh one on the container's
+ephemeral filesystem, and any config you do (onboarding, theme, hints) is
+lost when the container exits.
+
+Fix:
+
+```bash
+cp -a ~/.claude.json ~/.claude-container.json    # or: drydock setup
+```
+
+`drydock setup` auto-creates it. `drydock sync` refreshes it from host. The
+compose file mounts `~/.claude-container.json:/home/rai/.claude.json:rw`.
 
 ### Engram returns "no memories" inside container
 

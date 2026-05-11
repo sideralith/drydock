@@ -41,7 +41,12 @@ services:
       - /home/rai/.engram-container:/home/rai/.engram:rw
 
       # ── Claude state: container-specific ───────────────────────────────────
+      # Two locations Claude Code reads config from:
+      #   ~/.claude/      — directory: skills, plugins, settings.json, CLAUDE.md, hooks
+      #   ~/.claude.json  — single file: project list, onboarding flags, MCP servers, OAuth
+      # Both get container-specific siblings so host + container don't race.
       - /home/rai/.claude-container:/home/rai/.claude:rw
+      - /home/rai/.claude-container.json:/home/rai/.claude.json:rw
 
       # ── Hooks: RO override (agent can't self-edit guardrails) ──────────────
       - /home/rai/.claude/hooks:/home/rai/.claude/hooks:ro

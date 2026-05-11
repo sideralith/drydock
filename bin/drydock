@@ -44,6 +44,8 @@ DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
 
 HOST_CLAUDE="$HOME/.claude"
 CONTAINER_CLAUDE="$HOME/.claude-container"
+HOST_CLAUDE_JSON="$HOME/.claude.json"
+CONTAINER_CLAUDE_JSON="$HOME/.claude-container.json"
 HOST_ENGRAM="$HOME/.engram"
 CONTAINER_ENGRAM="$HOME/.engram-container"
 
@@ -142,8 +144,8 @@ ensure_prereqs() {
 ensure_runtime_dirs() {
   # Auto-setup if missing. Transparent for first-time users — cmd_setup is
   # idempotent and prints a note when it runs.
-  if [ ! -d "$CONTAINER_CLAUDE" ] || [ ! -d "$CONTAINER_ENGRAM" ]; then
-    note "runtime dirs faltantes — ejecutando 'drydock setup' automáticamente"
+  if [ ! -d "$CONTAINER_CLAUDE" ] || [ ! -d "$CONTAINER_ENGRAM" ] || [ ! -f "$CONTAINER_CLAUDE_JSON" ]; then
+    note "runtime state faltante — ejecutando 'drydock setup' automáticamente"
     cmd_setup
   fi
 }
@@ -186,6 +188,22 @@ cmd_setup() {
     ok "$CONTAINER_CLAUDE inicializado ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
   else
     ok "$CONTAINER_CLAUDE ya existe ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
+  fi
+
+  # ~/.claude.json — the OTHER config location Claude Code reads (project list,
+  # onboarding flags, MCP servers, OAuth account). Without a container-specific
+  # copy, Claude Code inside the container can't find it, creates a fresh
+  # ephemeral one, and "config doesn't persist" across sessions.
+  if [ ! -f "$CONTAINER_CLAUDE_JSON" ]; then
+    if [ -f "$HOST_CLAUDE_JSON" ]; then
+      cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
+      ok "$CONTAINER_CLAUDE_JSON inicializado como copia de $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
+    else
+      echo '{}' > "$CONTAINER_CLAUDE_JSON"
+      ok "$CONTAINER_CLAUDE_JSON creado mínimo (no había $HOST_CLAUDE_JSON para copiar)"
+    fi
+  else
+    ok "$CONTAINER_CLAUDE_JSON ya existe ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
   fi
 
   note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
@@ -256,6 +274,14 @@ cmd_sync() {
       --exclude='*.bak.pre-dockerized' \
       --exclude='*.bak.pre-dockerized/' \
       /src/ /dst/
+  # Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
+  # Plain file copy — small (~40KB). The container's copy gets host's current
+  # state. Note: this overwrites any project-list changes made inside the
+  # container; that's acceptable (host is the canonical project registry).
+  if [ -f "$HOST_CLAUDE_JSON" ]; then
+    cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
+    ok "$CONTAINER_CLAUDE_JSON refreshed from host"
+  fi
   ok "Sync done"
 }
 
@@ -302,9 +328,15 @@ cmd_status() {
     if [ -e "$p" ]; then
       printf '\033[32m%s\033[0m\n' "$(du -sh "$p" 2>/dev/null | cut -f1)"
     else
-      printf '\033[31mmissing\033[0m → drydock init\n'
+      printf '\033[31mmissing\033[0m → drydock setup\n'
     fi
   done
+  printf '  %-20s ' ".claude-container.json:"
+  if [ -f "$CONTAINER_CLAUDE_JSON" ]; then
+    printf '\033[32m%s\033[0m\n' "$(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON" 2>/dev/null)"
+  else
+    printf '\033[31mmissing\033[0m → drydock setup\n'
+  fi
 
   printf '  docker.sock:        '
   if [ -S /var/run/docker.sock ]; then
