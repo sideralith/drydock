@@ -1,0 +1,15 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor swap files
+*.swp
+*~
+
+# Local overrides (advanced users may have a local .env)
+.env
+.env.local
+
+# Test/scratch (anything you don't want to commit)
+/scratch/
+/tmp/

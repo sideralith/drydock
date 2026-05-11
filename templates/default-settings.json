@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings",
+  "_comment": "Baseline drydock denies — created by `drydock init` (per-project). __HOME__ is substituted with $HOME at init time. Extend per-project as needed; do NOT remove the secret-protection block.",
+  "permissions": {
+    "deny": [
+      "Read(__HOME__/.ssh/**)",
+      "Read(__HOME__/.aws/**)",
+      "Read(__HOME__/.gnupg/**)",
+      "Read(__HOME__/.kube/**)",
+      "Read(__HOME__/.docker/config.json)",
+      "Read(__HOME__/.claude/.credentials.json)",
+      "Read(__HOME__/.claude-container/.credentials.json)",
+      "Edit(__HOME__/.ssh/**)",
+      "Edit(__HOME__/.aws/**)",
+      "Edit(__HOME__/.gnupg/**)",
+      "Edit(__HOME__/.kube/**)",
+      "Write(__HOME__/.ssh/**)",
+      "Write(__HOME__/.aws/**)",
+      "Write(__HOME__/.gnupg/**)",
+      "Write(__HOME__/.kube/**)",
+      "Bash(git commit --no-verify*)",
+      "Bash(git push --no-verify*)",
+      "Bash(git branch -D main)",
+      "Bash(git branch -D master)",
+      "Bash(git branch -D dev)",
+      "Bash(git branch -d main)",
+      "Bash(git branch -d master)",
+      "Bash(git branch -d dev)"
+    ]
+  }
+}

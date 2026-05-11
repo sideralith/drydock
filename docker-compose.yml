@@ -1,0 +1,54 @@
+# drydock — base compose (project-agnostic).
+#
+# Invoked via the `drydock` CLI, NOT directly. The CLI sets the required env
+# vars (PROJECT_DIR, PROJECT_NAME) and optionally overlays the docs compose
+# fragment if the target project has a docs/ directory.
+#
+# Required env vars (validated by drydock CLI):
+#   PROJECT_DIR     Absolute path to the project root (e.g. /home/rai/git/foo)
+#   PROJECT_NAME    Basename of PROJECT_DIR, used for container name uniqueness
+
+services:
+  drydock:
+    build:
+      context: .
+      args:
+        USER_UID: "${USER_UID:-1000}"
+        USER_GID: "${USER_GID:-1000}"
+        HOST_DOCKER_GID: "${HOST_DOCKER_GID:-1001}"
+    image: drydock:latest
+    container_name: "drydock-${PROJECT_NAME}"
+
+    # Share host network namespace. Lets `curl http://localhost:PORT/...` work
+    # identically to host-side, and lets the container reach sibling
+    # docker-compose stacks via their published host ports.
+    network_mode: host
+
+    stdin_open: true
+    tty: true
+    working_dir: "${PROJECT_DIR}"
+
+    volumes:
+      # ── Docker-out-of-Docker socket ────────────────────────────────────────
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # ── Project tree (same path inside as outside so Makefile resolves) ────
+      - "${PROJECT_DIR}:${PROJECT_DIR}:rw"
+
+      # ── Engram: container-specific DB ──────────────────────────────────────
+      # Mapped to ~/.engram/ inside but lives in ~/.engram-container/ on host.
+      # Separate from host Claude's DB → no SQLite/WAL race.
+      - /home/rai/.engram-container:/home/rai/.engram:rw
+
+      # ── Claude state: container-specific ───────────────────────────────────
+      - /home/rai/.claude-container:/home/rai/.claude:rw
+
+      # ── Hooks: RO override (agent can't self-edit guardrails) ──────────────
+      - /home/rai/.claude/hooks:/home/rai/.claude/hooks:ro
+
+      # ── Binaries shared from host (claude, engram, gentle-ai, gga, uv) ─────
+      - /home/rai/.local:/home/rai/.local:rw
+
+      # ── Auth/identity ──────────────────────────────────────────────────────
+      - /home/rai/.gitconfig:/home/rai/.gitconfig:ro
+      - /home/rai/.config/gh:/home/rai/.config/gh:rw
