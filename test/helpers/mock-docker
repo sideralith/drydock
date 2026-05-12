@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# test/helpers/mock-docker — fake docker binary for tests
+#
+# Usage in a test's setup():
+#   export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls.log"
+#   export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+#
+# The mock appends every invocation's arguments to DOCKER_CALL_LOG, then
+# exits with MOCK_DOCKER_EXIT (default 0). Tests can inspect the log file
+# to assert which docker commands were issued, or set MOCK_DOCKER_EXIT=1
+# to simulate docker failures.
+echo "$*" >> "${DOCKER_CALL_LOG:?DOCKER_CALL_LOG must be set}"
+exit "${MOCK_DOCKER_EXIT:-0}"
