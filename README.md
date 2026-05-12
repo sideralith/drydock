@@ -99,6 +99,37 @@ Inside the container, everything works as on host: `make shell-api`,
 If you later install engram, re-run `drydock setup` and the overlay activates
 automatically on the next `drydock run`.
 
+### Shared vs isolated engram
+
+By default, drydock gives the container its own engram DB (`~/.engram-container`,
+isolated mode). This prevents SQLite lock contention between a host session and
+a container session.
+
+**Opt-in to shared mode** (host and container share one DB):
+```bash
+mkdir -p ~/.config/drydock
+touch ~/.config/drydock/engram-shared
+```
+
+Remove the file to return to isolated mode.
+
+**Warning**: switching isolated → shared is **lossy** without preparation. Any
+memories accumulated in `~/.engram-container` won't automatically appear in the
+shared `~/.engram`. Before switching, export the container memories first:
+1. Inside the container: `engram sync` (exports new memories as chunks)
+2. On the host: `engram sync --import` (absorbs them)
+
+drydock does **not** provide a migration tool. If you skip this step, isolated
+container memories are inaccessible in shared mode (the `~/.engram-container`
+directory is orphaned but not deleted — you can import from it later).
+
+**Safety gate**: on WSL2 and macOS hosts, POSIX file locks over the
+host↔container bind-mount layer are unreliable. drydock automatically downgrades
+shared mode to isolated on these hosts and emits a warning. To override:
+`DRYDOCK_ENGRAM_SHARED=force drydock run` (bypasses the safety check — you
+accept the risk of SQLite WAL corruption if host and container Claude write
+concurrently).
+
 **macOS note**: engram ships native macOS Mach-O builds
 (`brew install gentleman-programming/tap/engram`) and the DB directory can be
 bind-mounted. However, the macOS binary cannot run inside the Debian Linux

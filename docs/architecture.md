@@ -93,6 +93,25 @@ directly — the host and container agents share the same memories — but it
 carries risk on WSL2 and macOS because POSIX file locks over those filesystems'
 container bind-mount layers are unreliable.
 
+### Enabling shared mode
+
+Create the sentinel file:
+```bash
+mkdir -p ~/.config/drydock
+touch ~/.config/drydock/engram-shared
+```
+
+Remove it to return to isolated mode. Switching isolated → shared is **lossy**
+if you accumulated memories in the isolated DB: they won't appear in the shared
+DB until you run `engram sync --import` from inside the container FIRST (to
+export container memories) and then `engram sync --import` on the host (to
+absorb them). drydock provides no migration tool — this is your responsibility.
+
+Switching shared → isolated is safe: `drydock setup` re-seeds
+`~/.engram-container` from the current `~/.engram` (a fresh point-in-time
+copy). Memories saved on the host during shared-mode sessions are already in
+`~/.engram` and will be in the seed copy.
+
 ### Safety downgrade (WSL2 / macOS + shared requested)
 
 When shared mode is requested but the host's container bind-mount layer has
