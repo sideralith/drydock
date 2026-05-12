@@ -1,4 +1,10 @@
+# check=skip=SecretsUsedInArgOrEnv
 # drydock — containerized Claude Code sandbox.
+#
+# (`check=skip=SecretsUsedInArgOrEnv` above: the `ENV GIT_CONFIG_KEY_0=…` block
+#  near the bottom uses a git config KEY NAME (`commit.gpgsign`) as a value —
+#  BuildKit's name-pattern lint false-flags `*_KEY*` as a secret. There are no
+#  secrets in any ARG/ENV here.)
 #
 # Architecture: Docker-out-of-Docker (DooD) via /var/run/docker.sock bind mount.
 # The container does NOT run a docker daemon. The CLI inside talks to the host's
