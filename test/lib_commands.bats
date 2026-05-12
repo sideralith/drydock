@@ -509,3 +509,138 @@ setup() {
 	log="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log" != *"--exclude=mcp/engram.json"* ]]
 }
+
+# ── ensure_runtime_dirs: shared mode ─────────────────────────────────────────
+
+@test "ensure_runtime_dirs: shared mode (sentinel present + usable) — missing CONTAINER_ENGRAM does NOT trigger cmd_setup" {
+	setup_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	rm -rf "$CONTAINER_ENGRAM"
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local sentinel="$BATS_TEST_TMPDIR/cmd_setup_called_shared"
+	cmd_setup() { touch "$sentinel"; }
+
+	ensure_runtime_dirs
+
+	[ ! -f "$sentinel" ]
+}
+
+# ── cmd_setup: shared mode ────────────────────────────────────────────────────
+
+@test "cmd_setup: shared mode (sentinel present) — CONTAINER_ENGRAM not created, shared note printed" {
+	setup_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	rm -rf "$CONTAINER_ENGRAM"
+
+	run cmd_setup
+	[ ! -d "$CONTAINER_ENGRAM" ]
+	[[ "$output" == *"shared"* ]]
+}
+
+# ── cmd_status: 4-state (including shared and downgraded) ────────────────────
+
+@test "cmd_status: shared mode — output contains 'shared (~/.engram)'" {
+	setup_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	image_exists() { return 1; }
+
+	run cmd_status
+	[[ "$output" == *"shared (~/.engram)"* ]]
+}
+
+@test "cmd_status: sentinel + WSL2 + no force — output contains downgrade string" {
+	setup_engram_on_path
+
+	# WSL2 seams
+	local wsl2_fixture="$BATS_TEST_TMPDIR/osrelease-wsl2-status-$$"
+	printf '6.6.87.2-microsoft-standard-WSL2\n' >"$wsl2_fixture"
+	export OSRELEASE_FILE="$wsl2_fixture"
+	local stub_dir="$BATS_TEST_TMPDIR/uname-linux-status-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\necho "Linux"\n' >"$stub_dir/uname"
+	chmod +x "$stub_dir/uname"
+	export UNAME="$stub_dir/uname"
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+	unset DRYDOCK_ENGRAM_SHARED
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	image_exists() { return 1; }
+
+	run cmd_status
+	[[ "$output" == *"shared requested → forced isolated"* ]]
+}
+
+@test "cmd_status: sentinel + WSL2 + DRYDOCK_ENGRAM_SHARED=force — output contains 'shared (~/.engram)'" {
+	setup_engram_on_path
+
+	local wsl2_fixture="$BATS_TEST_TMPDIR/osrelease-wsl2-force-status-$$"
+	printf '6.6.87.2-microsoft-standard-WSL2\n' >"$wsl2_fixture"
+	export OSRELEASE_FILE="$wsl2_fixture"
+	local stub_dir="$BATS_TEST_TMPDIR/uname-linux-force-status-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\necho "Linux"\n' >"$stub_dir/uname"
+	chmod +x "$stub_dir/uname"
+	export UNAME="$stub_dir/uname"
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+	export DRYDOCK_ENGRAM_SHARED=force
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	image_exists() { return 1; }
+
+	run cmd_status
+	[[ "$output" == *"shared (~/.engram)"* ]]
+	unset DRYDOCK_ENGRAM_SHARED
+}

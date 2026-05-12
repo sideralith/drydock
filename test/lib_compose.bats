@@ -241,6 +241,110 @@ MOUNTS
 	[ -z "${DRYDOCK_ENGRAM_SOURCE:-}" ]
 }
 
+# ── shared mode (PR2) ─────────────────────────────────────────────────────────
+# Shared helpers for PR2 tests: fake engram on PATH + plain Linux seams.
+
+_setup_pr2_engram_and_linux() {
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin-pr2-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/engram"
+	chmod +x "$fake_bin/engram"
+	export PATH="$fake_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	local plain_osrelease="$BATS_TEST_TMPDIR/osrelease-pr2-$$"
+	printf '6.5.0-45-generic\n' >"$plain_osrelease"
+	export OSRELEASE_FILE="$plain_osrelease"
+	local stub_dir="$BATS_TEST_TMPDIR/uname-linux-pr2-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\necho "Linux"\n' >"$stub_dir/uname"
+	chmod +x "$stub_dir/uname"
+	export UNAME="$stub_dir/uname"
+}
+
+@test "export_compose_env: shared sentinel present + usable + plain Linux — DRYDOCK_ENGRAM_SOURCE set to ~/.engram" {
+	_setup_pr2_engram_and_linux
+	HOME="$BATS_TEST_TMPDIR/fakehome-shared-$$"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+	unset DRYDOCK_ENGRAM_SOURCE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_ENGRAM_SOURCE" = "$HOME/.engram" ]
+}
+
+@test "export_compose_env: no sentinel + usable + plain Linux — DRYDOCK_ENGRAM_SOURCE set to ~/.engram-container (isolated)" {
+	_setup_pr2_engram_and_linux
+	HOME="$BATS_TEST_TMPDIR/fakehome-isolated-$$"
+	mkdir -p "$HOME"
+	rm -f "$HOME/.config/drydock/engram-shared"
+	unset DRYDOCK_ENGRAM_SOURCE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_ENGRAM_SOURCE" = "$HOME/.engram-container" ]
+}
+
+@test "export_compose_env: sentinel + WSL2 (OSRELEASE_FILE=microsoft) — DRYDOCK_ENGRAM_SOURCE forced isolated" {
+	_setup_pr2_engram_and_linux
+	# Override OSRELEASE_FILE to WSL2 kernel
+	local wsl2_osrelease="$BATS_TEST_TMPDIR/osrelease-wsl2-$$"
+	printf '6.6.87.2-microsoft-standard-WSL2\n' >"$wsl2_osrelease"
+	export OSRELEASE_FILE="$wsl2_osrelease"
+	HOME="$BATS_TEST_TMPDIR/fakehome-wsl2-$$"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+	unset DRYDOCK_ENGRAM_SOURCE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "${DRYDOCK_ENGRAM_SOURCE:-}" = "$HOME/.engram-container" ]
+}
+
+@test "export_compose_env: sentinel + macOS (UNAME=Darwin) — DRYDOCK_ENGRAM_SOURCE forced isolated" {
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin-darwin-pr2-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/engram"
+	chmod +x "$fake_bin/engram"
+	export PATH="$fake_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	# macOS seams — BUT on macOS host_is_linux() returns false so engram_usable() is false
+	# macOS with engram on PATH still fails engram_usable because host_is_linux is false
+	# so DRYDOCK_ENGRAM_SOURCE stays unset (not forced-isolated path — just unset)
+	# Actually: on macOS engram_usable() = false → we never enter the engram block
+	# So the test is: DRYDOCK_ENGRAM_SOURCE must be unset (same as absent case)
+	local stub_dir="$BATS_TEST_TMPDIR/uname-darwin-pr2-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\necho "Darwin"\n' >"$stub_dir/uname"
+	chmod +x "$stub_dir/uname"
+	export UNAME="$stub_dir/uname"
+	HOME="$BATS_TEST_TMPDIR/fakehome-darwin-pr2-$$"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+	unset DRYDOCK_ENGRAM_SOURCE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_ENGRAM_SOURCE:-}" ]
+}
+
+@test "export_compose_env: sentinel + WSL2 + DRYDOCK_ENGRAM_SHARED=force — DRYDOCK_ENGRAM_SOURCE set to ~/.engram" {
+	_setup_pr2_engram_and_linux
+	local wsl2_osrelease="$BATS_TEST_TMPDIR/osrelease-wsl2-force-$$"
+	printf '6.6.87.2-microsoft-standard-WSL2\n' >"$wsl2_osrelease"
+	export OSRELEASE_FILE="$wsl2_osrelease"
+	HOME="$BATS_TEST_TMPDIR/fakehome-force-$$"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
+	export DRYDOCK_ENGRAM_SHARED=force
+	unset DRYDOCK_ENGRAM_SOURCE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_ENGRAM_SOURCE" = "$HOME/.engram" ]
+	unset DRYDOCK_ENGRAM_SHARED
+}
+
+@test "export_compose_env: no sentinel + DRYDOCK_ENGRAM_SHARED=force — still isolated (force without sentinel is no-op)" {
+	_setup_pr2_engram_and_linux
+	HOME="$BATS_TEST_TMPDIR/fakehome-force-nosentinel-$$"
+	mkdir -p "$HOME"
+	rm -f "$HOME/.config/drydock/engram-shared"
+	export DRYDOCK_ENGRAM_SHARED=force
+	unset DRYDOCK_ENGRAM_SOURCE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_ENGRAM_SOURCE" = "$HOME/.engram-container" ]
+	unset DRYDOCK_ENGRAM_SHARED
+}
+
 # ── image_exists (via DOCKER mock) ────────────────────────────────────────────
 
 @test "image_exists: mock exits 0 — function returns 0" {

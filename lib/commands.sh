@@ -55,18 +55,24 @@ cmd_setup() {
 
 	# Engram container dir: only create/seed when engram is usable in the
 	# container (Linux host + binary on PATH) AND isolated mode is active.
+	# Shared mode: host's ~/.engram is mounted directly — no container dir needed.
 	# On macOS or when engram is absent, skip — the overlay never activates.
 	if engram_usable; then
-		if [ ! -d "$CONTAINER_ENGRAM" ]; then
-			if [ -d "$HOST_ENGRAM" ]; then
-				cp -a "$HOST_ENGRAM" "$CONTAINER_ENGRAM"
-				ok "$CONTAINER_ENGRAM inicializado como copia de $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
-			else
-				mkdir -p "$CONTAINER_ENGRAM"
-				ok "$CONTAINER_ENGRAM creado vacío (no había $HOST_ENGRAM para copiar)"
-			fi
+		local _engram_sentinel="$HOME/.config/drydock/engram-shared"
+		if [ -f "$_engram_sentinel" ]; then
+			note "engram: shared mode — host ~/.engram used directly"
 		else
-			ok "$CONTAINER_ENGRAM ya existe ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+			if [ ! -d "$CONTAINER_ENGRAM" ]; then
+				if [ -d "$HOST_ENGRAM" ]; then
+					cp -a "$HOST_ENGRAM" "$CONTAINER_ENGRAM"
+					ok "$CONTAINER_ENGRAM inicializado como copia de $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+				else
+					mkdir -p "$CONTAINER_ENGRAM"
+					ok "$CONTAINER_ENGRAM creado vacío (no había $HOST_ENGRAM para copiar)"
+				fi
+			else
+				ok "$CONTAINER_ENGRAM ya existe ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+			fi
 		fi
 	else
 		if host_is_linux; then
@@ -320,14 +326,24 @@ cmd_status() {
 	fi
 
 	# Engram status: re-derive mode inline (no call to export_compose_env — cmd_status
-	# has no project-dir arg). This duplication is deliberate per design.
+	# has no project-dir arg and must NOT call export_compose_env). Deliberate
+	# duplication per design — the two callers have different inputs/side-effects.
 	printf '  %-20s ' "engram:"
 	if engram_usable; then
-		printf '\033[32misolated (~/.engram-container)\033[0m'
-		if [ -d "$CONTAINER_ENGRAM" ]; then
-			printf ' (%s)\n' "$(du -sh "$CONTAINER_ENGRAM" 2>/dev/null | cut -f1)"
+		local _status_sentinel="$HOME/.config/drydock/engram-shared"
+		if [ -f "$_status_sentinel" ]; then
+			if host_fs_locks_unreliable && [ "${DRYDOCK_ENGRAM_SHARED:-}" != "force" ]; then
+				printf '\033[33mshared requested → forced isolated (unreliable bind-mount locks; set DRYDOCK_ENGRAM_SHARED=force to override)\033[0m\n'
+			else
+				printf '\033[32mshared (~/.engram)\033[0m\n'
+			fi
 		else
-			printf '\n'
+			printf '\033[32misolated (~/.engram-container)\033[0m'
+			if [ -d "$CONTAINER_ENGRAM" ]; then
+				printf ' (%s)\n' "$(du -sh "$CONTAINER_ENGRAM" 2>/dev/null | cut -f1)"
+			else
+				printf '\n'
+			fi
 		fi
 	else
 		printf '\033[33mnot detected (opt-in)\033[0m\n'

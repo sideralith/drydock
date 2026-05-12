@@ -99,10 +99,26 @@ export_compose_env() {
 	# Engram is usable in the container only when: (a) the engram binary is on
 	# the host PATH AND (b) the host OS is Linux — a macOS Mach-O engram cannot
 	# run inside the Debian Linux container.
-	# PR1: isolated mode only (DRYDOCK_ENGRAM_SOURCE = ~/.engram-container).
-	# PR2 will add the shared-mode sentinel branch.
+	# Shared mode: opt-in via sentinel file ~/.config/drydock/engram-shared.
+	# Safety gate: on hosts with unreliable bind-mount POSIX locks (WSL2 / macOS),
+	# shared mode is force-downgraded to isolated unless DRYDOCK_ENGRAM_SHARED=force.
 	if engram_usable; then
-		export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
+		local _sentinel="$HOME/.config/drydock/engram-shared"
+		if [ -f "$_sentinel" ]; then
+			if host_fs_locks_unreliable && [ "${DRYDOCK_ENGRAM_SHARED:-}" != "force" ]; then
+				export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
+				warn "shared engram DB requested but bind-mount POSIX locks unreliable on this host (WSL2 9P / macOS virtiofs) — using isolated DB instead; run 'engram sync --import' to bridge, or set DRYDOCK_ENGRAM_SHARED=force to override (risks SQLite WAL corruption)"
+			else
+				export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram"
+				if host_fs_locks_unreliable; then
+					warn "shared DB override active: you've bypassed the data-safety check; concurrent host+container writes can corrupt ~/.engram/engram.db"
+				else
+					warn "shared engram DB — avoid running host Claude and the container against it simultaneously"
+				fi
+			fi
+		else
+			export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
+		fi
 	fi
 }
 
