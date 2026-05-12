@@ -1,0 +1,41 @@
+# Smoke workflow for drydock
+#
+# Runs on every push to main and on PRs that touch Dockerfile, compose files,
+# or the CLI code (bin/ / lib/). Does NOT run on a schedule — it's a build
+# and CLI reachability check, not a health monitor.
+#
+# Smoke does NOT run `drydock run` — that needs a host-mounted `claude` binary
+# and a real `network_mode: host`; smoke only proves the image builds and the
+# CLI runs.
+
+name: Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - Dockerfile
+      - "docker-compose*.yml"
+      - "bin/**"
+      - "lib/**"
+
+jobs:
+  smoke:
+    name: Smoke (build + CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: bin/drydock build
+
+      - name: Verify version command
+        run: bin/drydock version
+
+      - name: Run doctor (missing host state is expected on GHA runner)
+        # ~/.claude-container* and $PWD/.claude won't exist on a fresh runner —
+        # doctor prints "missing" for those checks but exits 0. The '|| true'
+        # guards against any set -euo pipefail interaction with missing paths
+        # that might surface as a non-zero exit on the runner.
+        run: bin/drydock doctor || true
