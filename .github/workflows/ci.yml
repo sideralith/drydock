@@ -1,0 +1,47 @@
+# CI workflow for drydock
+#
+# Two jobs:
+#   lint — runs shellcheck on bin/drydock (fast static analysis gate)
+#   test — runs the bats characterization suite (requires lint to pass first)
+#
+# Vendored bats-support and bats-assert are already in test/test_helper/,
+# so the bats-action only needs to install the runner itself.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+jobs:
+  lint:
+    name: Lint (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: shellcheck bin/drydock
+        run: shellcheck bin/drydock
+
+  test:
+    name: Test (bats)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats runner
+        uses: bats-core/bats-action@3.0.0
+        with:
+          # Helpers are vendored under test/test_helper/ — do not auto-install.
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
+
+      - name: Run bats suite
+        run: bats test/
