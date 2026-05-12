@@ -32,32 +32,32 @@ CONTAINER_ENGRAM="$HOME/.engram-container"
 # bin/drydock) so slice-3 unit tests can call it in isolation without
 # executing the full dispatcher.
 resolve_drydock_home() {
-  local src="$1"
-  local dir
-  while [ -L "$src" ]; do
-    dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
-    src="$(readlink "$src")"
-    [[ "$src" != /* ]] && src="$dir/$src"
-  done
-  cd -P "$(dirname "$src")/.." >/dev/null 2>&1 && pwd
+	local src="$1"
+	local dir
+	while [ -L "$src" ]; do
+		dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+		src="$(readlink "$src")"
+		[[ "$src" != /* ]] && src="$dir/$src"
+	done
+	cd -P "$(dirname "$src")/.." >/dev/null 2>&1 && pwd
 }
 
 resolve_project_dir() {
-  local input="${1:-}"
-  if [ -z "$input" ]; then
-    pwd
-  elif [ -d "$input" ]; then
-    (cd "$input" && pwd)
-  else
-    err "directorio no existe: $input"
-  fi
+	local input="${1:-}"
+	if [ -z "$input" ]; then
+		pwd
+	elif [ -d "$input" ]; then
+		(cd "$input" && pwd)
+	else
+		err "directorio no existe: $input"
+	fi
 }
 
 # Returns 0 if $1 is a separate filesystem mount point (e.g. 9P drvfs sub-mount
 # from Windows on WSL2). Used to decide whether to apply the docs/ overlay.
 # /proc/mounts layout: <source> <mount_point> <fs_type> <options> <dump> <pass>
 is_separate_mount() {
-  local path="$1"
-  [ -e "$path" ] || return 1
-  awk -v target="$path" '$2 == target {found=1} END {exit !found}' "$MOUNTS_FILE"
+	local path="$1"
+	[ -e "$path" ] || return 1
+	awk -v target="$path" '$2 == target {found=1} END {exit !found}' "$MOUNTS_FILE"
 }

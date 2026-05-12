@@ -23,50 +23,50 @@ DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
 
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
-  local project_dir="$1"
-  printf '%s\n' "-f" "$COMPOSE_BASE"
-  if [ -d "$project_dir/docs" ] && is_separate_mount "$project_dir/docs"; then
-    printf '%s\n' "-f" "$COMPOSE_DOCS"
-  fi
+	local project_dir="$1"
+	printf '%s\n' "-f" "$COMPOSE_BASE"
+	if [ -d "$project_dir/docs" ] && is_separate_mount "$project_dir/docs"; then
+		printf '%s\n' "-f" "$COMPOSE_DOCS"
+	fi
 }
 
 # Export env vars needed by docker-compose.yml interpolation.
 export_compose_env() {
-  local project_dir="$1"
-  export PROJECT_DIR="$project_dir"
-  export PROJECT_NAME
-  PROJECT_NAME="$(basename "$project_dir")"
-  export USER_UID
-  USER_UID="$(id -u)"
-  export USER_GID
-  USER_GID="$(id -g)"
-  export HOST_DOCKER_GID
-  HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
-  export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
+	local project_dir="$1"
+	export PROJECT_DIR="$project_dir"
+	export PROJECT_NAME
+	PROJECT_NAME="$(basename "$project_dir")"
+	export USER_UID
+	USER_UID="$(id -u)"
+	export USER_GID
+	USER_GID="$(id -g)"
+	export HOST_DOCKER_GID
+	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
+	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
 }
 
 image_exists() {
-  "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1
+	"$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1
 }
 
 ensure_prereqs() {
-  command -v docker >/dev/null || err "docker no está en PATH"
-  [ -S /var/run/docker.sock ] || err "docker socket no encontrado en /var/run/docker.sock"
-  [ -f "$COMPOSE_BASE" ] || err "compose base no encontrado: $COMPOSE_BASE"
+	command -v docker >/dev/null || err "docker no está en PATH"
+	[ -S /var/run/docker.sock ] || err "docker socket no encontrado en /var/run/docker.sock"
+	[ -f "$COMPOSE_BASE" ] || err "compose base no encontrado: $COMPOSE_BASE"
 }
 
 ensure_runtime_dirs() {
-  # Auto-setup if missing. Transparent for first-time users — cmd_setup is
-  # idempotent and prints a note when it runs.
-  if [ ! -d "$CONTAINER_CLAUDE" ] || [ ! -d "$CONTAINER_ENGRAM" ] || [ ! -f "$CONTAINER_CLAUDE_JSON" ]; then
-    note "runtime state faltante — ejecutando 'drydock setup' automáticamente"
-    cmd_setup
-  fi
+	# Auto-setup if missing. Transparent for first-time users — cmd_setup is
+	# idempotent and prints a note when it runs.
+	if [ ! -d "$CONTAINER_CLAUDE" ] || [ ! -d "$CONTAINER_ENGRAM" ] || [ ! -f "$CONTAINER_CLAUDE_JSON" ]; then
+		note "runtime state faltante — ejecutando 'drydock setup' automáticamente"
+		cmd_setup
+	fi
 }
 
 ensure_image() {
-  if ! image_exists; then
-    note "image $IMAGE no construida — building now"
-    cmd_build
-  fi
+	if ! image_exists; then
+		note "image $IMAGE no construida — building now"
+		cmd_build
+	fi
 }

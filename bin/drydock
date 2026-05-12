@@ -24,9 +24,9 @@ set -euo pipefail
 # Must stay inline — cannot source lib/paths.sh until DRYDOCK_HOME is known.
 _dh_src="${BASH_SOURCE[0]}"
 while [ -L "$_dh_src" ]; do
-  _dh_dir="$(cd -P "$(dirname "$_dh_src")" >/dev/null 2>&1 && pwd)"
-  _dh_src="$(readlink "$_dh_src")"
-  [[ "$_dh_src" != /* ]] && _dh_src="$_dh_dir/$_dh_src"
+	_dh_dir="$(cd -P "$(dirname "$_dh_src")" >/dev/null 2>&1 && pwd)"
+	_dh_src="$(readlink "$_dh_src")"
+	[[ "$_dh_src" != /* ]] && _dh_src="$_dh_dir/$_dh_src"
 done
 DRYDOCK_HOME="${DRYDOCK_HOME:-$(cd -P "$(dirname "$_dh_src")/.." >/dev/null 2>&1 && pwd)}"
 unset _dh_src _dh_dir
@@ -44,23 +44,23 @@ source "$DRYDOCK_HOME/lib/commands.sh"
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 main() {
-  local cmd="${1:-run}"
-  [ $# -gt 0 ] && shift
+	local cmd="${1:-run}"
+	[ $# -gt 0 ] && shift
 
-  case "$cmd" in
-    run)                  cmd_run "$@" ;;
-    shell)                cmd_shell "$@" ;;
-    init)                 cmd_init "$@" ;;
-    setup)                cmd_setup "$@" ;;
-    build)                cmd_build "$@" ;;
-    sync)                 cmd_sync "$@" ;;
-    status)               cmd_status "$@" ;;
-    doctor)               cmd_doctor "$@" ;;
-    version|--version|-v) echo "drydock $DRYDOCK_VERSION" ;;
-    help|--help|-h)       usage ;;
-    onboard)              err "renombrado: usá 'drydock init' (semántica git-style per-project)" ;;
-    *)                    err "comando desconocido: $cmd — corré: drydock help" ;;
-  esac
+	case "$cmd" in
+	run) cmd_run "$@" ;;
+	shell) cmd_shell "$@" ;;
+	init) cmd_init "$@" ;;
+	setup) cmd_setup "$@" ;;
+	build) cmd_build "$@" ;;
+	sync) cmd_sync "$@" ;;
+	status) cmd_status "$@" ;;
+	doctor) cmd_doctor "$@" ;;
+	version | --version | -v) echo "drydock $DRYDOCK_VERSION" ;;
+	help | --help | -h) usage ;;
+	onboard) err "renombrado: usá 'drydock init' (semántica git-style per-project)" ;;
+	*) err "comando desconocido: $cmd — corré: drydock help" ;;
+	esac
 }
 
 # Source-guard: only run main() when executed directly, not when sourced.
