@@ -112,3 +112,65 @@ MOUNTS
 	run is_separate_mount "$BATS_TEST_TMPDIR/somedir"
 	[ "$status" -ne 0 ]
 }
+
+# ── host_is_linux ─────────────────────────────────────────────────────────────
+# Uses UNAME seam so macOS / Linux branches are testable on any CI runner.
+
+setup_uname_stub() {
+	local retval="$1"
+	local stub_dir="$BATS_TEST_TMPDIR/uname-stub-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\necho "%s"\n' "$retval" >"$stub_dir/uname"
+	chmod +x "$stub_dir/uname"
+	echo "$stub_dir/uname"
+}
+
+@test "host_is_linux: returns 0 on Linux (default uname)" {
+	# Real uname on this runner is Linux (WSL2 is still Linux for uname -s).
+	# UNAME seam was set to 'uname' by lib/paths.sh sourcing in setup().
+	run host_is_linux
+	[ "$status" -eq 0 ]
+}
+
+@test "host_is_linux: returns non-zero when UNAME stub returns Darwin" {
+	stub="$(setup_uname_stub Darwin)"
+	export UNAME="$stub"
+	run host_is_linux
+	[ "$status" -ne 0 ]
+}
+
+# ── host_fs_locks_unreliable ──────────────────────────────────────────────────
+# Uses both OSRELEASE_FILE and UNAME seams.
+
+setup_osrelease_fixture() {
+	local content="$1"
+	local fixture="$BATS_TEST_TMPDIR/osrelease-$$"
+	printf '%s\n' "$content" >"$fixture"
+	echo "$fixture"
+}
+
+@test "host_fs_locks_unreliable: returns 0 when osrelease contains 'microsoft' (WSL2)" {
+	fixture="$(setup_osrelease_fixture "6.6.87.2-microsoft-standard-WSL2")"
+	export OSRELEASE_FILE="$fixture"
+	unset UNAME
+	run host_fs_locks_unreliable
+	[ "$status" -eq 0 ]
+}
+
+@test "host_fs_locks_unreliable: returns non-zero on plain Linux (no microsoft in osrelease)" {
+	fixture="$(setup_osrelease_fixture "6.5.0-45-generic")"
+	export OSRELEASE_FILE="$fixture"
+	stub="$(setup_uname_stub Linux)"
+	export UNAME="$stub"
+	run host_fs_locks_unreliable
+	[ "$status" -ne 0 ]
+}
+
+@test "host_fs_locks_unreliable: returns 0 when UNAME stub returns Darwin" {
+	# macOS: osrelease file absent (guard must not error); uname→Darwin triggers
+	export OSRELEASE_FILE="$BATS_TEST_TMPDIR/no-such-osrelease-file"
+	stub="$(setup_uname_stub Darwin)"
+	export UNAME="$stub"
+	run host_fs_locks_unreliable
+	[ "$status" -eq 0 ]
+}

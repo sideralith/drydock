@@ -9,6 +9,13 @@
 # Override in tests: export MOUNTS_FILE=/path/to/fixture before sourcing.
 : "${MOUNTS_FILE:=/proc/mounts}"
 
+# ── OS-detection seams ────────────────────────────────────────────────────────
+# Override in tests to simulate macOS or plain-Linux CI without the real kernel.
+#   export OSRELEASE_FILE=/path/to/fixture   (default: /proc/sys/kernel/osrelease)
+#   export UNAME=/path/to/stub-script        (default: uname)
+: "${OSRELEASE_FILE:=/proc/sys/kernel/osrelease}"
+: "${UNAME:=uname}"
+
 # ── Path constants ────────────────────────────────────────────────────────────
 # DRYDOCK_HOME is set by the inline bootstrap in bin/drydock before this file
 # is sourced, so these references are safe at source time.
@@ -51,6 +58,24 @@ resolve_project_dir() {
 	else
 		err "directorio no existe: $input"
 	fi
+}
+
+# Returns 0 if the host OS is Linux (uname -s = Linux).
+# False on macOS (Darwin). WSL2 counts as Linux here — the macOS gate is about
+# whether the host engram binary can run in the Linux container, not WSL2 risk.
+host_is_linux() {
+	[ "$("$UNAME" -s)" = "Linux" ]
+}
+
+# Returns 0 if the host's container bind-mount layer has unreliable POSIX file
+# locks — WSL2 (9P bridge) or macOS (virtiofs/gRPC-FUSE). Used to decide
+# whether shared engram DB mode is safe to activate.
+# Guard: reads $OSRELEASE_FILE only when it exists (file absent on macOS).
+host_fs_locks_unreliable() {
+	if [ -r "$OSRELEASE_FILE" ] && grep -qi microsoft "$OSRELEASE_FILE"; then
+		return 0
+	fi
+	[ "$("$UNAME" -s)" = "Darwin" ]
 }
 
 # Returns 0 if $1 is a separate filesystem mount point (e.g. 9P drvfs sub-mount
