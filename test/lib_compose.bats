@@ -266,8 +266,11 @@ _setup_pr2_engram_and_linux() {
 	mkdir -p "$HOME/.config/drydock"
 	touch "$HOME/.config/drydock/engram-shared"
 	unset DRYDOCK_ENGRAM_SOURCE
-	export_compose_env "$TEST_PROJECT_DIR"
+	local stderr_file="$BATS_TEST_TMPDIR/stderr-shared-$$"
+	export_compose_env "$TEST_PROJECT_DIR" 2>"$stderr_file"
 	[ "$DRYDOCK_ENGRAM_SOURCE" = "$HOME/.engram" ]
+	# native-Linux shared mode emits a one-line multi-writer caveat warn to stderr
+	grep -q "avoid running host Claude" "$stderr_file"
 }
 
 @test "export_compose_env: no sentinel + usable + plain Linux — DRYDOCK_ENGRAM_SOURCE set to ~/.engram-container (isolated)" {
@@ -290,8 +293,11 @@ _setup_pr2_engram_and_linux() {
 	mkdir -p "$HOME/.config/drydock"
 	touch "$HOME/.config/drydock/engram-shared"
 	unset DRYDOCK_ENGRAM_SOURCE
-	export_compose_env "$TEST_PROJECT_DIR"
+	local stderr_file="$BATS_TEST_TMPDIR/stderr-wsl2-$$"
+	export_compose_env "$TEST_PROJECT_DIR" 2>"$stderr_file"
 	[ "${DRYDOCK_ENGRAM_SOURCE:-}" = "$HOME/.engram-container" ]
+	# WSL2 downgrade: warn must mention lock unreliability
+	grep -q "POSIX locks unreliable" "$stderr_file"
 }
 
 @test "export_compose_env: sentinel + macOS (UNAME=Darwin) — DRYDOCK_ENGRAM_SOURCE forced isolated" {
@@ -328,8 +334,11 @@ _setup_pr2_engram_and_linux() {
 	touch "$HOME/.config/drydock/engram-shared"
 	export DRYDOCK_ENGRAM_SHARED=force
 	unset DRYDOCK_ENGRAM_SOURCE
-	export_compose_env "$TEST_PROJECT_DIR"
+	local stderr_file="$BATS_TEST_TMPDIR/stderr-force-$$"
+	export_compose_env "$TEST_PROJECT_DIR" 2>"$stderr_file"
 	[ "$DRYDOCK_ENGRAM_SOURCE" = "$HOME/.engram" ]
+	# force override on WSL2: sharper warn about bypassing data-safety check
+	grep -q "shared DB override active" "$stderr_file"
 	unset DRYDOCK_ENGRAM_SHARED
 }
 

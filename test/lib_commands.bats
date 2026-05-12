@@ -166,7 +166,7 @@ setup() {
 
 	run cmd_setup
 	[ ! -d "$CONTAINER_ENGRAM" ]
-	[[ "$output" == *"engram"* ]]
+	[[ "$output" == *"engram not on PATH"* ]]
 }
 
 @test "cmd_setup: engram not usable (macOS) — CONTAINER_ENGRAM not created, macOS note printed" {
@@ -186,7 +186,7 @@ setup() {
 
 	run cmd_setup
 	[ ! -d "$CONTAINER_ENGRAM" ]
-	[[ "$output" == *"macOS"* ]]
+	[[ "$output" == *"macOS binary can't run inside the Linux container"* ]]
 }
 
 # ── cmd_setup: engram usable + isolated ──────────────────────────────────────
@@ -428,6 +428,8 @@ setup() {
 	local engram_entry
 	engram_entry="$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")"
 	[ "$engram_entry" = "null" ]
+	# cmd_sync must also emit the Linux-absent note (engram not on PATH)
+	[[ "$output" == *"engram not on PATH"* ]]
 }
 
 @test "cmd_sync: engram usable — mcpServers.engram survives in refreshed container JSON" {
@@ -560,7 +562,7 @@ setup() {
 
 	run cmd_setup
 	[ ! -d "$CONTAINER_ENGRAM" ]
-	[[ "$output" == *"shared"* ]]
+	[[ "$output" == *"shared mode — host ~/.engram used directly"* ]]
 }
 
 # ── cmd_status: 4-state (including shared and downgraded) ────────────────────
