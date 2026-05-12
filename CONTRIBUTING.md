@@ -103,3 +103,5 @@ actually matters.
 - Mount the `gpg-agent` socket.
 - Provide a CLI to generate/register these keys for you (the steps above are
   one-time and explicit on purpose).
+
+After updating drydock, run `drydock init --update` in already-configured projects to pick up new baseline denies.

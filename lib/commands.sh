@@ -99,19 +99,49 @@ cmd_setup() {
 
 # Per-project setup. Creates `.claude/settings.json` baseline in the target
 # directory. Same mental model as `git init` — once per project.
+# With --update: merges new template deny entries into an existing file.
 cmd_init() {
+	# drydock init [DIR] [--update]
+	local project_dir_arg="" do_update=0
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--update | -u) do_update=1 ;;
+		-*) err "drydock init: opción desconocida: $1 (usá --update)" ;;
+		*) project_dir_arg="$1" ;;
+		esac
+		shift
+	done
+
 	local project_dir
-	project_dir="$(resolve_project_dir "${1:-}")"
+	project_dir="$(resolve_project_dir "$project_dir_arg")"
 	note "Initializing project at $project_dir"
 
 	mkdir -p "$project_dir/.claude"
+	local settings="$project_dir/.claude/settings.json"
 
-	if [ -f "$project_dir/.claude/settings.json" ]; then
-		warn "$project_dir/.claude/settings.json ya existe — no lo sobrescribo"
-		note "Template baseline disponible en: $DEFAULT_SETTINGS_TEMPLATE"
+	if [ ! -f "$settings" ]; then
+		sed "s|__HOME__|$HOME|g" "$DEFAULT_SETTINGS_TEMPLATE" >"$settings"
+		ok "$settings creado con baseline de denies"
+	elif [ "$do_update" -eq 1 ]; then
+		command -v jq >/dev/null || err "drydock init --update necesita jq"
+		jq empty "$settings" 2>/dev/null || err "$settings no es JSON válido — arreglalo a mano o borralo y re-corré drydock init"
+		local rendered merged
+		rendered="$(sed "s|__HOME__|$HOME|g" "$DEFAULT_SETTINGS_TEMPLATE")"
+		merged="$(jq -n --argjson existing "$(cat "$settings")" --argjson template "$rendered" '
+			($existing.permissions.deny // []) as $ed
+			| ($template.permissions.deny // []) as $td
+			| $existing
+			| .permissions.deny = ($ed + ($td | map(select(. as $x | ($ed | index($x)) == null))))
+		')"
+		if [ "$(printf '%s' "$merged" | jq -c '.permissions.deny')" = "$(jq -c '.permissions.deny' "$settings")" ]; then
+			ok "$settings ya tiene todas las deny entries del template — sin cambios"
+		else
+			printf '%s\n' "$merged" >"$settings.tmp.$$" && mv "$settings.tmp.$$" "$settings"
+			ok "$settings actualizado — deny entries del template fusionadas (customizaciones preservadas)"
+		fi
 	else
-		sed "s|__HOME__|$HOME|g" "$DEFAULT_SETTINGS_TEMPLATE" >"$project_dir/.claude/settings.json"
-		ok "$project_dir/.claude/settings.json creado con baseline de denies"
+		warn "$settings ya existe — no lo sobrescribo (usá 'drydock init --update' para fusionar las deny entries nuevas del template)"
+		note "Template baseline en: $DEFAULT_SETTINGS_TEMPLATE"
 	fi
 
 	if [ -f "$project_dir/.gitignore" ] && ! grep -q '\.claude/settings\.local\.json' "$project_dir/.gitignore"; then
