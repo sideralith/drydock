@@ -24,8 +24,8 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      - name: shellcheck bin/drydock
-        run: shellcheck bin/drydock
+      - name: shellcheck bin/drydock and lib/*.sh
+        run: shellcheck bin/drydock lib/*.sh
 
   test:
     name: Test (bats)
