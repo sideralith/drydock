@@ -85,13 +85,34 @@ Inside the container, everything works as on host: `make shell-api`,
 | `drydock setup` | (advanced) Force host-side init — auto-triggered; rarely explicit |
 | `drydock version` / `help` | Self-explanatory |
 
+## Using drydock without engram
+
+**Engram is optional.** drydock works cleanly without it:
+
+- `drydock setup`, `drydock run`, `drydock build`, and `drydock sync` all
+  work without engram installed.
+- When engram is absent (or when the host is macOS), the engram volume overlay
+  is not activated and the engram MCP server entry is removed from the
+  container's `~/.claude-container.json` — Claude Code sees no startup errors.
+- `drydock status` reports `engram: not detected (opt-in)` — not an error.
+
+If you later install engram, re-run `drydock setup` and the overlay activates
+automatically on the next `drydock run`.
+
+**macOS note**: engram ships native macOS Mach-O builds
+(`brew install gentleman-programming/tap/engram`) and the DB directory can be
+bind-mounted. However, the macOS binary cannot run inside the Debian Linux
+container. drydock v0.1.0 treats macOS as engram-effectively-absent for the
+container; future releases may ship a Linux engram in the image or bridge via
+its HTTP API.
+
 ## Three rules to know
 
-1. **Engram memories diverge between host and container.** After the first
-   run, the container has its own engram DB. Memories don't auto-sync between
-   host and container. Consolidate with `engram export` / `engram import`.
-   This is intentional — it's what lets you run host Claude on other projects
-   concurrently without SQLite contention.
+1. **Engram memories diverge between host and container (isolated mode).** The
+   container has its own engram DB (`~/.engram-container/`). Memories don't
+   auto-sync between host and container. Consolidate with `engram sync --import`
+   / `engram sync --export`. This is intentional — it prevents SQLite
+   contention when running host Claude concurrently.
 
 2. **Skills/plugins/hooks installed on host need an explicit `drydock sync`.**
    Until you sync, the container has its snapshot. Plugins installed *from

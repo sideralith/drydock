@@ -8,10 +8,9 @@ the way it is.
 ```
 HOST                                CONTAINER (debian:12-slim)
 ─────────────────────────────────  ─────────────────────────────────
-~/.engram/                          ~/.engram/  (container-specific)
-  (host Claude's DB, untouched)       ← bind from ~/.engram-container/
-                                       Init'd by `drydock setup` as a copy
-                                       (auto-triggered on first run)
+~/.engram-container/   (optional)   ~/.engram/  ← isolated mode (default)
+  or ~/.engram/        (opt-in)         overlay active only when engram is
+  (see "engram" section below)          usable (Linux host + binary on PATH)
 
 ~/.claude/                          ~/.claude/  (container-specific)
   (host Claude's config dir)          ← bind from ~/.claude-container/
@@ -68,38 +67,92 @@ ephemeral filesystem, and everything you configure in a session evaporates
 on exit. drydock's `cmd_setup` creates both siblings; `cmd_sync` refreshes
 both from host.
 
+## engram (optional)
+
+engram is **not required**. drydock detects it and activates the overlay only
+when both conditions are true: the `engram` binary is on the host's `$PATH`
+AND the host OS is Linux. On a macOS host the binary is a native Mach-O
+executable — it cannot run inside the Debian container, so drydock treats it as
+absent regardless of `$PATH`.
+
+When engram is not detected, `drydock setup`, `drydock run`, and all other
+commands work without engram-related errors or startup noise. The engram MCP
+server entry is removed from the container's `~/.claude-container.json` so
+Claude Code doesn't try to spawn a missing binary.
+
+### Topologies
+
+| Mode | DRYDOCK_ENGRAM_SOURCE | When |
+|------|----------------------|------|
+| **Not detected** | — (overlay omitted) | No `engram` on PATH or macOS host |
+| **Isolated** (default) | `~/.engram-container` | engram usable, no sentinel |
+| **Shared** (opt-in) | `~/.engram` | engram usable + `~/.config/drydock/engram-shared` exists |
+
+Isolated is the default and is always safe. Shared mounts the host's live DB
+directly — the host and container agents share the same memories — but it
+carries risk on WSL2 and macOS because POSIX file locks over those filesystems'
+container bind-mount layers are unreliable.
+
+### Safety downgrade (WSL2 / macOS + shared requested)
+
+When shared mode is requested but the host's container bind-mount layer has
+unreliable POSIX file locks — detected when `/proc/sys/kernel/osrelease`
+contains `microsoft` (WSL2) or `uname -s` returns `Darwin` — drydock
+automatically falls back to isolated mode and emits a `warn` explaining why.
+Set `DRYDOCK_ENGRAM_SHARED=force` to override the downgrade (the sentinel must
+still be present; `=force` alone does nothing).
+
+### macOS limitation and future paths
+
+On macOS, the host `engram` binary is a Mach-O executable and cannot run in
+the Debian Linux container. Two paths that would fix this for a future release:
+
+1. **Linux engram in image** — build a `linux_amd64`/`linux_arm64` engram
+   binary into the image at build time (adds ~10 MB, pins the version).
+2. **HTTP-API bridge** — run `engram` on the host with
+   `ENGRAM_CLOUD_HOST=0.0.0.0` (port 7437) and configure the container's MCP
+   server to reach it via the host network (already shared via `network_mode:
+   host`). No binary inside the container needed.
+
+Neither is implemented in v0.1.0.
+
 ## Why the storage is split (host vs. container)
 
 The container does **not** use the host's `~/.claude/`, `~/.claude.json`, or
-`~/.engram/` directly. Each gets a container-specific sibling
-(`~/.claude-container/`, `~/.claude-container.json`, `~/.engram-container/`),
-initialized once as a copy.
+`~/.engram/` directly. Claude config gets container-specific siblings
+(`~/.claude-container/`, `~/.claude-container.json`), initialized once as a
+copy. Engram uses `~/.engram-container/` when isolated mode is active, or the
+host's `~/.engram/` directly when shared mode is active.
 
-Reasons:
+Reasons (Claude config split — always applies):
 
-1. **Engram SQLite/WAL contention**: engram's DB is SQLite in WAL mode. On
-   WSL2, fcntl POSIX locks crossing the host↔container 9P boundary are
-   historically unreliable. If host Claude (on another project) and container
-   Claude both write to the same `engram.db` concurrently, worst case is WAL
-   corruption. Separate DBs → zero contention.
-
-2. **`~/.claude.json` is hot**: Claude Code rewrites it constantly (changelog
+1. **`~/.claude.json` is hot**: Claude Code rewrites it constantly (changelog
    fetch timestamps, "have you seen X", project `lastUsed` times, etc.).
    Shared between concurrent host + container sessions = constant last-writer-
    wins churn. Separate copies → no churn.
 
-3. **OAuth refresh**: `~/.claude/.credentials.json` and `~/.claude.json`
+2. **OAuth refresh**: `~/.claude/.credentials.json` and `~/.claude.json`
    carry auth state. Concurrent refresh from two sessions = one invalidates
    the other. Separate copies sidestep this.
 
-4. **Plugin install isolation**: `/plugin install foo` from inside the
+3. **Plugin install isolation**: `/plugin install foo` from inside the
    container lands in `~/.claude-container/plugins/` only — the host doesn't
    know. Useful as a reversible playground (see [lifecycle.md](lifecycle.md)).
 
+Reasons (engram isolated — the default):
+
+1. **SQLite/WAL contention**: engram's DB is SQLite in WAL mode. On WSL2,
+   fcntl POSIX locks crossing the host↔container 9P boundary are historically
+   unreliable. If host Claude (on another project) and container Claude both
+   write to the same `engram.db` concurrently, worst case is WAL corruption.
+   Separate DBs → zero contention. On native Linux the bind mount is a local
+   filesystem path and locking is reliable, which is why shared mode is allowed
+   there (with a caveat warn).
+
 Trade-off: the copies **diverge over time**. Skills/plugins/config installed
 on host don't appear in the container until `drydock sync`. Engram memories
-saved in one don't appear in the other (consolidate via `engram export` /
-`engram import`). This is intentional — divergence is the price of
+saved in isolated mode don't appear in the host DB (consolidate via `engram
+sync --import`). This is intentional — divergence is the price of
 contention-free concurrent host + container sessions.
 
 ## The hooks RO overlay
