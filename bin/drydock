@@ -64,6 +64,11 @@ main() {
 }
 
 # Source-guard: only run main() when executed directly, not when sourced.
-# The '|| true' prevents a false exit code from breaking 'set -e' in the
-# sourcing shell when the guard condition evaluates to false (source context).
-[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@" || true
+# Use the if-form (not '... && main "$@" || true'): with the && / || form, main
+# would run in a context where set -e is ignored, so a failure in cmd_build /
+# cmd_sync / cmd_setup would be silently swallowed (the command returns 0). The
+# if-form keeps set -e active inside main(); when sourced, the false condition
+# makes the statement return 0, so 'source bin/drydock' stays safe under set -e.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
+fi
