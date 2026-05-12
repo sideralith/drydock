@@ -27,6 +27,16 @@ jobs:
       - name: shellcheck bin/drydock and lib/*.sh
         run: shellcheck bin/drydock lib/*.sh
 
+      - name: Install shfmt
+        run: |
+          curl -fsSL "https://github.com/mvdan/sh/releases/download/v3.8.0/shfmt_v3.8.0_linux_amd64" \
+            -o /usr/local/bin/shfmt
+          chmod +x /usr/local/bin/shfmt
+          shfmt --version
+
+      - name: shfmt format check (bin/drydock and lib/)
+        run: shfmt -d bin/drydock lib/
+
   test:
     name: Test (bats)
     runs-on: ubuntu-latest
