@@ -40,6 +40,17 @@ setup() {
   grep -q '_comment' "$SETTINGS_FILE"
 }
 
+@test "drydock init: settings.json declares the canonical \$schema URL" {
+  # The schemastore validator (and Claude Code's /doctor) expects the trailing
+  # `.json` — `https://json.schemastore.org/claude-code-settings.json`. Guard
+  # against the template regressing to the suffix-less form.
+  run "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"
+  [ "$status" -eq 0 ]
+  run jq -r '."$schema"' "$SETTINGS_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "https://json.schemastore.org/claude-code-settings.json" ]
+}
+
 @test "drydock init: settings.json has at least one deny entry with HOME path" {
   run "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"
   [ "$status" -eq 0 ]
