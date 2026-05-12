@@ -18,10 +18,12 @@ Usage:
 
 Commands:
   (no args)           Default — launch Claude in current directory's project
-  run [DIR]           Launch Claude in DIR (or cwd)
-  shell [DIR]         Bash shell in container, mounted at DIR
-  init [DIR]          Initialize a project — creates .claude/settings.json baseline
-                        (per-project, like \`git init\`)
+  run [DIR] [-- ARGS] Launch Claude in DIR (or cwd); ARGS after -- go to claude
+                        (e.g. drydock run -- --resume "my-session")
+  shell [DIR] [-- CMD] Bash shell in container at DIR; with -- CMD, run CMD instead
+  init [DIR] [--update] Initialize a project — creates .claude/settings.json baseline
+                        (per-project, like \`git init\`); --update merges new template
+                        deny entries into an existing file
   build               Build/rebuild the drydock image
   sync                Sync host ~/.claude/ → ~/.claude-container/
   status              Short health snapshot
@@ -34,7 +36,9 @@ Commands:
 Examples:
   cd ~/git/myproject && drydock                # launch claude there
   drydock run ~/git/otherproject               # explicit dir
+  drydock run -- --resume "my-session"         # resume a session
   drydock init ~/git/newproject                # baseline for a new project
+  drydock init --update                        # merge new template denies
   drydock build                                # rebuild image
 
 DRYDOCK_HOME=$DRYDOCK_HOME
@@ -173,11 +177,22 @@ cmd_sync() {
 }
 
 cmd_run() {
+	# drydock run [DIR] [-- CLAUDE_ARGS...]
+	local project_dir_arg=""
+	local -a passthrough=()
+	if [ $# -gt 0 ] && [ "$1" != "--" ]; then
+		project_dir_arg="$1"
+		shift
+	fi
+	if [ "${1:-}" = "--" ]; then
+		shift
+		passthrough=("$@")
+	fi
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
 	local project_dir
-	project_dir="$(resolve_project_dir "${1:-}")"
+	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
 	note "Launching Claude in $project_dir"
 	export_compose_env "$project_dir"
@@ -185,15 +200,26 @@ cmd_run() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock
+	exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock claude "${passthrough[@]}"
 }
 
 cmd_shell() {
+	# drydock shell [DIR] [-- CMD...]   (no CMD => interactive bash)
+	local project_dir_arg=""
+	local -a passthrough=()
+	if [ $# -gt 0 ] && [ "$1" != "--" ]; then
+		project_dir_arg="$1"
+		shift
+	fi
+	if [ "${1:-}" = "--" ]; then
+		shift
+		passthrough=("$@")
+	fi
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
 	local project_dir
-	project_dir="$(resolve_project_dir "${1:-}")"
+	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
 	note "Bash shell in container, mounted at $project_dir"
 	export_compose_env "$project_dir"
@@ -201,7 +227,11 @@ cmd_shell() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock bash
+	if [ "${#passthrough[@]}" -gt 0 ]; then
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock "${passthrough[@]}"
+	else
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock bash
+	fi
 }
 
 cmd_status() {

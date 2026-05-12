@@ -5,16 +5,16 @@
 # Repo: ~/drydock/  (consider sideralith/drydock when sharing publicly)
 #
 # Usage:
-#   drydock                  # default: launch claude in current dir's project
-#   drydock run [DIR]        # explicit run
-#   drydock shell [DIR]      # bash in container at DIR
-#   drydock init [DIR]       # set up .claude/settings.json baseline for DIR
-#   drydock init             # one-time host setup
-#   drydock build            # (re)build the image
-#   drydock sync             # ~/.claude/ → ~/.claude-container/
-#   drydock status           # short health
-#   drydock doctor           # detailed diagnostics
-#   drydock version          # show version
+#   drydock                        # default: launch claude in current dir's project
+#   drydock run [DIR] [-- ARGS]    # explicit run; ARGS after -- go to claude
+#   drydock shell [DIR] [-- CMD]   # bash in container at DIR; -- CMD runs CMD instead
+#   drydock -- [ARGS]              # shorthand: run claude in cwd with ARGS
+#   drydock init [DIR] [--update]  # set up .claude/settings.json baseline for DIR
+#   drydock build                  # (re)build the image
+#   drydock sync                   # ~/.claude/ → ~/.claude-container/
+#   drydock status                 # short health
+#   drydock doctor                 # detailed diagnostics
+#   drydock version                # show version
 
 set -euo pipefail
 
@@ -50,6 +50,7 @@ main() {
 	case "$cmd" in
 	run) cmd_run "$@" ;;
 	shell) cmd_shell "$@" ;;
+	--) cmd_run -- "$@" ;;
 	init) cmd_init "$@" ;;
 	setup) cmd_setup "$@" ;;
 	build) cmd_build "$@" ;;
