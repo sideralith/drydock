@@ -1,0 +1,25 @@
+# drydock — optional SSH deploy-key overlay.
+#
+# Auto-included by the drydock CLI when ~/.config/drydock/keys/<PROJECT>_deploy
+# exists on the host (see DRYDOCK_SSH_DEPLOY_KEY, set by export_compose_env in
+# lib/compose.sh). Gives the containerized agent a per-repo, write-access SSH
+# deploy key for `git push` over SSH — WITHOUT mounting ~/.ssh.
+#
+# The key is bind-mounted read-only at the same path inside; GIT_SSH_COMMAND
+# points git at it (IdentitiesOnly so it doesn't fall back to other keys); and
+# github.com's host key is pinned in /etc/ssh/ssh_known_hosts at image build
+# time (see the ssh-keyscan RUN in the Dockerfile), so ssh never creates or
+# touches ~/.ssh/known_hosts. Nothing under ~/.ssh/ — the hook/deny rules on
+# ~/.ssh/** stay strong and unconditional.
+#
+# Setup (one-time, per repo) — see CONTRIBUTING.md:
+#   ssh-keygen -t ed25519 -f ~/.config/drydock/keys/<PROJECT>_deploy -N ""
+#   gh repo deploy-key add ~/.config/drydock/keys/<PROJECT>_deploy.pub \
+#       --repo <owner>/<PROJECT> --title "drydock-<PROJECT>" --allow-write
+
+services:
+  drydock:
+    volumes:
+      - "${DRYDOCK_SSH_DEPLOY_KEY}:${DRYDOCK_SSH_DEPLOY_KEY}:ro"
+    environment:
+      GIT_SSH_COMMAND: "ssh -i ${DRYDOCK_SSH_DEPLOY_KEY} -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts"

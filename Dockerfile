@@ -27,12 +27,15 @@ RUN [ -n "${USER_NAME}" ] || { \
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ── Base tooling ─────────────────────────────────────────────────────────────
+# openssh-client: NOT pulled by `git` under --no-install-recommends; needed by
+# the optional SSH deploy-key overlay (ssh) and the ssh-keyscan RUN below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         gnupg \
         jq \
         make \
+        openssh-client \
         git \
         rsync \
         less \
@@ -67,6 +70,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Pin github.com's host key (for the optional SSH deploy-key overlay) ──────
+# Written to the system known_hosts so ssh verifies github.com against it and
+# never creates/touches ~/.ssh/known_hosts. Refreshed on every `drydock build`.
+RUN ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /etc/ssh/ssh_known_hosts
+
 # ── User + groups matching host ──────────────────────────────────────────────
 RUN set -eux; \
     if getent group ${USER_GID} >/dev/null 2>&1; then \
@@ -93,6 +101,16 @@ USER ${USER_NAME}
 #   ~/.local/share/pnpm → contains node (some MCP plugins are JS-based)
 #   System paths after
 ENV PATH=/home/${USER_NAME}/.local/bin:/home/${USER_NAME}/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Commits made inside the box are NOT GPG-signed by default. The host's
+# ~/.gitconfig (mounted :ro) has commit.gpgsign=true, but ~/.gnupg is not
+# mounted (and shouldn't be) — signing would just fail. GIT_CONFIG_* env wins
+# over system/global/local config, so this is the clean off switch. The
+# optional GPG overlay (docker-compose.gpg.yml) overrides it back on, signing
+# with a throwaway sandbox key.
+ENV GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=commit.gpgsign \
+    GIT_CONFIG_VALUE_0=false
 
 # WORKDIR is set per-invocation by the drydock CLI via env or compose override.
 WORKDIR /home/${USER_NAME}

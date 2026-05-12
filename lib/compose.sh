@@ -16,6 +16,8 @@
 IMAGE="drydock:latest"
 COMPOSE_BASE="$DRYDOCK_HOME/docker-compose.yml"
 COMPOSE_DOCS="$DRYDOCK_HOME/docker-compose.docs.yml"
+COMPOSE_SSH="$DRYDOCK_HOME/docker-compose.ssh.yml"
+COMPOSE_GPG="$DRYDOCK_HOME/docker-compose.gpg.yml"
 # shellcheck disable=SC2034  # used in lib/commands.sh (cmd_init)
 DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
 
@@ -27,6 +29,14 @@ compose_files() {
 	printf '%s\n' "-f" "$COMPOSE_BASE"
 	if [ -d "$project_dir/docs" ] && is_separate_mount "$project_dir/docs"; then
 		printf '%s\n' "-f" "$COMPOSE_DOCS"
+	fi
+	# Optional, host opt-in — these vars are set by export_compose_env (called
+	# before this fn) so the -f list and the overlay YAMLs share one decision.
+	if [ -n "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]; then
+		printf '%s\n' "-f" "$COMPOSE_SSH"
+	fi
+	if [ -n "${DRYDOCK_GPG_SIGNINGKEY:-}" ]; then
+		printf '%s\n' "-f" "$COMPOSE_GPG"
 	fi
 }
 
@@ -48,6 +58,31 @@ export_compose_env() {
 	export HOST_DOCKER_GID
 	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
 	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
+
+	# ── optional git-credential overlays (host opt-in) ────────────────────────
+	# Detected here so compose_files() and the overlay YAMLs share one source of
+	# truth. Material lives under ~/.config/drydock/ (NEVER ~/.ssh or ~/.gnupg),
+	# so the hook/deny rules on those host dirs stay strong and unconditional.
+	#
+	# SSH deploy key: ~/.config/drydock/keys/<project>_deploy → git push over SSH
+	# (consumed by docker-compose.ssh.yml: bind-mount :ro + GIT_SSH_COMMAND).
+	local _deploy_key="$HOME/.config/drydock/keys/${PROJECT_NAME}_deploy"
+	if [ -f "$_deploy_key" ]; then
+		export DRYDOCK_SSH_DEPLOY_KEY="$_deploy_key"
+	fi
+	# Sandbox GPG signing key: ~/.config/drydock/signing/ → GitHub-Verified commits
+	# (consumed by docker-compose.gpg.yml: bind-mount rw + GNUPGHOME + GIT_CONFIG_*).
+	local _signing_home="$HOME/.config/drydock/signing"
+	if [ -d "$_signing_home" ] && command -v gpg >/dev/null 2>&1; then
+		local _fpr=""
+		_fpr="$(gpg --homedir "$_signing_home" --list-secret-keys --with-colons 2>/dev/null | awk -F: '/^sec:/{print $5; exit}')" || true
+		if [ -n "$_fpr" ]; then
+			export DRYDOCK_GPG_SIGNING_HOME="$_signing_home"
+			export DRYDOCK_GPG_SIGNINGKEY="$_fpr"
+		else
+			warn "$_signing_home existe pero no contiene clave secreta — firma GPG no activada"
+		fi
+	fi
 }
 
 image_exists() {

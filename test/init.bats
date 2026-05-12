@@ -47,6 +47,20 @@ setup() {
   grep -q "Read($HOME/.ssh" "$SETTINGS_FILE"
 }
 
+@test "drydock init: settings.json denies the drydock credential dir" {
+  run "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"
+  [ "$status" -eq 0 ]
+  # optional-git-credentials: deploy key + sandbox GPG key live under
+  # ~/.config/drydock/ and must be off-limits to the agent's file tools.
+  grep -q "Read($HOME/.config/drydock/" "$SETTINGS_FILE"
+}
+
+@test "drydock init: settings.json denies git force-push" {
+  run "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"
+  [ "$status" -eq 0 ]
+  grep -q 'git push --force' "$SETTINGS_FILE"
+}
+
 @test "drydock init is idempotent: does not overwrite existing settings.json" {
   # First run: creates the file.
   run "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"

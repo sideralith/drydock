@@ -1,0 +1,38 @@
+# drydock — optional GPG commit-signing overlay (sandbox-only key).
+#
+# Auto-included by the drydock CLI when ~/.config/drydock/signing/ exists on the
+# host AND contains a secret key (see DRYDOCK_GPG_SIGNING_HOME /
+# DRYDOCK_GPG_SIGNINGKEY, set by export_compose_env in lib/compose.sh). Signs
+# the containerized agent's commits with a THROWAWAY, account-revocable key —
+# WITHOUT mounting ~/.gnupg.
+#
+# This OVERRIDES the image's default git config (commit.gpgsign=false, set via
+# GIT_CONFIG_* ENV in the Dockerfile). Compose `environment:` from a later -f
+# file wins over the image ENV: COUNT goes 1 → 2, VALUE_0 false → true, and a
+# user.signingkey entry is added. Nothing under ~/.gnupg/ — the hook/deny rules
+# on ~/.gnupg/** stay strong and unconditional.
+#
+# Mounted rw, not ro: gpg-agent (which gpg 2.1+ always routes through, even for
+# unattended signing) must create its socket + lockfiles inside $GNUPGHOME. The
+# dir is ~/.config/drydock/signing/ — drydock's own, low-value, separate from
+# your real ~/.gnupg — so letting the container write there is fine under the
+# threat model. It must be `chmod 700` on the host or gpg refuses it.
+#
+# Setup (one-time) — see CONTRIBUTING.md:
+#   mkdir -p ~/.config/drydock/signing && chmod 700 ~/.config/drydock/signing
+#   GNUPGHOME=~/.config/drydock/signing gpg --quick-generate-key \
+#       "Your Name (drydock sandbox) <verified-email@github>" ed25519 sign 2y
+#   GNUPGHOME=~/.config/drydock/signing gpg --armor --export <fpr>
+#       # → GitHub → Settings → SSH and GPG keys → New GPG key
+
+services:
+  drydock:
+    volumes:
+      - "${DRYDOCK_GPG_SIGNING_HOME}:${DRYDOCK_GPG_SIGNING_HOME}:rw"
+    environment:
+      GNUPGHOME: "${DRYDOCK_GPG_SIGNING_HOME}"
+      GIT_CONFIG_COUNT: "2"
+      GIT_CONFIG_KEY_0: commit.gpgsign
+      GIT_CONFIG_VALUE_0: "true"
+      GIT_CONFIG_KEY_1: user.signingkey
+      GIT_CONFIG_VALUE_1: "${DRYDOCK_GPG_SIGNINGKEY}"

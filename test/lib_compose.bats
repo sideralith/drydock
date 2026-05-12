@@ -116,6 +116,61 @@ MOUNTS
 	[ "$USER_NAME" = "$(id -un)" ]
 }
 
+# ── optional git-credential overlays (ssh deploy key + sandbox gpg) ──────────
+
+@test "compose_files: no DRYDOCK_SSH_DEPLOY_KEY — ssh overlay absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.ssh.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_SSH_DEPLOY_KEY set — ssh overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export DRYDOCK_SSH_DEPLOY_KEY="$BATS_TEST_TMPDIR/fake_deploy"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" == *"docker-compose.ssh.yml"* ]]
+}
+
+@test "compose_files: no DRYDOCK_GPG_SIGNINGKEY — gpg overlay absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.gpg.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_GPG_SIGNINGKEY set — gpg overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export DRYDOCK_GPG_SIGNINGKEY="DEADBEEFCAFE"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" == *"docker-compose.gpg.yml"* ]]
+}
+
+@test "export_compose_env: deploy key present — sets DRYDOCK_SSH_DEPLOY_KEY" {
+	HOME="$BATS_TEST_TMPDIR/fakehome"
+	mkdir -p "$HOME/.config/drydock/keys"
+	: >"$HOME/.config/drydock/keys/myproject_deploy"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/myproject_deploy" ]
+}
+
+@test "export_compose_env: no deploy key — DRYDOCK_SSH_DEPLOY_KEY unset" {
+	HOME="$BATS_TEST_TMPDIR/fakehome"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]
+}
+
+@test "export_compose_env: signing dir with a key — sets DRYDOCK_GPG_SIGNINGKEY" {
+	command -v gpg >/dev/null 2>&1 || skip "gpg not installed"
+	HOME="$BATS_TEST_TMPDIR/fakehome"
+	mkdir -p "$HOME/.config/drydock/signing"
+	chmod 700 "$HOME/.config/drydock/signing"
+	GNUPGHOME="$HOME/.config/drydock/signing" gpg --batch --pinentry-mode loopback --passphrase '' \
+		--quick-generate-key "drydock test <t@example.com>" ed25519 sign 0 >/dev/null 2>&1 \
+		|| skip "gpg quick-generate-key unavailable on this runner"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -n "${DRYDOCK_GPG_SIGNINGKEY:-}" ]
+	[ "$DRYDOCK_GPG_SIGNING_HOME" = "$HOME/.config/drydock/signing" ]
+}
+
 # ── image_exists (via DOCKER mock) ────────────────────────────────────────────
 
 @test "image_exists: mock exits 0 — function returns 0" {

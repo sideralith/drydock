@@ -111,13 +111,66 @@ MOUNTS
   [ "$USER_NAME" = "$(id -un)" ]
 }
 
+# ── optional git-credential overlays (ssh deploy key + sandbox gpg) ──────────
+
+@test "compose_files: no DRYDOCK_SSH_DEPLOY_KEY — ssh overlay absent" {
+  export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+  run compose_files "$TEST_PROJECT_DIR"
+  [[ "$output" != *"docker-compose.ssh.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_SSH_DEPLOY_KEY set — ssh overlay present" {
+  export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+  export DRYDOCK_SSH_DEPLOY_KEY="$BATS_TEST_TMPDIR/fake_deploy"
+  run compose_files "$TEST_PROJECT_DIR"
+  [[ "$output" == *"docker-compose.ssh.yml"* ]]
+}
+
+@test "compose_files: no DRYDOCK_GPG_SIGNINGKEY — gpg overlay absent" {
+  export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+  run compose_files "$TEST_PROJECT_DIR"
+  [[ "$output" != *"docker-compose.gpg.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_GPG_SIGNINGKEY set — gpg overlay present" {
+  export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+  export DRYDOCK_GPG_SIGNINGKEY="DEADBEEFCAFE"
+  run compose_files "$TEST_PROJECT_DIR"
+  [[ "$output" == *"docker-compose.gpg.yml"* ]]
+}
+
+@test "export_compose_env: deploy key present — sets DRYDOCK_SSH_DEPLOY_KEY" {
+  HOME="$BATS_TEST_TMPDIR/fakehome"
+  mkdir -p "$HOME/.config/drydock/keys"
+  : > "$HOME/.config/drydock/keys/myproject_deploy"
+  export_compose_env "$TEST_PROJECT_DIR"
+  [ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/myproject_deploy" ]
+}
+
+@test "export_compose_env: no deploy key — DRYDOCK_SSH_DEPLOY_KEY unset" {
+  HOME="$BATS_TEST_TMPDIR/fakehome"
+  export_compose_env "$TEST_PROJECT_DIR"
+  [ -z "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]
+}
+
 # ── build/compose artifact hygiene ───────────────────────────────────────────
 
 @test "no hardcoded /home/rai in build/compose artifacts" {
-  # parameterize-paths: container user + host paths derive from the invoking
-  # user; no literal /home/rai may survive in the build inputs.
+  # parameterize-paths + optional-git-credentials: container user + host paths
+  # derive from the invoking user; no literal /home/rai may survive.
   ! grep -n '/home/rai' \
     "$DRYDOCK_HOME/Dockerfile" \
     "$DRYDOCK_HOME/docker-compose.yml" \
-    "$DRYDOCK_HOME/docker-compose.docs.yml"
+    "$DRYDOCK_HOME/docker-compose.docs.yml" \
+    "$DRYDOCK_HOME/docker-compose.ssh.yml" \
+    "$DRYDOCK_HOME/docker-compose.gpg.yml"
+}
+
+@test "no ~/.ssh or ~/.gnupg bind-mount in any compose file" {
+  # The drydock-namespace invariant: credential material lives under
+  # ~/.config/drydock/, never ~/.ssh or ~/.gnupg, so the hook/deny rules on
+  # those host dirs stay strong and unconditional. Check volume list-items only
+  # (explanatory comments may mention .ssh/.gnupg — that's fine).
+  run bash -c 'grep -hE "^[[:space:]]+- " "$1"/docker-compose*.yml | grep -E "\.(ssh|gnupg)/" || true' -- "$DRYDOCK_HOME"
+  [ -z "$output" ]
 }
