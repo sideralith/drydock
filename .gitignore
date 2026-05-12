@@ -13,3 +13,6 @@ Thumbs.db
 # Test/scratch (anything you don't want to commit)
 /scratch/
 /tmp/
+
+# Agent Teams / SDD local artifacts
+/.atl/
