@@ -142,8 +142,11 @@ ensure_runtime_dirs() {
 	local _needs_setup=0
 	[ ! -d "$CONTAINER_CLAUDE" ] && _needs_setup=1
 	[ ! -f "$CONTAINER_CLAUDE_JSON" ] && _needs_setup=1
-	# PR1: engram usable + isolated → also gate on CONTAINER_ENGRAM.
-	# PR2 will add the shared arm (where CONTAINER_ENGRAM absence is also fine).
+	# The CONTAINER_ENGRAM guard applies only in the default isolated topology.
+	# In shared mode the container uses the host's ~/.engram directly — that dir
+	# is user-owned and must already exist; no setup trigger is needed. When
+	# engram is not usable at all (absent or macOS), the overlay never activates
+	# so a missing CONTAINER_ENGRAM is harmless and must NOT trigger setup.
 	if engram_usable && [ ! -f "$HOME/.config/drydock/engram-shared" ]; then
 		[ ! -d "$CONTAINER_ENGRAM" ] && _needs_setup=1
 	fi

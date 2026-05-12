@@ -1,9 +1,28 @@
-# drydock — optional engram-DB overlay.
-# Auto-included by the CLI when engram is usable in the container (host has the
-# `engram` binary AND host is Linux — a macOS Mach-O engram can't run in the
-# Debian container). DRYDOCK_ENGRAM_SOURCE (set by export_compose_env) is
-# ~/.engram-container (isolated, default) or ~/.engram (shared, opt-in). engram
-# reads ~/.engram/ by default — path is symmetric, no ENGRAM_DATA_DIR needed.
+# drydock — optional engram persistent-memory overlay.
+#
+# Auto-included by the drydock CLI when engram is usable in the container:
+# (a) the `engram` binary is on the host PATH AND (b) the host OS is Linux.
+# A macOS Mach-O engram binary cannot run inside the Debian Linux container;
+# drydock treats macOS as engram-effectively-absent and never adds this overlay.
+#
+# What it mounts: ${DRYDOCK_ENGRAM_SOURCE}:${HOME}/.engram:rw
+# DRYDOCK_ENGRAM_SOURCE is set by export_compose_env in lib/compose.sh before
+# compose_files() is called. Its value depends on the active topology:
+#
+#   Isolated (default): ~/.engram-container
+#     The container gets its own engram DB separate from the host's ~/.engram.
+#     drydock setup seeds it from ~/.engram when it exists, otherwise creates it
+#     empty. Switch to shared mode with: touch ~/.config/drydock/engram-shared
+#
+#   Shared (opt-in): ~/.engram
+#     The host's live engram DB is mounted directly into the container.
+#     Opt-in: touch ~/.config/drydock/engram-shared
+#     Safety gate: on WSL2 hosts POSIX bind-mount locks are unreliable; drydock
+#     force-downgrades to isolated and emits a warn. Override (at your own risk)
+#     with DRYDOCK_ENGRAM_SHARED=force (sentinel file must still be present).
+#
+# engram reads ~/.engram/ by default — the path is symmetric, so no
+# ENGRAM_DATA_DIR environment variable is needed inside the container.
 services:
   drydock:
     volumes:
