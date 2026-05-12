@@ -53,16 +53,27 @@ EOF
 cmd_setup() {
 	ensure_prereqs
 
-	if [ ! -d "$CONTAINER_ENGRAM" ]; then
-		if [ -d "$HOST_ENGRAM" ]; then
-			cp -a "$HOST_ENGRAM" "$CONTAINER_ENGRAM"
-			ok "$CONTAINER_ENGRAM inicializado como copia de $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+	# Engram container dir: only create/seed when engram is usable in the
+	# container (Linux host + binary on PATH) AND isolated mode is active.
+	# On macOS or when engram is absent, skip — the overlay never activates.
+	if engram_usable; then
+		if [ ! -d "$CONTAINER_ENGRAM" ]; then
+			if [ -d "$HOST_ENGRAM" ]; then
+				cp -a "$HOST_ENGRAM" "$CONTAINER_ENGRAM"
+				ok "$CONTAINER_ENGRAM inicializado como copia de $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+			else
+				mkdir -p "$CONTAINER_ENGRAM"
+				ok "$CONTAINER_ENGRAM creado vacío (no había $HOST_ENGRAM para copiar)"
+			fi
 		else
-			mkdir -p "$CONTAINER_ENGRAM"
-			ok "$CONTAINER_ENGRAM creado vacío (no había $HOST_ENGRAM para copiar)"
+			ok "$CONTAINER_ENGRAM ya existe ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
 		fi
 	else
-		ok "$CONTAINER_ENGRAM ya existe ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+		if host_is_linux; then
+			note "engram not on PATH — skipped its MCP server in the container (no startup noise). Install engram to enable it."
+		else
+			note "engram's macOS binary can't run inside the Linux container — skipped its MCP server (no startup noise). A future drydock release may ship a Linux engram in the image."
+		fi
 	fi
 
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
@@ -270,14 +281,26 @@ cmd_status() {
 	printf '  image %-15s ' "$IMAGE"
 	if image_exists; then printf '\033[32mpresent\033[0m\n'; else printf '\033[31mmissing\033[0m → drydock build\n'; fi
 
-	for p in "$CONTAINER_CLAUDE" "$CONTAINER_ENGRAM"; do
-		printf '  %-20s ' "$(basename "$p"):"
-		if [ -e "$p" ]; then
-			printf '\033[32m%s\033[0m\n' "$(du -sh "$p" 2>/dev/null | cut -f1)"
+	printf '  %-20s ' "$(basename "$CONTAINER_CLAUDE"):"
+	if [ -e "$CONTAINER_CLAUDE" ]; then
+		printf '\033[32m%s\033[0m\n' "$(du -sh "$CONTAINER_CLAUDE" 2>/dev/null | cut -f1)"
+	else
+		printf '\033[31mmissing\033[0m → drydock setup\n'
+	fi
+
+	# Engram status: re-derive mode inline (no call to export_compose_env — cmd_status
+	# has no project-dir arg). This duplication is deliberate per design.
+	printf '  %-20s ' "engram:"
+	if engram_usable; then
+		printf '\033[32misolated (~/.engram-container)\033[0m'
+		if [ -d "$CONTAINER_ENGRAM" ]; then
+			printf ' (%s)\n' "$(du -sh "$CONTAINER_ENGRAM" 2>/dev/null | cut -f1)"
 		else
-			printf '\033[31mmissing\033[0m → drydock setup\n'
+			printf '\n'
 		fi
-	done
+	else
+		printf '\033[33mnot detected (opt-in)\033[0m\n'
+	fi
 	printf '  %-20s ' ".claude-container.json:"
 	if [ -f "$CONTAINER_CLAUDE_JSON" ]; then
 		printf '\033[32m%s\033[0m\n' "$(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON" 2>/dev/null)"

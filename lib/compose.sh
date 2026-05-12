@@ -119,7 +119,19 @@ ensure_prereqs() {
 ensure_runtime_dirs() {
 	# Auto-setup if missing. Transparent for first-time users — cmd_setup is
 	# idempotent and prints a note when it runs.
-	if [ ! -d "$CONTAINER_CLAUDE" ] || [ ! -d "$CONTAINER_ENGRAM" ] || [ ! -f "$CONTAINER_CLAUDE_JSON" ]; then
+	# The engram dir guard is conditional: only included when engram is usable in
+	# the container AND isolated mode is active (no engram-shared sentinel).
+	# When engram is not usable, a missing CONTAINER_ENGRAM is harmless — the
+	# overlay never activates, so no setup trigger is needed for that reason alone.
+	local _needs_setup=0
+	[ ! -d "$CONTAINER_CLAUDE" ] && _needs_setup=1
+	[ ! -f "$CONTAINER_CLAUDE_JSON" ] && _needs_setup=1
+	# PR1: engram usable + isolated → also gate on CONTAINER_ENGRAM.
+	# PR2 will add the shared arm (where CONTAINER_ENGRAM absence is also fine).
+	if engram_usable && [ ! -f "$HOME/.config/drydock/engram-shared" ]; then
+		[ ! -d "$CONTAINER_ENGRAM" ] && _needs_setup=1
+	fi
+	if [ "$_needs_setup" -eq 1 ]; then
 		note "runtime state faltante — ejecutando 'drydock setup' automáticamente"
 		cmd_setup
 	fi
