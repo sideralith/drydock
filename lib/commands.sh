@@ -93,9 +93,17 @@ cmd_setup() {
 	# onboarding flags, MCP servers, OAuth account). Without a container-specific
 	# copy, Claude Code inside the container can't find it, creates a fresh
 	# ephemeral one, and "config doesn't persist" across sessions.
+	# MCP filter: when engram is not usable in the container, strip the engram
+	# MCP server from the copy so Claude Code doesn't try to spawn a missing
+	# binary on every startup (zero error noise).
 	if [ ! -f "$CONTAINER_CLAUDE_JSON" ]; then
 		if [ -f "$HOST_CLAUDE_JSON" ]; then
-			cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
+			if engram_usable; then
+				cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
+			else
+				jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
+					"$HOST_CLAUDE_JSON" >"$CONTAINER_CLAUDE_JSON"
+			fi
 			ok "$CONTAINER_CLAUDE_JSON inicializado como copia de $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 		else
 			echo '{}' >"$CONTAINER_CLAUDE_JSON"
@@ -103,6 +111,12 @@ cmd_setup() {
 		fi
 	else
 		ok "$CONTAINER_CLAUDE_JSON ya existe ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
+	fi
+
+	# MCP filter belt-and-suspenders: remove mcp/engram.json from the container
+	# claude dir when engram is not usable (rm -f is a no-op if absent).
+	if ! engram_usable; then
+		rm -f "${CONTAINER_CLAUDE:?}/mcp/engram.json"
 	fi
 
 	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
@@ -181,6 +195,13 @@ cmd_sync() {
 	ensure_prereqs
 	ensure_image
 	note "Sync $HOST_CLAUDE → $CONTAINER_CLAUDE (excluyendo session state)"
+	# MCP filter: when engram is not usable in the container, exclude
+	# mcp/engram.json from the rsync so the container config doesn't reference
+	# a non-functional binary.
+	local _engram_exclude=""
+	if ! engram_usable; then
+		_engram_exclude="--exclude=mcp/engram.json"
+	fi
 	"$DOCKER" run --rm \
 		-v "$HOST_CLAUDE":/src:ro \
 		-v "$CONTAINER_CLAUDE":/dst:rw \
@@ -205,13 +226,23 @@ cmd_sync() {
 		--exclude='scheduled_tasks.lock' \
 		--exclude='*.bak.pre-dockerized' \
 		--exclude='*.bak.pre-dockerized/' \
+		${_engram_exclude:+"$_engram_exclude"} \
 		/src/ /dst/
 	# Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
-	# Plain file copy — small (~40KB). The container's copy gets host's current
-	# state. Note: this overwrites any project-list changes made inside the
-	# container; that's acceptable (host is the canonical project registry).
+	# MCP filter: when engram is not usable, strip the engram MCP server entry
+	# so Claude Code in the container sees no startup error.
 	if [ -f "$HOST_CLAUDE_JSON" ]; then
-		cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
+		if engram_usable; then
+			cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
+		else
+			jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
+				"$HOST_CLAUDE_JSON" >"$CONTAINER_CLAUDE_JSON"
+			if host_is_linux; then
+				note "engram not on PATH — skipped its MCP server in the container (no startup noise). Install engram to enable it."
+			else
+				note "engram's macOS binary can't run inside the Linux container — skipped its MCP server (no startup noise). A future drydock release may ship a Linux engram in the image."
+			fi
+		fi
 		ok "$CONTAINER_CLAUDE_JSON refreshed from host"
 	fi
 	ok "Sync done"

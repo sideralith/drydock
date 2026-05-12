@@ -272,3 +272,240 @@ setup() {
 	run cmd_status
 	[[ "$output" == *"isolated (~/.engram-container)"* ]]
 }
+
+# ── MCP filter: cmd_setup × ~/.claude-container.json ─────────────────────────
+
+@test "cmd_setup: engram not usable — mcpServers.engram absent in container JSON" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	# mcpServers.engram must be filtered out of the container copy
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	local engram_entry
+	engram_entry="$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")"
+	[ "$engram_entry" = "null" ]
+}
+
+@test "cmd_setup: engram not usable — per-project mcpServers.engram absent in container JSON" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	# Per-project engram entry must also be filtered
+	local p1_engram
+	p1_engram="$(jq '.projects["/p1"].mcpServers.engram' "$CONTAINER_CLAUDE_JSON")"
+	[ "$p1_engram" = "null" ]
+	# Other server entries must survive
+	local p1_other
+	p1_other="$(jq '.projects["/p1"].mcpServers.other' "$CONTAINER_CLAUDE_JSON")"
+	[ "$p1_other" != "null" ]
+}
+
+@test "cmd_setup: engram not usable — github server survives in container JSON" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	local github_entry
+	github_entry="$(jq '.mcpServers.github' "$CONTAINER_CLAUDE_JSON")"
+	[ "$github_entry" != "null" ]
+}
+
+@test "cmd_setup: engram usable — mcpServers.engram survives in container JSON" {
+	setup_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	local engram_entry
+	engram_entry="$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")"
+	[ "$engram_entry" != "null" ]
+}
+
+# ── MCP filter: cmd_setup × mcp/engram.json ──────────────────────────────────
+
+@test "cmd_setup: engram not usable — mcp/engram.json absent after setup" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	# Plant an mcp/engram.json in the source ~/.claude/
+	mkdir -p "$fakehome/.claude/mcp"
+	printf '{"type":"stdio","command":"engram","args":["mcp"]}\n' \
+		>"$fakehome/.claude/mcp/engram.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	[ ! -f "$CONTAINER_CLAUDE/mcp/engram.json" ]
+}
+
+@test "cmd_setup: engram not usable — no error when mcp/engram.json absent from source" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	# mcp/ dir intentionally absent from source
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	[ "$status" -eq 0 ]
+}
+
+# ── MCP filter: cmd_sync × ~/.claude-container.json ──────────────────────────
+
+@test "cmd_sync: engram not usable — mcpServers.engram absent in refreshed container JSON" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Pre-create the container dirs so cmd_sync doesn't fail on missing paths.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_sync
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	local engram_entry
+	engram_entry="$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")"
+	[ "$engram_entry" = "null" ]
+}
+
+@test "cmd_sync: engram usable — mcpServers.engram survives in refreshed container JSON" {
+	setup_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_sync
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	local engram_entry
+	engram_entry="$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")"
+	[ "$engram_entry" != "null" ]
+}
+
+# ── MCP filter: cmd_sync × rsync --exclude='mcp/engram.json' ─────────────────
+
+@test "cmd_sync: engram not usable — rsync args include --exclude='mcp/engram.json'" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-docker-calls.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--exclude=mcp/engram.json"* ]]
+}
+
+@test "cmd_sync: engram usable — rsync args do NOT include --exclude='mcp/engram.json'" {
+	setup_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-docker-calls-usable.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" != *"--exclude=mcp/engram.json"* ]]
+}
