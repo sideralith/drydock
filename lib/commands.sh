@@ -120,7 +120,10 @@ cmd_init() {
 cmd_build() {
 	ensure_prereqs
 	note "Building $IMAGE from $DRYDOCK_HOME..."
+	# cmd_build shells out to `docker build` directly (not `docker compose`), so
+	# the compose build.args don't reach it — pass USER_NAME explicitly here too.
 	"$DOCKER" build \
+		--build-arg USER_NAME="$(id -un)" \
 		--build-arg USER_UID="$(id -u)" \
 		--build-arg USER_GID="$(id -g)" \
 		--build-arg HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)" \

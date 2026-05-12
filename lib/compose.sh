@@ -40,6 +40,11 @@ export_compose_env() {
 	USER_UID="$(id -u)"
 	export USER_GID
 	USER_GID="$(id -g)"
+	# USER_NAME drives the Dockerfile ARG (via compose build.args) so the
+	# container user / $HOME match the invoking host user. id -un, not $USER —
+	# $USER isn't reliably exported in non-interactive contexts.
+	export USER_NAME
+	USER_NAME="$(id -un)"
 	export HOST_DOCKER_GID
 	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
 	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"

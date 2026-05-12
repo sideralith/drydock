@@ -110,6 +110,12 @@ MOUNTS
 	[ "$COMPOSE_PROJECT_NAME" = "drydock-myproject" ]
 }
 
+@test "export_compose_env sets USER_NAME to id -un" {
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -n "$USER_NAME" ]
+	[ "$USER_NAME" = "$(id -un)" ]
+}
+
 # ── image_exists (via DOCKER mock) ────────────────────────────────────────────
 
 @test "image_exists: mock exits 0 — function returns 0" {

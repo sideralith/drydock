@@ -11,10 +11,18 @@
 
 FROM debian:12-slim
 
-ARG USER_NAME=rai
+# USER_NAME has NO default — it's supplied by the drydock CLI (`id -un`) so the
+# container user / $HOME mirror the invoking host user. Building this image with
+# a bare `docker build` (no --build-arg USER_NAME=...) is unsupported.
+ARG USER_NAME
 ARG USER_UID=1000
 ARG USER_GID=1000
 ARG HOST_DOCKER_GID=1001
+
+RUN [ -n "${USER_NAME}" ] || { \
+        echo 'ERROR: USER_NAME build-arg is required — invoke via the drydock CLI, not a bare docker build' >&2; \
+        exit 1; \
+    }
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -84,7 +92,7 @@ USER ${USER_NAME}
 #   ~/.local/bin first → contains the host-shared claude/engram/gentle-ai/gga/uv binaries
 #   ~/.local/share/pnpm → contains node (some MCP plugins are JS-based)
 #   System paths after
-ENV PATH=/home/rai/.local/bin:/home/rai/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/home/${USER_NAME}/.local/bin:/home/${USER_NAME}/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # WORKDIR is set per-invocation by the drydock CLI via env or compose override.
 WORKDIR /home/${USER_NAME}

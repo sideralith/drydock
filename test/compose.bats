@@ -4,7 +4,8 @@
 # Spec: Behavior Preservation → Scenarios:
 #   "compose_files — no docs sub-mount"
 #   "compose_files — docs sub-mount present"
-#   export_compose_env sets all 6 required env vars
+#   export_compose_env sets all 7 required env vars
+#   "no hardcoded /home/rai in build/compose artifacts" (parameterize-paths)
 
 load "helpers/load"
 
@@ -102,4 +103,21 @@ MOUNTS
   export_compose_env "$TEST_PROJECT_DIR"
   [ -n "$COMPOSE_PROJECT_NAME" ]
   [[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject" ]]
+}
+
+@test "export_compose_env sets USER_NAME to id -un" {
+  export_compose_env "$TEST_PROJECT_DIR"
+  [ -n "$USER_NAME" ]
+  [ "$USER_NAME" = "$(id -un)" ]
+}
+
+# ── build/compose artifact hygiene ───────────────────────────────────────────
+
+@test "no hardcoded /home/rai in build/compose artifacts" {
+  # parameterize-paths: container user + host paths derive from the invoking
+  # user; no literal /home/rai may survive in the build inputs.
+  ! grep -n '/home/rai' \
+    "$DRYDOCK_HOME/Dockerfile" \
+    "$DRYDOCK_HOME/docker-compose.yml" \
+    "$DRYDOCK_HOME/docker-compose.docs.yml"
 }

@@ -1,18 +1,23 @@
 # drydock — base compose (project-agnostic).
 #
 # Invoked via the `drydock` CLI, NOT directly. The CLI sets the required env
-# vars (PROJECT_DIR, PROJECT_NAME) and optionally overlays the docs compose
-# fragment if the target project has a docs/ directory.
+# vars (via export_compose_env / build args) and optionally overlays the docs
+# compose fragment if the target project has a docs/ directory.
 #
-# Required env vars (validated by drydock CLI):
-#   PROJECT_DIR     Absolute path to the project root (e.g. /home/rai/git/foo)
+# Required env vars (set by the drydock CLI):
+#   PROJECT_DIR     Absolute path to the project root (e.g. /home/<you>/git/foo)
 #   PROJECT_NAME    Basename of PROJECT_DIR, used for container name uniqueness
+#   USER_NAME       Invoking host user (id -un) — drives the container user/$HOME
+#   HOME            Host home directory (ambient) — root of every host bind path
 
 services:
   drydock:
     build:
       context: .
       args:
+        # No default — a bare `docker compose build` outside the CLI must fail
+        # loudly rather than bake a broken (empty-user) image.
+        USER_NAME: "${USER_NAME:?USER_NAME not set — invoke via the drydock CLI}"
         USER_UID: "${USER_UID:-1000}"
         USER_GID: "${USER_GID:-1000}"
         HOST_DOCKER_GID: "${HOST_DOCKER_GID:-1001}"
@@ -38,22 +43,24 @@ services:
       # ── Engram: container-specific DB ──────────────────────────────────────
       # Mapped to ~/.engram/ inside but lives in ~/.engram-container/ on host.
       # Separate from host Claude's DB → no SQLite/WAL race.
-      - /home/rai/.engram-container:/home/rai/.engram:rw
+      # ${HOME} is the host home; both sides match because the container user
+      # is the invoking host user (see USER_NAME), so its $HOME == /home/$USER.
+      - "${HOME}/.engram-container:${HOME}/.engram:rw"
 
       # ── Claude state: container-specific ───────────────────────────────────
       # Two locations Claude Code reads config from:
       #   ~/.claude/      — directory: skills, plugins, settings.json, CLAUDE.md, hooks
       #   ~/.claude.json  — single file: project list, onboarding flags, MCP servers, OAuth
       # Both get container-specific siblings so host + container don't race.
-      - /home/rai/.claude-container:/home/rai/.claude:rw
-      - /home/rai/.claude-container.json:/home/rai/.claude.json:rw
+      - "${HOME}/.claude-container:${HOME}/.claude:rw"
+      - "${HOME}/.claude-container.json:${HOME}/.claude.json:rw"
 
       # ── Hooks: RO override (agent can't self-edit guardrails) ──────────────
-      - /home/rai/.claude/hooks:/home/rai/.claude/hooks:ro
+      - "${HOME}/.claude/hooks:${HOME}/.claude/hooks:ro"
 
       # ── Binaries shared from host (claude, engram, gentle-ai, gga, uv) ─────
-      - /home/rai/.local:/home/rai/.local:rw
+      - "${HOME}/.local:${HOME}/.local:rw"
 
       # ── Auth/identity ──────────────────────────────────────────────────────
-      - /home/rai/.gitconfig:/home/rai/.gitconfig:ro
-      - /home/rai/.config/gh:/home/rai/.config/gh:rw
+      - "${HOME}/.gitconfig:${HOME}/.gitconfig:ro"
+      - "${HOME}/.config/gh:${HOME}/.config/gh:rw"
