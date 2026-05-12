@@ -174,3 +174,14 @@ MOUNTS
   run bash -c 'grep -hE "^[[:space:]]+- " "$1"/docker-compose*.yml | grep -E "\.(ssh|gnupg)/" || true' -- "$DRYDOCK_HOME"
   [ -z "$output" ]
 }
+
+@test "base compose forwards GITHUB_PERSONAL_ACCESS_TOKEN from the invoking shell" {
+  # The GitHub MCP server (and `gh` PAT auth) read GITHUB_PERSONAL_ACCESS_TOKEN
+  # from the process environment. `docker compose run` does not inherit the
+  # host environment, so the base compose declares a value-less passthrough:
+  # claude inside the box sees the var iff the shell that invoked drydock had
+  # it set. (~/.config/gh is already mounted RW, so this widens nothing — the
+  # agent could already `gh auth token`.)
+  grep -qE '^[[:space:]]+- GITHUB_PERSONAL_ACCESS_TOKEN[[:space:]]*$' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}

@@ -45,6 +45,13 @@ NOT MOUNTED:
 ~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.bash_history, other projects under ~/
 ```
 
+**Env passthrough**: `GITHUB_PERSONAL_ACCESS_TOKEN` is forwarded from the
+invoking shell (if set) so the GitHub MCP server and `gh` PAT auth work inside
+the container — the only host env var drydock passes through. `docker compose
+run` does not inherit the host environment, so this is an explicit
+`environment:` entry in `docker-compose.yml`. `~/.config/gh` (mounted above)
+covers `gh` CLI OAuth separately; the env var covers tools that read it directly.
+
 ## Two config locations
 
 Claude Code reads its configuration from **two** places, and drydock mounts

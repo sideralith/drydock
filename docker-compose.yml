@@ -9,6 +9,10 @@
 #   PROJECT_NAME    Basename of PROJECT_DIR, used for container name uniqueness
 #   USER_NAME       Invoking host user (id -un) — drives the container user/$HOME
 #   HOME            Host home directory (ambient) — root of every host bind path
+#
+# Optional env vars (forwarded from the invoking shell if set; not required):
+#   GITHUB_PERSONAL_ACCESS_TOKEN   Read by the GitHub MCP server / `gh` PAT auth
+#                                  inside the container. See the `environment:` block.
 
 services:
   drydock:
@@ -32,6 +36,15 @@ services:
     stdin_open: true
     tty: true
     working_dir: "${PROJECT_DIR}"
+
+    # ── Env passthrough ──────────────────────────────────────────────────────
+    # The GitHub MCP server (and `gh` PAT auth) read GITHUB_PERSONAL_ACCESS_TOKEN
+    # from the process environment. `docker compose run` does NOT inherit the host
+    # env, so forward it explicitly: the container sees it iff the shell that
+    # invoked drydock had it set. (~/.config/gh is already mounted RW below — this
+    # widens nothing; the agent could already `gh auth token`.)
+    environment:
+      - GITHUB_PERSONAL_ACCESS_TOKEN
 
     volumes:
       # ── Docker-out-of-Docker socket ────────────────────────────────────────
