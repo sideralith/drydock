@@ -163,7 +163,8 @@ MOUNTS
     "$DRYDOCK_HOME/docker-compose.yml" \
     "$DRYDOCK_HOME/docker-compose.docs.yml" \
     "$DRYDOCK_HOME/docker-compose.ssh.yml" \
-    "$DRYDOCK_HOME/docker-compose.gpg.yml"
+    "$DRYDOCK_HOME/docker-compose.gpg.yml" \
+    "$DRYDOCK_HOME/docker-compose.engram.yml"
 }
 
 @test "no ~/.ssh or ~/.gnupg bind-mount in any compose file" {

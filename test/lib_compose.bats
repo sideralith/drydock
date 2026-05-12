@@ -171,6 +171,76 @@ MOUNTS
 	[ "$DRYDOCK_GPG_SIGNING_HOME" = "$HOME/.config/drydock/signing" ]
 }
 
+# ── engram overlay (compose gate) ────────────────────────────────────────────
+
+@test "compose_files: no DRYDOCK_ENGRAM_SOURCE — engram overlay absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	unset DRYDOCK_ENGRAM_SOURCE
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.engram.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_ENGRAM_SOURCE set — engram overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export DRYDOCK_ENGRAM_SOURCE="$BATS_TEST_TMPDIR/fakehome/.engram-container"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" == *"docker-compose.engram.yml"* ]]
+}
+
+@test "export_compose_env: engram usable (engram on PATH + Linux) — DRYDOCK_ENGRAM_SOURCE set to engram-container" {
+	# Simulate engram on PATH via a fake binary in a tmpdir.
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/engram"
+	chmod +x "$fake_bin/engram"
+	export PATH="$fake_bin:$PATH"
+	# Override OSRELEASE_FILE to plain Linux (not WSL2) so host_fs_locks_unreliable
+	# doesn't interfere; and UNAME to Linux so host_is_linux returns true.
+	local plain_osrelease="$BATS_TEST_TMPDIR/osrelease-plain"
+	printf '6.5.0-45-generic\n' >"$plain_osrelease"
+	export OSRELEASE_FILE="$plain_osrelease"
+	local uname_stub_dir="$BATS_TEST_TMPDIR/uname-stub-ece"
+	mkdir -p "$uname_stub_dir"
+	printf '#!/usr/bin/env bash\necho "Linux"\n' >"$uname_stub_dir/uname-cmd"
+	chmod +x "$uname_stub_dir/uname-cmd"
+	export UNAME="$uname_stub_dir/uname-cmd"
+	HOME="$BATS_TEST_TMPDIR/fakehome"
+	mkdir -p "$HOME"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -n "${DRYDOCK_ENGRAM_SOURCE:-}" ]
+	[ "$DRYDOCK_ENGRAM_SOURCE" = "$HOME/.engram-container" ]
+}
+
+@test "export_compose_env: engram not on PATH — DRYDOCK_ENGRAM_SOURCE unset" {
+	# Prepend a dir with no engram binary and replace PATH so engram is absent.
+	local empty_bin="$BATS_TEST_TMPDIR/empty-bin-no-engram"
+	mkdir -p "$empty_bin"
+	# Keep system paths for mkdir/stat/etc but strip ~/.local/bin where engram lives.
+	export PATH="$empty_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	unset DRYDOCK_ENGRAM_SOURCE
+	HOME="$BATS_TEST_TMPDIR/fakehome"
+	mkdir -p "$HOME"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_ENGRAM_SOURCE:-}" ]
+}
+
+@test "export_compose_env: macOS host (UNAME→Darwin) — DRYDOCK_ENGRAM_SOURCE unset even with engram on PATH" {
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin-macos"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/engram"
+	chmod +x "$fake_bin/engram"
+	export PATH="$fake_bin:$PATH"
+	local stub_dir="$BATS_TEST_TMPDIR/uname-darwin"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\necho "Darwin"\n' >"$stub_dir/uname-cmd"
+	chmod +x "$stub_dir/uname-cmd"
+	export UNAME="$stub_dir/uname-cmd"
+	HOME="$BATS_TEST_TMPDIR/fakehome"
+	mkdir -p "$HOME"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_ENGRAM_SOURCE:-}" ]
+}
+
 # ── image_exists (via DOCKER mock) ────────────────────────────────────────────
 
 @test "image_exists: mock exits 0 — function returns 0" {

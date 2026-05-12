@@ -1,0 +1,10 @@
+# drydock — optional engram-DB overlay.
+# Auto-included by the CLI when engram is usable in the container (host has the
+# `engram` binary AND host is Linux — a macOS Mach-O engram can't run in the
+# Debian container). DRYDOCK_ENGRAM_SOURCE (set by export_compose_env) is
+# ~/.engram-container (isolated, default) or ~/.engram (shared, opt-in). engram
+# reads ~/.engram/ by default — path is symmetric, no ENGRAM_DATA_DIR needed.
+services:
+  drydock:
+    volumes:
+      - "${DRYDOCK_ENGRAM_SOURCE}:${HOME}/.engram:rw"

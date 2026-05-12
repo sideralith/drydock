@@ -18,10 +18,18 @@ COMPOSE_BASE="$DRYDOCK_HOME/docker-compose.yml"
 COMPOSE_DOCS="$DRYDOCK_HOME/docker-compose.docs.yml"
 COMPOSE_SSH="$DRYDOCK_HOME/docker-compose.ssh.yml"
 COMPOSE_GPG="$DRYDOCK_HOME/docker-compose.gpg.yml"
+COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
 # shellcheck disable=SC2034  # used in lib/commands.sh (cmd_init)
 DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
+
+# Returns 0 when engram can run inside the container: binary on host PATH AND
+# host OS is Linux. On macOS, command -v engram may succeed but the Mach-O
+# binary cannot run in the Linux container — treated as effectively absent.
+engram_usable() {
+	command -v engram >/dev/null 2>&1 && host_is_linux
+}
 
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
@@ -37,6 +45,9 @@ compose_files() {
 	fi
 	if [ -n "${DRYDOCK_GPG_SIGNINGKEY:-}" ]; then
 		printf '%s\n' "-f" "$COMPOSE_GPG"
+	fi
+	if [ -n "${DRYDOCK_ENGRAM_SOURCE:-}" ]; then
+		printf '%s\n' "-f" "$COMPOSE_ENGRAM"
 	fi
 }
 
@@ -82,6 +93,16 @@ export_compose_env() {
 		else
 			warn "$_signing_home existe pero no contiene clave secreta — firma GPG no activada"
 		fi
+	fi
+
+	# ── optional engram overlay (host opt-in) ─────────────────────────────────
+	# Engram is usable in the container only when: (a) the engram binary is on
+	# the host PATH AND (b) the host OS is Linux — a macOS Mach-O engram cannot
+	# run inside the Debian Linux container.
+	# PR1: isolated mode only (DRYDOCK_ENGRAM_SOURCE = ~/.engram-container).
+	# PR2 will add the shared-mode sentinel branch.
+	if engram_usable; then
+		export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
 	fi
 }
 

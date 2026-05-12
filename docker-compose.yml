@@ -53,13 +53,6 @@ services:
       # ── Project tree (same path inside as outside so Makefile resolves) ────
       - "${PROJECT_DIR}:${PROJECT_DIR}:rw"
 
-      # ── Engram: container-specific DB ──────────────────────────────────────
-      # Mapped to ~/.engram/ inside but lives in ~/.engram-container/ on host.
-      # Separate from host Claude's DB → no SQLite/WAL race.
-      # ${HOME} is the host home; both sides match because the container user
-      # is the invoking host user (see USER_NAME), so its $HOME == /home/$USER.
-      - "${HOME}/.engram-container:${HOME}/.engram:rw"
-
       # ── Claude state: container-specific ───────────────────────────────────
       # Two locations Claude Code reads config from:
       #   ~/.claude/      — directory: skills, plugins, settings.json, CLAUDE.md, hooks
