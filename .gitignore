@@ -16,3 +16,7 @@ Thumbs.db
 
 # Agent Teams / SDD local artifacts
 /.atl/
+
+# Per-developer drydock init output (host-path-substituted .claude/settings.json).
+# The canonical template lives at templates/default-settings.json.
+/.claude/
