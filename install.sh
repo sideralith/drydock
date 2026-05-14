@@ -60,23 +60,14 @@ step_fail() {
 
 print_next_steps() {
 	if [ "$IS_TTY" = "1" ]; then
-		printf '\n  next steps:\n\n'
-		printf '    drydock build                   # ~5 min, first time\n'
-		printf '    cd <project> && drydock init .  # per-project setup\n'
-		printf '    cd <project> && drydock         # launch claude, sandboxed\n'
-		printf '\n'
+		printf '\n  next steps:\n\n    drydock build                   # ~5 min, first time\n    cd <project> && drydock init .  # per-project setup\n    cd <project> && drydock         # launch claude, sandboxed\n\n'
 	else
-		printf '\nnext steps:\n'
-		printf '  drydock build                   (5 min first time)\n'
-		printf '  cd <project> && drydock init .  (per-project setup)\n'
-		printf '  cd <project> && drydock         (launch claude, sandboxed)\n'
-		printf '\n'
+		printf '\nnext steps:\n  drydock build                   (5 min first time)\n  cd <project> && drydock init .  (per-project setup)\n  cd <project> && drydock         (launch claude, sandboxed)\n\n'
 	fi
 }
 
 # ── Prereq check (buffered — bash-3.2-safe scalar sets) ──────────────────────
 
-_OS="$(uname -s 2>/dev/null || printf 'Linux')"
 _po1=0 _pv1="" _po2=0 _pv2="" _po3=0 _pv3="" _po4=0 _pv4=""
 
 check_prereqs() {
@@ -107,7 +98,7 @@ check_prereqs() {
 		# Happy path: single aggregate line (abbreviate versions)
 		local _v1 _v2 _v3 _v4
 		_v1="$(printf '%s' "$_pv1" | sed 's/Docker version //' | cut -d'.' -f1,2)"
-		_v2="$(printf '%s' "$_pv2" | sed 's/.*version v*//' | cut -d'.' -f1,2)"
+		_v2="$(printf '%s' "$_pv2" | sed 's/.*version //' | cut -d'.' -f1,2)"
 		_v3="$(printf '%s' "$_pv3" | sed 's/git version //' | cut -d'.' -f1,2)"
 		_v4="$(printf '%s' "$_pv4" | sed 's/jq-//' | cut -d'.' -f1,2)"
 		step_ok "Prereqs (docker ${_v1:-?}, compose ${_v2:-?}, git ${_v3:-?}, jq ${_v4:-?})"
@@ -121,8 +112,8 @@ check_prereqs() {
 		step_ok "docker ${_abbrev:-?}"
 	else step_miss "docker — not found"; fi
 	if [ "$_po2" = "1" ]; then
-		_abbrev="$(printf '%s' "$_pv2" | sed 's/.*version v*//' | cut -d'.' -f1,2)"
-		step_ok "compose v2 ${_abbrev:-?}"
+		_abbrev="$(printf '%s' "$_pv2" | sed 's/.*version //' | cut -d'.' -f1,2)"
+		step_ok "compose ${_abbrev:-?}"
 	else step_miss "compose v2 — not found"; fi
 	if [ "$_po3" = "1" ]; then
 		_abbrev="$(printf '%s' "$_pv3" | sed 's/git version //' | cut -d'.' -f1,2)"
@@ -138,6 +129,15 @@ check_prereqs() {
 	else
 		printf 'error: missing prerequisite(s):%s\n' "$_miss" >&2
 	fi
+	printf '\n' >&2
+	for _t in $_miss; do
+		case "$_t" in
+		docker) printf '  install on Linux:   sudo apt-get install docker.io\n  install on macOS:   brew install --cask docker\n' >&2 ;;
+		compose) printf '  install on Linux:   sudo apt-get install docker-compose-plugin\n  install on macOS:   (bundled with Docker Desktop)\n' >&2 ;;
+		git) printf '  install on Linux:   sudo apt-get install git\n  install on macOS:   brew install git\n' >&2 ;;
+		jq) printf '  install on Linux:   sudo apt-get install jq\n  install on macOS:   brew install jq\n' >&2 ;;
+		esac
+	done
 	printf '\n  re-run install.sh after installing.\n' >&2
 	exit 1
 }

@@ -87,6 +87,8 @@ setup() {
 		bash "$INSTALL_SH"
 	assert_failure
 	assert_output --partial "jq"
+	assert_output --partial "apt-get install jq"
+	assert_output --partial "brew install jq"
 }
 
 # Case 4: symlink_conflict_diff_target
