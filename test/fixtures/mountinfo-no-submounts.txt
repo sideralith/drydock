@@ -1,0 +1,3 @@
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+22 21 0:18 / /sys rw,relatime shared:6 - sysfs sysfs rw
+23 21 0:4 / /proc rw,relatime - proc proc rw

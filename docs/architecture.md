@@ -194,16 +194,41 @@ arg) and exports it as `PROJECT_DIR` to compose. The compose file uses
 env vars change per project (`PROJECT_DIR`, `PROJECT_NAME`, `USER_UID`,
 `USER_GID`, `HOST_DOCKER_GID`, `COMPOSE_PROJECT_NAME`).
 
-**Conditional `docs/` overlay**: if `$PROJECT_DIR/docs/` exists AND is a
-separate filesystem mount point (typical on WSL2 where docs lives on Windows
-via 9P drvfs), the CLI adds `docker-compose.docs.yml` as a second `-f`. This
-re-mounts `docs/` explicitly — belt-and-suspenders, because Docker's
-bind-mount-of-bind-mount propagation on WSL2 is historically flaky. If
-`docs/` is on the same filesystem as the parent project (e.g. ext4 native),
-no overlay — the parent mount covers it.
+**Sub-mount propagation overlay**: on each `drydock run`, the CLI calls
+`detect_submounts "$PROJECT_DIR"` which reads `/proc/self/mountinfo` and emits
+one pipe-delimited record per sub-mount of `$PROJECT_DIR` in the format
+`<docker-source>|<mount-point>|<class>`. Three classes are recognised:
 
-Detection: `awk '$2 == "$PROJECT_DIR/docs"' /proc/mounts` — non-empty means
-it's a distinct mount point.
+- **drvfs** (`9p` fstype with `aname=drvfs` in super-options): WSL2 9P
+  drvfs share from Windows. The Windows drive letter (`path=X:\` in
+  super-options) is extracted, and the docker-source is translated to
+  `/mnt/<letter>/<fsroot>` — the path Docker Desktop's own WSL2 channel
+  can read.
+- **linux-native** (`ext4`, `btrfs`, `xfs`, `zfs`, `f2fs`, `reiserfs`,
+  `ext3`, `ext2`): block-backed bind mounts. The source filesystem root
+  is located via a major:minor reverse-lookup against `/proc/self/mountinfo`
+  rows where `fsroot == "/"`. If no such row exists (orphan major:minor),
+  the row is emitted with an empty docker-source and `generate_submount_overlay`
+  skips it with a stderr warning.
+- **exotic** (all other fstypes including `nfs`, `cifs`, `fuse.*`, `tmpfs`,
+  `overlay`): source passed through as-is with a stderr warning that
+  propagation may not work. `tmpfs` and `overlay` are explicitly in this
+  bucket — their major:minor reverse-lookup would resolve to unrelated
+  mountpoints (`/run`, Docker layer FS), producing a wrong translation.
+
+When at least one non-empty-source row is detected, `generate_submount_overlay`
+writes a temporary YAML overlay to `${TMPDIR:-/tmp}/drydock-submounts-$$.yml`
+(PID-namespaced) and `compose_files` adds `-f $SUBMOUNT_OVERLAY` to the
+compose invocation. The overlay is cleaned up by a `trap ... EXIT` registered
+inside `main()`.
+
+Because `lib/commands.sh` uses `exec docker compose run` for `run`/`shell`
+(which replaces the bash process and fires no EXIT trap), `bin/drydock` also
+performs a **startup orphan reap**: on each invocation it globs for
+`/tmp/drydock-submounts-*.yml`, extracts the PID from each filename, checks
+liveness with `kill -0`, and removes any orphaned files from past `exec`'d
+invocations. Concurrent invocations are safe — a live PID's file is left
+untouched.
 
 ## Docker-out-of-Docker (DooD), not Docker-in-Docker
 

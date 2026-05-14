@@ -1,0 +1,3 @@
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+35 24 8:2 / /data rw,relatime - btrfs /dev/sdb1 rw
+501 24 8:2 /foo /home/rai/git/proj/bind rw,relatime - btrfs /dev/sdb1 rw

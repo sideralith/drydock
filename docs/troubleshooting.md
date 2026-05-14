@@ -102,18 +102,42 @@ docker image rm drydock:latest
 drydock build
 ```
 
-## `docs/` content not visible inside the container
+## Sub-mount not visible inside the container
 
-If your project's `docs/` is a separate filesystem mount (e.g. WSL2 9P drvfs
-from Windows), drydock should auto-add the `docs/` overlay. Verify:
+drydock automatically detects sub-mounts under `$PROJECT_DIR` and propagates
+them. Run `drydock doctor` to see the current detection:
 
 ```bash
 cd ~/git/yourproject && drydock doctor
-# Look for: "docs/: separate mount (9P or similar) → docs overlay activates"
+# Look for the "sub-mounts under ..." section:
+#   ✓ /home/rai/git/yourproject/docs → /mnt/c/.../docs (drvfs auto-translated)
+#   ✓ /home/rai/git/yourproject/data → /data/src (Linux-native bind)
+#   ⚠ /home/rai/git/yourproject/nfs → server:/share (nfs, may not propagate)
+#   (none detected)
 ```
 
-If it says "docs/: local" but you know it's a separate mount, check
-`awk '$2 == "/abs/path/to/yourproject/docs"' /proc/mounts` returns a line.
+**If a sub-mount shows `✓` but content is still missing inside the container:**
+- Restart `drydock shell` — the overlay is generated per-invocation; a running
+  container from before the mount was added won't have it.
+- For drvfs: ensure Docker Desktop is running and the WSL2 integration is
+  enabled for the drive.
+
+**If a sub-mount shows `⚠ (source FS root not found — will be skipped)`:**
+- This is a linux-native bind where the source filesystem's root entry is
+  missing from `/proc/self/mountinfo`. This can happen on some container
+  runtimes or with unusual bind configurations. Diagnostic:
+  `awk '{print $3, $4, $5}' /proc/self/mountinfo | sort` — look for the
+  major:minor of the sub-mount and check if a row with `fsroot=/` exists.
+
+**If a sub-mount is classified exotic and not propagating:**
+- NFS, CIFS, FUSE, tmpfs, and overlay mounts may not propagate through
+  Docker Desktop's WSL2 channel. The source path is passed through as-is,
+  but Docker may reject or silently drop it. Consider bind-mounting a
+  linux-native path instead.
+
+**If `(none detected)` but you see a mount in `mount | grep your/path`:**
+- Check that the mount appears in `/proc/self/mountinfo` (not just `/proc/mounts`
+  which can be stale). drydock reads `mountinfo` exclusively.
 
 ## drydock can't find DRYDOCK_HOME / compose file
 

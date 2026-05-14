@@ -1,0 +1,2 @@
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+687 80 0:68 /Projects/data /home/rai/git/serendipilink/data rw,noatime - 9p drvfs rw,aname=drvfs;path=D:\;uid=1000;gid=1000;symlinkroot=/mnt/,cache=5,access=client

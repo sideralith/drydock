@@ -35,6 +35,11 @@ MOUNTS
 sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
 drvfs $DOCS_MOUNT_POINT 9p rw,noatime,uid=1000,gid=1000 0 0
 MOUNTS
+
+  # Hermetic seam: unrelated tests must not be perturbed by real host submounts.
+  export MOUNTINFO_FILE=/dev/null
+  # Hermetic SUBMOUNT_OVERLAY so compose_files doesn't write to /tmp.
+  export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount.yml"
 }
 
 # ── compose_files tests ──────────────────────────────────────────────────────
@@ -45,28 +50,6 @@ MOUNTS
   [ "$status" -eq 0 ]
   [[ "$output" == *"-f"* ]]
   [[ "$output" == *"docker-compose.yml"* ]]
-}
-
-@test "compose_files: no docs sub-mount — output does NOT contain COMPOSE_DOCS" {
-  export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
-  run compose_files "$TEST_PROJECT_DIR"
-  [[ "$output" != *"docker-compose.docs.yml"* ]]
-}
-
-@test "compose_files: with docs sub-mount — output contains COMPOSE_BASE and COMPOSE_DOCS" {
-  export MOUNTS_FILE="$MOUNTS_FILE_WITH_DOCS"
-  run compose_files "$TEST_PROJECT_DIR"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"docker-compose.yml"* ]]
-  [[ "$output" == *"docker-compose.docs.yml"* ]]
-}
-
-@test "compose_files: docs dir exists but NOT in mounts file — no overlay" {
-  # docs dir exists but MOUNTS_FILE has no entry for it.
-  mkdir -p "$TEST_PROJECT_DIR/docs"
-  export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
-  run compose_files "$TEST_PROJECT_DIR"
-  [[ "$output" != *"docker-compose.docs.yml"* ]]
 }
 
 # ── export_compose_env tests ─────────────────────────────────────────────────
@@ -161,7 +144,6 @@ MOUNTS
   ! grep -n '/home/rai' \
     "$DRYDOCK_HOME/Dockerfile" \
     "$DRYDOCK_HOME/docker-compose.yml" \
-    "$DRYDOCK_HOME/docker-compose.docs.yml" \
     "$DRYDOCK_HOME/docker-compose.ssh.yml" \
     "$DRYDOCK_HOME/docker-compose.gpg.yml" \
     "$DRYDOCK_HOME/docker-compose.engram.yml"

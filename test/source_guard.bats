@@ -43,8 +43,8 @@ setup() {
   declare -f compose_files > /dev/null
 }
 
-@test "is_separate_mount is defined after sourcing" {
-  declare -f is_separate_mount > /dev/null
+@test "detect_submounts is defined after sourcing" {
+  declare -f detect_submounts > /dev/null
 }
 
 @test "cmd_init is defined after sourcing" {

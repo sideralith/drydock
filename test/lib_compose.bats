@@ -45,37 +45,40 @@ MOUNTS
 	# Docker mock for image_exists tests.
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls.log"
 	touch "$DOCKER_CALL_LOG"
+
+	# Hermetic seam: unrelated ssh/gpg/engram tests must not be perturbed by the
+	# host machine having real submounts under $TEST_PROJECT_DIR.
+	export MOUNTINFO_FILE=/dev/null
 }
 
-# ── compose_files ─────────────────────────────────────────────────────────────
+# ── compose_files / generate_submount_overlay ─────────────────────────────────
 
-@test "compose_files: no docs dir — output contains -f and COMPOSE_BASE" {
-	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
-	run compose_files "$TEST_PROJECT_DIR"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"-f"* ]]
-	[[ "$output" == *"docker-compose.yml"* ]]
-}
-
-@test "compose_files: no docs dir — output does NOT contain COMPOSE_DOCS" {
-	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
-	run compose_files "$TEST_PROJECT_DIR"
-	[[ "$output" != *"docker-compose.docs.yml"* ]]
-}
-
-@test "compose_files: docs dir present and in MOUNTS_FILE — adds COMPOSE_DOCS" {
-	export MOUNTS_FILE="$MOUNTS_FILE_WITH_DOCS"
+@test "compose_files: no sub-mounts — output contains base only" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount.yml"
 	run compose_files "$TEST_PROJECT_DIR"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"docker-compose.yml"* ]]
-	[[ "$output" == *"docker-compose.docs.yml"* ]]
+	[[ "$output" != *"submount.yml"* ]]
+	[ ! -f "$SUBMOUNT_OVERLAY" ]
 }
 
-@test "compose_files: docs dir exists but NOT in mounts file — just base" {
-	mkdir -p "$TEST_PROJECT_DIR/docs"
-	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
-	run compose_files "$TEST_PROJECT_DIR"
-	[[ "$output" != *"docker-compose.docs.yml"* ]]
+@test "generate_submount_overlay: writes valid YAML when sub-mounts detected" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount.yml"
+	generate_submount_overlay "/home/rai/git/serendipilink"
+	[ -f "$SUBMOUNT_OVERLAY" ]
+	grep -q '^services:' "$SUBMOUNT_OVERLAY"
+	grep -q '^  drydock:' "$SUBMOUNT_OVERLAY"
+	grep -q '^    volumes:' "$SUBMOUNT_OVERLAY"
+	grep -q '/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink:/home/rai/git/serendipilink/docs:rw' "$SUBMOUNT_OVERLAY"
+}
+
+@test "generate_submount_overlay: does NOT write file when no sub-mounts" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount.yml"
+	generate_submount_overlay "$TEST_PROJECT_DIR"
+	[ ! -f "$SUBMOUNT_OVERLAY" ]
 }
 
 # ── export_compose_env ────────────────────────────────────────────────────────

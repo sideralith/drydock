@@ -3,7 +3,7 @@
 #
 # Sourced by bin/drydock (the thin dispatcher). Never sourced directly by
 # lib/*.sh siblings — let the dispatcher control the source order.
-# Requires: lib/paths.sh sourced first (is_separate_mount, DRYDOCK_HOME).
+# Requires: lib/paths.sh sourced first (detect_submounts, DRYDOCK_HOME).
 
 # ── DOCKER seam ───────────────────────────────────────────────────────────────
 # Moved here from bin/drydock (was an inline seam in slice 1).
@@ -15,7 +15,6 @@
 # is sourced, so these references are safe at source time.
 IMAGE="drydock:latest"
 COMPOSE_BASE="$DRYDOCK_HOME/docker-compose.yml"
-COMPOSE_DOCS="$DRYDOCK_HOME/docker-compose.docs.yml"
 COMPOSE_SSH="$DRYDOCK_HOME/docker-compose.ssh.yml"
 COMPOSE_GPG="$DRYDOCK_HOME/docker-compose.gpg.yml"
 COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
@@ -31,12 +30,58 @@ engram_usable() {
 	command -v engram >/dev/null 2>&1 && host_is_linux
 }
 
+# generate_submount_overlay — write a compose overlay listing each sub-mount
+# of $1 to $SUBMOUNT_OVERLAY. If detect_submounts returns empty, do NOT create
+# the file (so compose_files can use file existence as the gate).
+#
+# Per-row behaviour:
+#   - linux-native with empty docker-source (FS row missing) → skip + warn
+#   - exotic:*                                                → emit + warn
+#   - drvfs / linux-native with non-empty source              → emit silently
+#
+# If after filtering there are zero emittable rows, the overlay file is NOT
+# written.
+generate_submount_overlay() {
+	local project_dir="$1"
+	[ -n "${SUBMOUNT_OVERLAY:-}" ] || return 0
+	local detected
+	detected=$(detect_submounts "$project_dir")
+	[ -n "$detected" ] || return 0
+
+	local body=""
+	local docker_src mount_pt class
+	while IFS='|' read -r docker_src mount_pt class; do
+		[ -n "$mount_pt" ] || continue
+		if [ -z "$docker_src" ]; then
+			warn "sub-mount $mount_pt skipped — source FS root not found in mountinfo"
+			continue
+		fi
+		case "$class" in
+		exotic:*)
+			warn "sub-mount $mount_pt uses fstype ${class#exotic:} — propagation may not work"
+			;;
+		esac
+		body+=$(printf '      - "%s:%s:rw"\n' "$docker_src" "$mount_pt")
+		body+=$'\n'
+	done <<<"$detected"
+
+	[ -n "$body" ] || return 0
+
+	{
+		printf 'services:\n'
+		printf '  drydock:\n'
+		printf '    volumes:\n'
+		printf '%s' "$body"
+	} >"$SUBMOUNT_OVERLAY"
+}
+
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
 	local project_dir="$1"
 	printf '%s\n' "-f" "$COMPOSE_BASE"
-	if [ -d "$project_dir/docs" ] && is_separate_mount "$project_dir/docs"; then
-		printf '%s\n' "-f" "$COMPOSE_DOCS"
+	generate_submount_overlay "$project_dir"
+	if [ -f "${SUBMOUNT_OVERLAY:-}" ] && [ -s "${SUBMOUNT_OVERLAY:-}" ]; then
+		printf '%s\n' "-f" "$SUBMOUNT_OVERLAY"
 	fi
 	# Optional, host opt-in — these vars are set by export_compose_env (called
 	# before this fn) so the -f list and the overlay YAMLs share one decision.

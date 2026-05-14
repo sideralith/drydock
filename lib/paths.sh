@@ -9,6 +9,10 @@
 # Override in tests: export MOUNTS_FILE=/path/to/fixture before sourcing.
 : "${MOUNTS_FILE:=/proc/mounts}"
 
+# ── MOUNTINFO_FILE seam ───────────────────────────────────────────────────────
+# Override in tests: export MOUNTINFO_FILE=/path/to/fixture before sourcing.
+: "${MOUNTINFO_FILE:=/proc/self/mountinfo}"
+
 # ── OS-detection seams ────────────────────────────────────────────────────────
 # Override in tests to simulate macOS or plain-Linux CI without the real kernel.
 #   export OSRELEASE_FILE=/path/to/fixture   (default: /proc/sys/kernel/osrelease)
@@ -78,11 +82,100 @@ host_fs_locks_unreliable() {
 	[ "$("$UNAME" -s)" = "Darwin" ]
 }
 
-# Returns 0 if $1 is a separate filesystem mount point (e.g. 9P drvfs sub-mount
-# from Windows on WSL2). Used to decide whether to apply the docs/ overlay.
-# /proc/mounts layout: <source> <mount_point> <fs_type> <options> <dump> <pass>
-is_separate_mount() {
-	local path="$1"
-	[ -e "$path" ] || return 1
-	awk -v target="$path" '$2 == target {found=1} END {exit !found}' "$MOUNTS_FILE"
+# detect_submounts — enumerate sub-mounts of $1 visible in $MOUNTINFO_FILE,
+# emit one pipe-delimited record per sub-mount:
+#   <docker-source>|<mount-point>|<class>
+# Classes:
+#   drvfs         — 9p WSL2 drvfs; source translated to /mnt/<letter>/...
+#   linux-native  — ext4/btrfs/xfs/zfs/f2fs/reiserfs/ext3/ext2 bind; source
+#                   translated via major:minor reverse-lookup. If the source
+#                   FS row is not found, docker-source is left EMPTY —
+#                   generate_submount_overlay() skips empty-source rows and
+#                   warns. (tmpfs/overlay are NOT in this list — classified
+#                   exotic; see classify() below.)
+#   exotic:<fst>  — nfs/cifs/fuse/tmpfs/overlay/etc.; source passed through;
+#                   generate_submount_overlay() emits a warn per row.
+# Output is sorted by mount-point (col 2), parent before child.
+detect_submounts() {
+	local project_dir="$1"
+	[ -r "$MOUNTINFO_FILE" ] || return 0
+
+	# Pass 1: build major:minor → mountpoint map for rows where fsroot=="/".
+	local fs_map
+	fs_map=$(awk '
+		{
+			i = index($0, " - ")
+			if (i == 0) next
+			pre = substr($0, 1, i - 1)
+			split(pre, p, " ")
+			if (p[4] == "/") { printf "%s=%s\n", p[3], p[5] }
+		}
+	' "$MOUNTINFO_FILE")
+
+	# Pass 2: emit sub-mounts of project_dir, classify, translate.
+	awk -v root="$project_dir" -v fsmap="$fs_map" '
+		BEGIN {
+			n = split(fsmap, lines, "\n")
+			for (k = 1; k <= n; k++) {
+				if (lines[k] == "") continue
+				eq = index(lines[k], "=")
+				if (eq > 0) FS_MOUNT[substr(lines[k], 1, eq - 1)] = substr(lines[k], eq + 1)
+			}
+		}
+		{
+			i = index($0, " - ")
+			if (i == 0) next
+			pre  = substr($0, 1, i - 1)
+			post = substr($0, i + 3)
+			split(pre, p, " ")
+			split(post, q, " ")
+
+			major_minor = p[3]
+			fsroot      = unescape(p[4])
+			mount_point = unescape(p[5])
+			fstype      = q[1]
+			source_fs   = q[2]
+			super_opts  = q[3]
+
+			if (mount_point == root) next
+			if (index(mount_point, root "/") != 1) next
+
+			class = classify(fstype, super_opts)
+			docker_src = translate(class, fsroot, super_opts, source_fs, FS_MOUNT[major_minor])
+			label = (class == "exotic") ? "exotic:" fstype : class
+			printf "%s|%s|%s\n", docker_src, mount_point, label
+		}
+
+		function unescape(s,   r) { r = s; gsub(/\\040/, " ", r); return r }
+		function classify(t, o) {
+			if (t == "9p" && index(o, "aname=drvfs") > 0) return "drvfs"
+			# Linux-native allowlist: real block-backed filesystems only.
+			# tmpfs and overlay are intentionally NOT here — they classify as
+			# exotic. major:minor reverse-lookup for tmpfs would resolve to
+			# unrelated tmpfs mountpoints (/run, /dev/shm); overlay is the
+			# docker layer FS, not a user bind source. (Fix T2.)
+			if (t == "ext4" || t == "btrfs" || t == "xfs" || t == "zfs" || \
+			    t == "f2fs" || t == "reiserfs" || t == "ext3" || t == "ext2") return "linux-native"
+			return "exotic"
+		}
+		function translate(c, fsr, o, src, src_mp,    letter) {
+			if (c == "drvfs") {
+				# Regex anchors on [A-Za-z]: — matches with or without trailing \.
+				if (match(o, /path=[A-Za-z]:/)) {
+					letter = tolower(substr(o, RSTART + 5, 1))
+					return "/mnt/" letter fsr
+				}
+				return src
+			}
+			if (c == "linux-native") {
+				# Empty source-FS row → return EMPTY so shell layer skip+warns.
+				# Returning src (block device) is useless to Docker; returning
+				# fsr alone may point at a non-existent host path. (Fix C3.)
+				if (src_mp == "") return ""
+				if (src_mp == "/") return fsr
+				return src_mp fsr
+			}
+			return src   # exotic — pass-through
+		}
+	' "$MOUNTINFO_FILE" | sort -t'|' -k2,2
 }

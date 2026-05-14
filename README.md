@@ -85,6 +85,40 @@ Inside the container, everything works as on host: `make shell-api`,
 | `drydock setup` | (advanced) Force host-side init — auto-triggered; rarely explicit |
 | `drydock version` / `help` | Self-explanatory |
 
+## Multi-mount projects
+
+Some projects have sub-directories that are separate filesystem mounts — for
+example, an Obsidian vault bind-mounted via WSL2's 9P drvfs layer:
+
+```bash
+# Example: ~/git/myproject/docs is a drvfs bind from Windows
+ls ~/git/myproject/docs   # works on host — files visible
+drydock shell
+ls /home/rai/git/myproject/docs  # empty without sub-mount propagation!
+```
+
+drydock automatically detects sub-mounts under `${PROJECT_DIR}` and generates
+a temporary compose overlay that propagates them into the container. Run
+`drydock doctor` to see what was detected:
+
+```
+── sub-mounts under /home/rai/git/myproject ──
+  ✓ /home/rai/git/myproject/docs → /mnt/c/Users/Rai/Documents/Obsidian/Vaults/MyProject (drvfs auto-translated)
+  ✓ /home/rai/git/myproject/data → /data/foo (Linux-native bind)
+  ⚠ /home/rai/git/myproject/nfsmount → server:/export (nfs, may not propagate)
+```
+
+Three classes of sub-mount:
+
+| Class | Example | Behaviour |
+|---|---|---|
+| **drvfs** (WSL2 9P) | Obsidian vault, OneDrive folder | Auto-translated to `/mnt/<drive>/...` — Docker Desktop reads it |
+| **Linux-native** | `mount --bind /data/src ~/git/proj/bind` | Source path translated via `/proc/self/mountinfo` lookup |
+| **Exotic** (nfs, cifs, fuse, tmpfs) | NFS share, SSHFS mount | Passed through with a warning — propagation not guaranteed |
+
+If a sub-mount does not appear inside the container, see
+[docs/troubleshooting.md](docs/troubleshooting.md#sub-mount-not-visible-inside-the-container).
+
 ## Using drydock without engram
 
 **Engram is optional.** drydock works cleanly without it:
@@ -163,10 +197,10 @@ no nested daemon). Host config lives in two places (`~/.claude/` directory and
 `~/.claude.json` file); drydock mounts container-specific siblings of both, an
 engram DB sibling, the project tree, and the docker socket. Hooks are RO. The
 image is universal — only env vars (`PROJECT_DIR` etc.) change per project; a
-conditional overlay handles 9P-backed `docs/` directories.
+dynamically-generated overlay propagates sub-mounts under `$PROJECT_DIR`.
 
 Full mount map, the two-config-location detail, the split rationale, and the
-9P detection logic: **[docs/architecture.md](docs/architecture.md)**.
+sub-mount propagation design: **[docs/architecture.md](docs/architecture.md)**.
 
 ## Documentation
 

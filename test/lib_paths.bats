@@ -62,57 +62,6 @@ setup() {
 	[[ "$output" == *"no existe"* ]]
 }
 
-# ── is_separate_mount ─────────────────────────────────────────────────────────
-
-setup_mounts_fixture() {
-	# Create a real directory that will appear as a mount point.
-	MOUNTED_DIR="$BATS_TEST_TMPDIR/mounted"
-	mkdir -p "$MOUNTED_DIR"
-
-	# Another dir that exists but is NOT in the fixture.
-	OTHER_DIR="$BATS_TEST_TMPDIR/other"
-	mkdir -p "$OTHER_DIR"
-
-	# Synthetic /proc/mounts — second field is the mount point.
-	SYNTHETIC_MOUNTS="$BATS_TEST_TMPDIR/proc-mounts"
-	cat >"$SYNTHETIC_MOUNTS" <<MOUNTS
-sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
-drvfs $MOUNTED_DIR 9p rw,noatime,uid=1000,gid=1000 0 0
-tmpfs /tmp tmpfs rw,nosuid,nodev 0 0
-MOUNTS
-
-	export MOUNTS_FILE="$SYNTHETIC_MOUNTS"
-}
-
-@test "is_separate_mount: path in fixture returns exit 0" {
-	setup_mounts_fixture
-	run is_separate_mount "$MOUNTED_DIR"
-	[ "$status" -eq 0 ]
-}
-
-@test "is_separate_mount: existing dir NOT in fixture returns non-zero" {
-	setup_mounts_fixture
-	run is_separate_mount "$OTHER_DIR"
-	[ "$status" -ne 0 ]
-}
-
-@test "is_separate_mount: nonexistent path returns non-zero" {
-	setup_mounts_fixture
-	run is_separate_mount "/nonexistent/path/that/does/not/exist"
-	[ "$status" -ne 0 ]
-}
-
-@test "is_separate_mount: MOUNTS_FILE with no entries returns non-zero for any real dir" {
-	empty_mounts="$BATS_TEST_TMPDIR/empty-mounts"
-	mkdir -p "$BATS_TEST_TMPDIR/somedir"
-	cat >"$empty_mounts" <<'MOUNTS'
-sysfs /sys sysfs rw 0 0
-MOUNTS
-	export MOUNTS_FILE="$empty_mounts"
-	run is_separate_mount "$BATS_TEST_TMPDIR/somedir"
-	[ "$status" -ne 0 ]
-}
-
 # ── host_is_linux ─────────────────────────────────────────────────────────────
 # Uses UNAME seam so macOS / Linux branches are testable on any CI runner.
 

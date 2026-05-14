@@ -1,0 +1,2 @@
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+900 24 99:99 /some/orphan/path /home/rai/git/proj/orphan rw,relatime - ext4 /dev/sdz99 rw

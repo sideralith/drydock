@@ -47,6 +47,34 @@ main() {
 	local cmd="${1:-run}"
 	[ $# -gt 0 ] && shift
 
+	# Reap orphan overlay files left by previous drydock invocations that
+	# `exec`d into docker compose (so their EXIT trap did not fire).
+	# Skip files whose owning PID is still alive (concurrent invocation).
+	local _stale _pid
+	for _stale in "${TMPDIR:-/tmp}"/drydock-submounts-*.yml; do
+		[ -e "$_stale" ] || continue
+		_pid="${_stale##*-}"
+		_pid="${_pid%.yml}"
+		case "$_pid" in
+		'' | *[!0-9]*)
+			rm -f "$_stale"
+			continue
+			;;
+		esac
+		kill -0 "$_pid" 2>/dev/null || rm -f "$_stale"
+	done
+	unset _stale _pid
+
+	# Submount overlay: PID-namespaced temp file cleaned up on EXIT.
+	# MUST be inside main() (post source-guard): bats files source bin/drydock
+	# to test functions, and a top-level trap would fire at test cleanup.
+	# NOTE: lib/commands.sh uses `exec docker compose run` for run/shell/exec —
+	# `exec` replaces this bash process and the trap NEVER fires for those
+	# paths. That's why the orphan-reap loop above also exists.
+	SUBMOUNT_OVERLAY="${TMPDIR:-/tmp}/drydock-submounts-$$.yml"
+	export SUBMOUNT_OVERLAY
+	trap 'rm -f "${SUBMOUNT_OVERLAY:-}"' EXIT
+
 	case "$cmd" in
 	run) cmd_run "$@" ;;
 	shell) cmd_shell "$@" ;;

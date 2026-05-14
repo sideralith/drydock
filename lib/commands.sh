@@ -388,14 +388,32 @@ cmd_doctor() {
 	else
 		printf '  .claude/:         \033[33mmissing\033[0m → drydock init\n'
 	fi
-	if [ -d "$PWD/docs" ]; then
-		if is_separate_mount "$PWD/docs"; then
-			printf '  docs/:            \033[33mseparate mount (9P or similar)\033[0m → docs overlay activates\n'
-		else
-			printf '  docs/:            \033[32mlocal\033[0m\n'
-		fi
+	printf '── sub-mounts under %s ──\n' "$PWD"
+	local _detected
+	# Do NOT suppress stderr — warnings from generate_submount_overlay
+	# (linux-native fallback miss, exotic class) are diagnostic signal.
+	_detected=$(detect_submounts "$PWD") || true
+	if [ -z "$_detected" ]; then
+		printf '  (none detected)\n'
 	else
-		printf '  docs/:            not present (no overlay needed)\n'
+		local _docker_src _mount_pt _class
+		while IFS='|' read -r _docker_src _mount_pt _class; do
+			case "$_class" in
+			drvfs)
+				printf '  \033[32m✓\033[0m %s → %s (drvfs auto-translated)\n' "$_mount_pt" "$_docker_src"
+				;;
+			linux-native)
+				if [ -z "$_docker_src" ]; then
+					printf '  \033[33m⚠\033[0m %s → (source FS root not found — will be skipped)\n' "$_mount_pt"
+				else
+					printf '  \033[32m✓\033[0m %s → %s (Linux-native bind)\n' "$_mount_pt" "$_docker_src"
+				fi
+				;;
+			exotic:*)
+				printf '  \033[33m⚠\033[0m %s → %s (%s, may not propagate)\n' "$_mount_pt" "$_docker_src" "${_class#exotic:}"
+				;;
+			esac
+		done <<<"$_detected"
 	fi
 	echo
 	printf '── runtime context (for compose) ──\n'
