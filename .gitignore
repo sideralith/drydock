@@ -19,4 +19,4 @@ Thumbs.db
 
 # Per-developer drydock init output (host-path-substituted .claude/settings.json).
 # The canonical template lives at templates/default-settings.json.
-/.claude/
+.claude/
