@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# install.sh — drydock installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/sideralith/drydock/main/install.sh | bash
+#        or: git clone … && cd drydock && ./install.sh
+#
+# Env overrides:
+#   DRYDOCK_INSTALL_DIR  — install directory          (default: ~/.local/share/drydock)
+#   DRYDOCK_BIN_DIR      — symlink destination dir    (default: ~/.local/bin)
+#   DRYDOCK_BRANCH       — branch to clone            (default: main)
+#   DRYDOCK_REPO_URL     — git remote URL             (default: https://github.com/sideralith/drydock.git)
+
+set -euo pipefail
+
+# ── Env-var defaults ──────────────────────────────────────────────────────────
+
+DRYDOCK_INSTALL_DIR="${DRYDOCK_INSTALL_DIR:-$HOME/.local/share/drydock}"
+DRYDOCK_BIN_DIR="${DRYDOCK_BIN_DIR:-$HOME/.local/bin}"
+DRYDOCK_BRANCH="${DRYDOCK_BRANCH:-main}"
+DRYDOCK_REPO_URL="${DRYDOCK_REPO_URL:-https://github.com/sideralith/drydock.git}"
+
+# ── TTY detection ─────────────────────────────────────────────────────────────
+
+IS_TTY=0
+[ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ] && IS_TTY=1
+
+# ── ANSI palette (mirrors lib/common.sh:12-18) ────────────────────────────────
+
+_RED='\033[31m'
+_GREEN='\033[32m'
+_YELLOW='\033[33m'
+_CYAN='\033[36m'
+_DIM='\033[2m'
+_RST='\033[0m'
+
+# ── Output helpers ────────────────────────────────────────────────────────────
+
+print_header() {
+	if [ "$IS_TTY" = "1" ]; then
+		printf '┌─ drydock ──────────────────────────┐\n'
+		printf '│ Defense-in-depth Claude sandbox    │\n'
+		printf '└────────────────────────────────────┘\n'
+	else
+		printf 'drydock installer\n'
+	fi
+	printf '\n'
+}
+
+step_ok() { [ "$IS_TTY" = "1" ] && printf '  %b✓%b  %s\n' "$_GREEN" "$_RST" "$1" || printf '[OK] %s\n' "$1"; }
+step_miss() { [ "$IS_TTY" = "1" ] && printf '  %b✗%b  %s\n' "$_RED" "$_RST" "$1" || printf '[MISS] %s\n' "$1"; }
+step_warn() { [ "$IS_TTY" = "1" ] && printf '  %bwarn:%b  %s\n' "$_YELLOW" "$_RST" "$1" >&2 || printf '[WARN] %s\n' "$1" >&2; }
+hint() { [ "$IS_TTY" = "1" ] && printf '  %b%s%b\n' "$_DIM" "$1" "$_RST" || printf '  %s\n' "$1"; }
+info() { [ "$IS_TTY" = "1" ] && printf '  %b•%b  %s\n' "$_CYAN" "$_RST" "$1" || printf '%s\n' "$1"; }
+
+step_fail() {
+	[ "$IS_TTY" = "1" ] &&
+		printf '%berror:%b %s\n' "$_RED" "$_RST" "$1" >&2 ||
+		printf 'error: %s\n' "$1" >&2
+	exit 1
+}
+
+print_next_steps() {
+	if [ "$IS_TTY" = "1" ]; then
+		printf '\n  next steps:\n\n'
+		printf '    drydock build                   # ~5 min, first time\n'
+		printf '    cd <project> && drydock init .  # per-project setup\n'
+		printf '    cd <project> && drydock         # launch claude, sandboxed\n'
+		printf '\n'
+	else
+		printf '\nnext steps:\n'
+		printf '  drydock build                   (5 min first time)\n'
+		printf '  cd <project> && drydock init .  (per-project setup)\n'
+		printf '  cd <project> && drydock         (launch claude, sandboxed)\n'
+		printf '\n'
+	fi
+}
+
+# ── Prereq check (buffered — bash-3.2-safe scalar sets) ──────────────────────
+
+_OS="$(uname -s 2>/dev/null || printf 'Linux')"
+_po1=0 _pv1="" _po2=0 _pv2="" _po3=0 _pv3="" _po4=0 _pv4=""
+
+check_prereqs() {
+	if command -v docker >/dev/null 2>&1; then
+		_po1=1
+		_pv1="$(docker --version 2>/dev/null | head -1 || printf 'docker')"
+	fi
+	if docker compose version >/dev/null 2>&1; then
+		_po2=1
+		_pv2="$(docker compose version 2>/dev/null | head -1)"
+	fi
+	if command -v git >/dev/null 2>&1; then
+		_po3=1
+		_pv3="$(git --version 2>/dev/null | head -1 || printf 'git')"
+	fi
+	if command -v jq >/dev/null 2>&1; then
+		_po4=1
+		_pv4="$(jq --version 2>/dev/null | head -1 || printf 'jq')"
+	fi
+
+	local _miss=""
+	[ "$_po1" = "0" ] && _miss="$_miss docker"
+	[ "$_po2" = "0" ] && _miss="$_miss compose"
+	[ "$_po3" = "0" ] && _miss="$_miss git"
+	[ "$_po4" = "0" ] && _miss="$_miss jq"
+
+	if [ -z "$_miss" ]; then
+		# Happy path: single aggregate line (abbreviate versions)
+		local _v1 _v2 _v3 _v4
+		_v1="$(printf '%s' "$_pv1" | sed 's/Docker version //' | cut -d'.' -f1,2)"
+		_v2="$(printf '%s' "$_pv2" | sed 's/.*version v*//' | cut -d'.' -f1,2)"
+		_v3="$(printf '%s' "$_pv3" | sed 's/git version //' | cut -d'.' -f1,2)"
+		_v4="$(printf '%s' "$_pv4" | sed 's/jq-//' | cut -d'.' -f1,2)"
+		step_ok "Prereqs (docker ${_v1:-?}, compose ${_v2:-?}, git ${_v3:-?}, jq ${_v4:-?})"
+		return
+	fi
+
+	# Failure path: per-tool lines then abort
+	local _abbrev
+	if [ "$_po1" = "1" ]; then
+		_abbrev="$(printf '%s' "$_pv1" | sed 's/Docker version //' | cut -d'.' -f1,2)"
+		step_ok "docker ${_abbrev:-?}"
+	else step_miss "docker — not found"; fi
+	if [ "$_po2" = "1" ]; then
+		_abbrev="$(printf '%s' "$_pv2" | sed 's/.*version v*//' | cut -d'.' -f1,2)"
+		step_ok "compose v2 ${_abbrev:-?}"
+	else step_miss "compose v2 — not found"; fi
+	if [ "$_po3" = "1" ]; then
+		_abbrev="$(printf '%s' "$_pv3" | sed 's/git version //' | cut -d'.' -f1,2)"
+		step_ok "git ${_abbrev:-?}"
+	else step_miss "git — not found"; fi
+	if [ "$_po4" = "1" ]; then
+		_abbrev="$(printf '%s' "$_pv4" | sed 's/jq-//' | cut -d'.' -f1,2)"
+		step_ok "jq ${_abbrev:-?}"
+	else step_miss "jq — not found"; fi
+	printf '\n' >&2
+	if [ "$IS_TTY" = "1" ]; then
+		printf '%berror:%b missing prerequisite(s):%s\n' "$_RED" "$_RST" "$_miss" >&2
+	else
+		printf 'error: missing prerequisite(s):%s\n' "$_miss" >&2
+	fi
+	printf '\n  re-run install.sh after installing.\n' >&2
+	exit 1
+}
+
+check_docker_sock() {
+	if ! { [ -S /var/run/docker.sock ] || [ -S "$HOME/.docker/run/docker.sock" ]; }; then
+		step_warn "Docker daemon socket not found — start Docker before running drydock"
+	fi
+}
+
+# ── Mode detection (LOCAL_MODE via positive identity) ─────────────────────────
+
+_src="${BASH_SOURCE[0]:-}"
+if [ -n "$_src" ] && [ "$_src" != "bash" ]; then
+	while [ -L "$_src" ]; do
+		_dir="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
+		_src="$(readlink "$_src")"
+		case "$_src" in
+		/*) ;;
+		*) _src="$_dir/$_src" ;;
+		esac
+	done
+	SCRIPT_DIR="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
+else
+	SCRIPT_DIR=""
+fi
+
+LOCAL_MODE=0
+if [ -n "$SCRIPT_DIR" ] &&
+	[ -f "$SCRIPT_DIR/bin/drydock" ] &&
+	[ -f "$SCRIPT_DIR/lib/common.sh" ]; then
+	LOCAL_MODE=1
+	DRYDOCK_INSTALL_DIR="$SCRIPT_DIR"
+fi
+
+# ── Clone or skip ─────────────────────────────────────────────────────────────
+
+do_clone() {
+	if [ "$LOCAL_MODE" = "1" ]; then
+		info "Installing from local clone at $DRYDOCK_INSTALL_DIR"
+		step_ok "Local clone — skipping git clone"
+		return
+	fi
+	if [ -d "$DRYDOCK_INSTALL_DIR/.git" ]; then
+		step_ok "Found existing clone at $DRYDOCK_INSTALL_DIR — skipping clone"
+		return
+	fi
+	info "Cloning sideralith/drydock@${DRYDOCK_BRANCH} → $DRYDOCK_INSTALL_DIR"
+	mkdir -p "$(dirname "$DRYDOCK_INSTALL_DIR")"
+	git clone --depth=1 --branch "$DRYDOCK_BRANCH" "$DRYDOCK_REPO_URL" "$DRYDOCK_INSTALL_DIR"
+	step_ok "Cloned sideralith/drydock@${DRYDOCK_BRANCH} → $DRYDOCK_INSTALL_DIR"
+}
+
+# ── Symlink creation (7-row conflict matrix) ──────────────────────────────────
+
+do_symlink() {
+	local _target="$DRYDOCK_INSTALL_DIR/bin/drydock"
+	local _link="$DRYDOCK_BIN_DIR/drydock"
+	mkdir -p "$DRYDOCK_BIN_DIR"
+
+	if [ -L "$_link" ]; then
+		local _cur
+		_cur="$(readlink "$_link")"
+		if [ "$_cur" = "$_target" ]; then
+			step_ok "Symlink already current → $_link"
+			return
+		fi
+		if [ "$IS_TTY" = "1" ]; then
+			printf '%berror:%b symlink conflict at %s\n' "$_RED" "$_RST" "$_link" >&2
+		else
+			printf 'error: symlink conflict at %s\n' "$_link" >&2
+		fi
+		printf '  existing: %s → %s\n' "$_link" "$_cur" >&2
+		printf '  expected: %s → %s\n' "$_link" "$_target" >&2
+		printf '\n  Remove the existing symlink or set DRYDOCK_BIN_DIR to a different directory.\n' >&2
+		exit 1
+	elif [ -d "$_link" ]; then
+		step_fail "directory exists at $_link — manual cleanup needed"
+	elif [ -e "$_link" ]; then
+		step_fail "regular file exists at $_link — manual cleanup needed"
+	else
+		ln -s "$_target" "$_link"
+		step_ok "Symlinked → $_link"
+	fi
+}
+
+# ── PATH check + hint ─────────────────────────────────────────────────────────
+
+check_path() {
+	case ":${PATH}:" in
+	*":${DRYDOCK_BIN_DIR}:"*) ;;
+	*)
+		step_warn "$DRYDOCK_BIN_DIR is not in PATH"
+		hint "Add to ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+		hint "Add to ~/.zshrc:   export PATH=\"\$HOME/.local/bin:\$PATH\""
+		;;
+	esac
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+print_header
+check_prereqs
+check_docker_sock
+do_clone
+do_symlink
+step_ok "Ready"
+check_path
+print_next_steps

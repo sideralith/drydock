@@ -24,8 +24,8 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      - name: shellcheck bin/drydock and lib/*.sh
-        run: shellcheck bin/drydock lib/*.sh
+      - name: shellcheck bin/drydock, lib/*.sh, and install.sh
+        run: shellcheck bin/drydock lib/*.sh install.sh
 
       - name: Install shfmt
         run: |
@@ -34,8 +34,8 @@ jobs:
           chmod +x /usr/local/bin/shfmt
           shfmt --version
 
-      - name: shfmt format check (bin/drydock and lib/)
-        run: shfmt -d bin/drydock lib/
+      - name: shfmt format check (bin/drydock, lib/, and install.sh)
+        run: shfmt -d bin/drydock lib/ install.sh
 
   test:
     name: Test (bats)

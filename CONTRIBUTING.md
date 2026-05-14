@@ -12,6 +12,8 @@ Thanks for contributing to drydock. Use the table of contents below to jump to w
 
 ## Testing
 
+New to drydock? Run `./install.sh` from the repo root (or `curl -fsSL <URL>/install.sh | bash` for a fresh machine) to create the `drydock` symlink and verify your prereqs before contributing. See `install.sh` header for env-var overrides.
+
 ### Install the test runner
 
 ```bash
@@ -155,9 +157,9 @@ GitHub Issues is the only intake channel for v0.1.0 — there is no Discord, mai
 Run these three checks locally before pushing. CI runs the same gates and a red build blocks merge.
 
 ```bash
-shellcheck bin/drydock lib/*.sh   # must produce no errors
-shfmt -d bin/drydock lib/         # must produce no diff
-bats test/                        # all tests must pass
+shellcheck bin/drydock lib/*.sh install.sh   # must produce no errors
+shfmt -d bin/drydock lib/ install.sh         # must produce no diff
+bats test/                                   # all tests must pass
 ```
 
 Every script MUST start with `set -euo pipefail` — see [CLAUDE.md §3: Code / Tooling Conventions](CLAUDE.md#3-code--tooling-conventions) for the full Bash conventions.
