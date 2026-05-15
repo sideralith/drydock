@@ -23,8 +23,10 @@ Debian 12 slim container that:
   see [Using drydock without engram](#using-drydock-without-engram)) and its own
   `~/.claude/` + `~/.claude.json` siblings, so concurrent host sessions on
   other projects don't race.
-- **Bind-mounts the Docker socket (DooD)** — `docker exec`, `make shell-api`,
-  project Makefiles all work transparently against your existing stack.
+- **Bind-mounts the Docker socket (DooD)** — the containerized agent talks to
+  your host Docker daemon, so it can bring your project's stack up, `docker exec`
+  into a running service, and run its tests or migrations against the host
+  containers, exactly as from the host.
 
 > **Threat model**: defense against agent **accidents**, not against an
 > adversarial agent — Docker socket access ≈ root-equivalent on the host.
@@ -73,8 +75,10 @@ drydock sync             # refresh container's ~/.claude/ + ~/.claude.json from 
 drydock build            # rebuild the image
 ```
 
-Inside the container, everything works as on host: `make shell-api`,
-`make ci`, `curl http://localhost:PORT/...`, `git`, `gh`, etc.
+Inside the container, everything works as on host: `docker compose` against
+your stack, `docker exec` into a service, `curl http://localhost:PORT/...`,
+`git`, `gh`, etc. Whatever your project wraps those in (a Makefile, npm
+scripts, a justfile) runs the same way.
 
 | Command | What it does |
 |---|---|
