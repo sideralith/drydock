@@ -70,3 +70,16 @@ services:
       # ── Auth/identity ──────────────────────────────────────────────────────
       - "${HOME}/.gitconfig:${HOME}/.gitconfig:ro"
       - "${HOME}/.config/gh:${HOME}/.config/gh:rw"
+
+      # ── MCP-remote OAuth token cache ───────────────────────────────────────
+      # Shared host↔container so OAuth tokens issued for SSE/HTTP MCP servers
+      # proxied via `mcp-remote` (Cloudflare bindings, etc.) persist across
+      # sessions on either side. Without this, the container would need to
+      # re-OAuth on every drydock invocation and hangs waiting for a browser
+      # that does not exist inside the container, producing the
+      # "MCP server timed out after 30000ms" failure mode.
+      # RW so first-time auth from inside drydock writes back to the host
+      # cache too. Note: this is a credential mount; respects INV-1 because
+      # the path is under XDG_DATA-style scope (~/.mcp-auth, owned by the
+      # invoking user), not ~/.ssh or ~/.gnupg.
+      - "${HOME}/.mcp-auth:${HOME}/.mcp-auth:rw"

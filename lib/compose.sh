@@ -342,6 +342,14 @@ ensure_prereqs() {
 }
 
 ensure_runtime_dirs() {
+	# Defensive: bind mounts fail if the source dir is absent on the host.
+	# ~/.mcp-auth/ is the OAuth-token cache used by mcp-remote (Cloudflare-
+	# bindings MCP, etc.). On a fresh host the directory has never been
+	# created — make it empty here so the compose bind mount succeeds.
+	# Shared RW with the container so first-time auth from either side
+	# persists to the other.
+	mkdir -p "$HOME/.mcp-auth"
+
 	# Auto-setup if missing. Transparent for first-time users — cmd_setup is
 	# idempotent and prints a note when it runs.
 	# The engram dir guard is conditional: only included when engram is usable in
