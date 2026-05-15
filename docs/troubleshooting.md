@@ -180,14 +180,70 @@ Examples:
 The fallback `${DRYDOCK_SUBMOUNT_..._HOST_PATH:-./docs}` keeps the project's
 compose portable: collaborators on machines without the bind mount (or
 running `docker compose up` directly without going through drydock) use the
-literal `./docs` path. Inside drydock, the env var is exported and
-auto-substituted.
+literal `./docs` path.
+
+### How the env vars flow into compose substitution
+
+drydock writes the env vars in three places automatically every time the
+CLI runs against your project:
+
+1. **Host CLI shell environment** — `export_compose_env()` sets each
+   `DRYDOCK_SUBMOUNT_*_HOST_PATH` in the shell that invokes
+   `docker compose run drydock …`.
+
+2. **Container drydock environment (DooD passthrough)** — the generated
+   submount overlay (`/tmp/drydock-submounts-<pid>.yml`) declares
+   `environment:` entries (KEY-only) so docker compose inherits each value
+   from the CLI shell into the container drydock. The inner `docker compose`
+   (run by the agent inside drydock) then sees the env vars and substitutes
+   them.
+
+3. **`${PROJECT_DIR}/.env` marker block** — drydock writes a
+   marker-delimited block in your project's `.env` file containing one
+   line per detected sub-mount:
+
+   ```ini
+   APP_KEY=base64:...
+   DB_PASSWORD=hunter2
+
+   # >>> drydock managed (auto-generated, do not edit manually) <<<
+   DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/.../Vault
+   # <<< end drydock managed >>>
+   ```
+
+   This lets `docker compose` invocations from the **host shell directly**
+   (without drydock involvement) substitute the env vars too — docker
+   compose reads `.env` automatically when run in the project directory.
+
+The marker block is maintained idempotently: re-runs of drydock won't
+duplicate it; sub-mounts that disappear get their entries removed; the
+block is deleted entirely when there are no more sub-mounts. **Only the
+content between the markers is touched** — your other `.env` variables are
+preserved.
+
+**`.env` is gitignored**: ensure your project's `.gitignore` includes
+`.env` (this is the standard pattern). drydock's marker block contains
+host-specific paths and should never be committed.
+
+**Opt out**: set `DRYDOCK_SKIP_ENV_WRITE=1` in your environment to disable
+the `.env` auto-edit. The overlay environment passthrough (item 2 above)
+keeps working, so the bug fix still applies when running through drydock —
+you only lose the "host shell direct" path.
+
+**Migration note**: if you previously added `DRYDOCK_SUBMOUNT_*_HOST_PATH`
+lines to `.env` by hand (before this feature existed), drydock will NOT
+touch them — they live outside the marker block. After a `drydock` run,
+your `.env` will have BOTH the manual line and a duplicate inside the
+marker block. docker compose reads top-down, so the marker-block value
+(written last) wins. To clean up, delete the manual line; drydock's marker
+block stays.
 
 **Why this gap exists**: drydock's sub-mount propagation rewrites paths for
 its own container, but cannot intercept arbitrary `docker compose` calls the
 agent makes internally — those go directly to the host daemon via the
 bind-mounted socket. Exposing the translated path as an env var lets each
-project opt in explicitly in its compose file.
+project opt in explicitly in its compose file, and the three-layer
+auto-population (shell + container env + `.env`) covers every common flow.
 
 ## drydock can't find DRYDOCK_HOME / compose file
 

@@ -434,3 +434,138 @@ _setup_pr2_engram_and_linux() {
 	# Only ONE env var, set to the first (post-sort) docker-source.
 	[ "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" = "/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink" ]
 }
+
+# ── sync_submount_env_file (auto-maintain ${PROJECT_DIR}/.env) ───────────────
+
+@test "sync_submount_env_file: .env absent + no sub-mounts → no file created" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	local proj="$BATS_TEST_TMPDIR/proj-noenv-nosubs"
+	mkdir -p "$proj"
+	sync_submount_env_file "$proj"
+	[ ! -f "$proj/.env" ]
+}
+
+@test "sync_submount_env_file: .env absent + sub-mounts → file created with marker block" {
+	local proj="$BATS_TEST_TMPDIR/proj-noenv-subs"
+	mkdir -p "$proj"
+	# Synthesize a mountinfo fixture pointing the sub-mount at $proj/docs so
+	# the project_dir-prefix filter in detect_submounts matches.
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-noenv.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/Rai/Documents/Obsidian/Vaults/Serendipilink $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	[ -f "$proj/.env" ]
+	grep -qF '# >>> drydock managed' "$proj/.env"
+	grep -qF '# <<< end drydock managed' "$proj/.env"
+	grep -qF 'DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink' "$proj/.env"
+}
+
+@test "sync_submount_env_file: .env present + no marker + sub-mounts → marker block appended, user content intact" {
+	local proj="$BATS_TEST_TMPDIR/proj-existing-nomarker"
+	mkdir -p "$proj"
+	cat >"$proj/.env" <<'USER_ENV'
+APP_KEY=base64:secret
+DB_PASSWORD=hunter2
+USER_ENV
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-existing.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# User content preserved
+	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
+	grep -qF 'DB_PASSWORD=hunter2' "$proj/.env"
+	# Marker block present
+	grep -qF '# >>> drydock managed' "$proj/.env"
+	grep -qF 'DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/X/Vault' "$proj/.env"
+	grep -qF '# <<< end drydock managed' "$proj/.env"
+}
+
+@test "sync_submount_env_file: marker present + sub-mounts changed → block replaced, user content intact" {
+	local proj="$BATS_TEST_TMPDIR/proj-stale-marker"
+	mkdir -p "$proj"
+	cat >"$proj/.env" <<'OLD_ENV'
+APP_KEY=base64:secret
+
+# >>> drydock managed (auto-generated, do not edit manually) <<<
+DRYDOCK_SUBMOUNT_OLD_HOST_PATH=/mnt/c/Old
+# <<< end drydock managed >>>
+OLD_ENV
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-replace.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/NewVault $proj/newdir rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# User content preserved
+	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
+	# Old line gone
+	! grep -qF 'DRYDOCK_SUBMOUNT_OLD_HOST_PATH' "$proj/.env"
+	# New line present
+	grep -qF 'DRYDOCK_SUBMOUNT_NEWDIR_HOST_PATH=/mnt/c/Users/X/NewVault' "$proj/.env"
+}
+
+@test "sync_submount_env_file: marker present + no sub-mounts → marker block removed (cleanup)" {
+	local proj="$BATS_TEST_TMPDIR/proj-cleanup"
+	mkdir -p "$proj"
+	cat >"$proj/.env" <<'STALE_ENV'
+APP_KEY=base64:secret
+
+# >>> drydock managed (auto-generated, do not edit manually) <<<
+DRYDOCK_SUBMOUNT_OLD_HOST_PATH=/mnt/c/Old
+# <<< end drydock managed >>>
+STALE_ENV
+	# Empty mountinfo (no sub-mounts under proj).
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-empty.txt"
+	cat >"$tmp_mi" <<'MI'
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# User content preserved
+	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
+	# Marker block fully removed
+	! grep -qE '^# >>> drydock managed' "$proj/.env"
+	! grep -qF 'DRYDOCK_SUBMOUNT_OLD_HOST_PATH' "$proj/.env"
+}
+
+@test "sync_submount_env_file: idempotent — second call leaves same content" {
+	local proj="$BATS_TEST_TMPDIR/proj-idempotent"
+	mkdir -p "$proj"
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-idem.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/V $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	export MOUNTINFO_FILE="$tmp_mi"
+	sync_submount_env_file "$proj"
+	local first_content
+	first_content=$(cat "$proj/.env")
+	sync_submount_env_file "$proj"
+	local second_content
+	second_content=$(cat "$proj/.env")
+	[ "$first_content" = "$second_content" ]
+}
+
+@test "sync_submount_env_file: DRYDOCK_SKIP_ENV_WRITE=1 → no-op (file untouched)" {
+	local proj="$BATS_TEST_TMPDIR/proj-skip"
+	mkdir -p "$proj"
+	cat >"$proj/.env" <<'USER_ENV'
+APP_KEY=base64:secret
+USER_ENV
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-skip.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/V $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	export MOUNTINFO_FILE="$tmp_mi"
+	export DRYDOCK_SKIP_ENV_WRITE=1
+	sync_submount_env_file "$proj"
+	! grep -qF '# >>> drydock managed' "$proj/.env"
+	! grep -qF 'DRYDOCK_SUBMOUNT_' "$proj/.env"
+	# Original content preserved
+	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
+	unset DRYDOCK_SKIP_ENV_WRITE
+}

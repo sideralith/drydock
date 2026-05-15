@@ -31,15 +31,109 @@ engram_usable() {
 }
 
 # _submount_env_name — derive the env-var basename for a sub-mount.
-# Shared by export_compose_env (host-side, where the value is set) and
+# Shared by export_compose_env (host-side, where the value is set),
 # generate_submount_overlay (YAML environment: block, where the name is
-# declared so docker compose inherits from the CLI shell into the container).
-# Keep these two callsites in sync via this helper.
+# declared so docker compose inherits from the CLI shell into the container),
+# and sync_submount_env_file (marker-block content in PROJECT_DIR/.env).
+# Keep these three callsites in sync via this helper.
 _submount_env_name() {
 	local mount_pt="$1"
 	local project_dir="$2"
 	local rel="${mount_pt#"$project_dir"/}"
 	printf '%s' "$rel" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_' | sed 's/__*/_/g; s/^_//; s/_$//'
+}
+
+# _build_submount_env_block — emit one DRYDOCK_SUBMOUNT_<NAME>_HOST_PATH=<value>
+# line per detected sub-mount (newline-terminated). Output is empty when no
+# sub-mounts are detected. Consumed by sync_submount_env_file().
+_build_submount_env_block() {
+	local project_dir="$1"
+	local detected _src _mp _class _name
+	detected=$(detect_submounts "$project_dir") || true
+	[ -n "$detected" ] || return 0
+	while IFS='|' read -r _src _mp _class; do
+		[ -n "$_src" ] || continue
+		[ -n "$_mp" ] || continue
+		_name=$(_submount_env_name "$_mp" "$project_dir")
+		[ -n "$_name" ] || continue
+		printf 'DRYDOCK_SUBMOUNT_%s_HOST_PATH=%s\n' "$_name" "$_src"
+	done <<<"$detected"
+}
+
+# sync_submount_env_file — maintain a marker-delimited block in
+# ${PROJECT_DIR}/.env containing the current DRYDOCK_SUBMOUNT_*_HOST_PATH
+# vars. Enables `docker compose` invocations from the HOST SHELL (without
+# drydock involvement) to substitute the env vars into the project's
+# docker-compose.yml — docker compose reads .env automatically.
+#
+# Behavior matrix:
+#   .env absent + no sub-mounts        → no-op
+#   .env absent + sub-mounts           → create .env with marker block only
+#   .env present + no marker + no subs → no-op
+#   .env present + no marker + subs    → append marker block at end
+#   .env present + marker + subs match → no-op (idempotent)
+#   .env present + marker + subs diff  → replace marker block content
+#   .env present + marker + no subs    → remove marker block (cleanup)
+#
+# Atomic write via mktemp + rename. Opt-out: DRYDOCK_SKIP_ENV_WRITE=1.
+# Marker text intentionally distinctive so external tools (lint, formatters)
+# can identify drydock-managed lines without confusion.
+sync_submount_env_file() {
+	local project_dir="$1"
+	[ "${DRYDOCK_SKIP_ENV_WRITE:-0}" = "1" ] && return 0
+	[ -d "$project_dir" ] || return 0
+
+	local env_file="$project_dir/.env"
+	local marker_start="# >>> drydock managed (auto-generated, do not edit manually) <<<"
+	local marker_end="# <<< end drydock managed >>>"
+
+	local block
+	block=$(_build_submount_env_block "$project_dir")
+
+	local has_file=0 has_marker=0
+	[ -f "$env_file" ] && has_file=1
+	[ "$has_file" = "1" ] && grep -qE '^# >>> drydock managed' "$env_file" 2>/dev/null && has_marker=1
+
+	# Fast paths.
+	[ "$has_file" = "0" ] && [ -z "$block" ] && return 0
+	[ "$has_file" = "1" ] && [ "$has_marker" = "0" ] && [ -z "$block" ] && return 0
+
+	# Idempotency check: if marker exists and content already matches, skip write.
+	if [ "$has_marker" = "1" ]; then
+		local existing_block
+		existing_block=$(awk '
+			/^# >>> drydock managed/ { in_block = 1; next }
+			/^# <<< end drydock managed/ { in_block = 0; next }
+			in_block { print }
+		' "$env_file")
+		[ "$existing_block" = "$block" ] && return 0
+	fi
+
+	# Extract user content (everything outside marker block).
+	local user_content=""
+	if [ "$has_file" = "1" ]; then
+		user_content=$(awk '
+			/^# >>> drydock managed/ { in_block = 1; next }
+			/^# <<< end drydock managed/ { in_block = 0; next }
+			!in_block { print }
+		' "$env_file")
+	fi
+
+	# Atomic write: tmp + rename.
+	local tmp
+	tmp=$(mktemp "${env_file}.drydock.XXXXXX") || return 1
+	{
+		if [ -n "$user_content" ]; then
+			printf '%s\n' "$user_content"
+		fi
+		if [ -n "$block" ]; then
+			[ -n "$user_content" ] && printf '\n'
+			printf '%s\n' "$marker_start"
+			printf '%s' "$block"
+			printf '%s\n' "$marker_end"
+		fi
+	} >"$tmp"
+	mv -f "$tmp" "$env_file"
 }
 
 # generate_submount_overlay — write a compose overlay listing each sub-mount
@@ -231,6 +325,10 @@ export_compose_env() {
 			export "DRYDOCK_SUBMOUNT_${_name}_HOST_PATH=$_src"
 		done <<<"$_detected"
 	fi
+
+	# Auto-maintain ${PROJECT_DIR}/.env so `docker compose` invocations from
+	# the HOST SHELL (without drydock involvement) substitute the vars too.
+	sync_submount_env_file "$project_dir"
 }
 
 image_exists() {
