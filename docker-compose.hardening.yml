@@ -7,7 +7,8 @@
 #
 #   1. cap_drop: ALL + minimum cap_add — bounds privileged syscall accidents
 #      (e.g. a confused agent running `mount`, `ptrace`, or raw-socket bind).
-#   2. security_opt: no-new-privileges:true — defeats sudo/SUID escalation,
+#   2. security_opt: no-new-privileges:true — defeats SUID escalation
+#      (e.g. setuid-root `su`, `mount`, `passwd` present in the base image),
 #      ensuring the cap drop cannot be bypassed by an existing binary.
 #   3. tmpfs /tmp size cap — bounds runaway-loop disk fill on the host's
 #      tmpfs-backed memory; default 1g, tunable via DRYDOCK_TMPFS_SIZE.
@@ -32,10 +33,12 @@ services:
       # Companion to CHOWN — operations on files the process doesn't own
       # (FOWNER lets a privileged process bypass the "must own to chmod" check).
       - FOWNER
-      # Bounding-set retention for any user-owned tool that opens uid-mismatched
-      # files or needs to drop/elevate gid context. Real-world example: rsync
-      # cross-uid metadata operations under DooD-launched ephemeral containers.
+      # Bounding-set retention for tooling that opens uid-mismatched files
+      # or temporarily drops uid (real-world: rsync cross-uid metadata
+      # operations under DooD-launched ephemeral containers).
       - SETUID
+      # Paired with SETUID for gid-context operations (same rationale —
+      # rsync gid preservation, file-creation under a different primary gid).
       - SETGID
     security_opt:
       - "no-new-privileges:true"

@@ -24,14 +24,18 @@ accident-class privilege and resource use. These defaults are anchored as **INV-
 
 | Defense | Effect | Opt-out |
 |---|---|---|
-| `cap_drop: [ALL]` + minimum `cap_add` | Privileged syscalls (`mount -o bind`, `ptrace`, raw-socket `bind`) return EPERM rather than completing silently | `DRYDOCK_NO_HARDENING=1` (nuclear) |
-| `security_opt: no-new-privileges:true` | A setuid binary or `sudo` cannot re-acquire dropped caps — the cap drop cannot be bypassed by an existing binary | `DRYDOCK_NO_HARDENING=1` (nuclear) |
+| `cap_drop: [ALL]` + minimum `cap_add` | Privileged syscalls return EPERM rather than completing silently (e.g. `mount -o bind` requires `SYS_ADMIN`; raw-socket `bind` requires `NET_RAW`; cross-uid `ptrace` requires `SYS_PTRACE`) | `DRYDOCK_NO_HARDENING=1` (nuclear) |
+| `security_opt: no-new-privileges:true` | A setuid-root binary (`su`, `mount`, `passwd` — present in the base image) cannot re-acquire dropped caps; the cap drop cannot be bypassed via SUID escalation | `DRYDOCK_NO_HARDENING=1` (nuclear) |
 | `tmpfs /tmp` with `size=1g` (default) | Runaway loops writing to `/tmp` halt at 1G instead of filling the host's memory-backed tmpfs | `DRYDOCK_TMPFS_SIZE=<size>` (granular) or `DRYDOCK_NO_HARDENING=1` (nuclear) |
 
 The `cap_add` set — `DAC_OVERRIDE`, `CHOWN`, `FOWNER`, `SETUID`, `SETGID` — is the documented
-minimum for rsync, gpg-agent, and the entrypoint user-switch. Each entry has an inline comment
-in `docker-compose.hardening.yml` documenting which workflow requires it. Adding a cap MUST
-come with a new inline comment; removing one requires reopening INV-8.
+minimum bounding set. With the container running as a non-root user and no file-cap'd binaries
+in the image, these caps do NOT sit in the running process's effective set — they remain in the
+bounding set so file-mode / ownership / uid-context operations function when invoked by tooling
+that genuinely needs them (rsync `-a` preserving modes and uids, npm/pnpm post-install scripts
+chmod'ing under `node_modules`, future file-cap'd binaries). Each entry has an inline rationale
+in `docker-compose.hardening.yml`. Adding a cap MUST come with a new inline comment; removing
+one requires reopening INV-8.
 
 To opt out of all hardening for a single invocation:
 

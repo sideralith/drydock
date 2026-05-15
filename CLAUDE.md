@@ -148,9 +148,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   without `cap_drop: ALL` (`SYS_ADMIN` dropped makes it EPERM instead). A misguided
   invocation of any setuid-root binary present in the base image (`su`, `mount`, `passwd`)
   bypasses the cap drop unless `no-new-privileges:true` is active — a setuid binary can
-  re-acquire dropped caps without this guard. A runaway test or build loop writing to `/tmp` fills the host's memory-backed tmpfs and
-  stalls the developer's WSL2 VM or macOS host; the size cap bounds that accident class at 1g by
-  default. Each defense is sub-10 lines of YAML and the marginal cost to contributors is zero.
+  re-acquire dropped caps without this guard. A runaway test or build loop writing to `/tmp`
+  fills the host's memory-backed tmpfs and stalls the developer's WSL2 VM or macOS host;
+  the size cap bounds that accident class at 1g by default. Each defense is sub-10 lines of
+  YAML and the marginal cost to contributors is zero.
 - **Consequence of violating**: An accident-class agent failure fills the host's memory via `/tmp`,
   escalates via a setuid binary that should have been a no-op, or completes a privileged syscall
   that should have returned EPERM. The failure mode is silent success of the wrong-by-default
