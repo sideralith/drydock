@@ -30,6 +30,18 @@ engram_usable() {
 	command -v engram >/dev/null 2>&1 && host_is_linux
 }
 
+# _submount_env_name — derive the env-var basename for a sub-mount.
+# Shared by export_compose_env (host-side, where the value is set) and
+# generate_submount_overlay (YAML environment: block, where the name is
+# declared so docker compose inherits from the CLI shell into the container).
+# Keep these two callsites in sync via this helper.
+_submount_env_name() {
+	local mount_pt="$1"
+	local project_dir="$2"
+	local rel="${mount_pt#"$project_dir"/}"
+	printf '%s' "$rel" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_' | sed 's/__*/_/g; s/^_//; s/_$//'
+}
+
 # generate_submount_overlay — write a compose overlay listing each sub-mount
 # of $1 to $SUBMOUNT_OVERLAY. If detect_submounts returns empty, do NOT create
 # the file (so compose_files can use file existence as the gate).
@@ -38,6 +50,14 @@ engram_usable() {
 #   - linux-native with empty docker-source (FS row missing) → skip + warn
 #   - exotic:*                                                → emit + warn
 #   - drvfs / linux-native with non-empty source              → emit silently
+#
+# The overlay declares BOTH a volumes: block (translated host paths into the
+# drydock container itself) AND an environment: block listing the
+# DRYDOCK_SUBMOUNT_<NAME>_HOST_PATH variables in KEY-only form so docker compose
+# inherits each value from the CLI shell (where export_compose_env set them)
+# into the container's environment. The inner container needs these env vars
+# visible so docker-compose-launched-via-DooD can substitute them in the
+# project's docker-compose.yml.
 #
 # If after filtering there are zero emittable rows, the overlay file is NOT
 # written.
@@ -49,7 +69,8 @@ generate_submount_overlay() {
 	[ -n "$detected" ] || return 0
 
 	local body=""
-	local docker_src mount_pt class
+	local env_body=""
+	local docker_src mount_pt class _name
 	while IFS='|' read -r docker_src mount_pt class; do
 		[ -n "$mount_pt" ] || continue
 		if [ -z "$docker_src" ]; then
@@ -63,6 +84,12 @@ generate_submount_overlay() {
 		esac
 		body+=$(printf '      - "%s:%s:rw"\n' "$docker_src" "$mount_pt")
 		body+=$'\n'
+
+		_name=$(_submount_env_name "$mount_pt" "$project_dir")
+		if [ -n "$_name" ]; then
+			env_body+=$(printf '      - DRYDOCK_SUBMOUNT_%s_HOST_PATH\n' "$_name")
+			env_body+=$'\n'
+		fi
 	done <<<"$detected"
 
 	[ -n "$body" ] || return 0
@@ -72,6 +99,10 @@ generate_submount_overlay() {
 		printf '  drydock:\n'
 		printf '    volumes:\n'
 		printf '%s' "$body"
+		if [ -n "$env_body" ]; then
+			printf '    environment:\n'
+			printf '%s' "$env_body"
+		fi
 	} >"$SUBMOUNT_OVERLAY"
 }
 
@@ -180,17 +211,22 @@ export_compose_env() {
 	#
 	# The :- fallback keeps the compose portable for collaborators without the
 	# bind mount. Naming: relative-to-project_dir, uppercased, non-alphanumeric
-	# → '_'. Nested sub-mounts produce distinct names (docs/sub → DOCS_SUB).
-	# Only non-empty docker-sources are exported (linux-native fallback misses
-	# are skipped by detect_submounts already; exotic fstypes pass through).
-	local _detected _src _mp _class _rel _name
+	# → '_' (see _submount_env_name helper). Nested sub-mounts produce distinct
+	# names (docs/sub → DOCS_SUB). Only non-empty docker-sources are exported
+	# (linux-native fallback misses are skipped by detect_submounts already;
+	# exotic fstypes pass through).
+	#
+	# generate_submount_overlay() also emits the same names in the overlay's
+	# environment: block (KEY-only) so docker compose inherits each value from
+	# the CLI shell into the container drydock — necessary because the inner
+	# DooD docker compose runs from a shell inside the container.
+	local _detected _src _mp _class _name
 	_detected=$(detect_submounts "$project_dir") || true
 	if [ -n "$_detected" ]; then
 		while IFS='|' read -r _src _mp _class; do
 			[ -n "$_src" ] || continue
 			[ -n "$_mp" ] || continue
-			_rel="${_mp#"$project_dir"/}"
-			_name=$(printf '%s' "$_rel" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_' | sed 's/__*/_/g; s/^_//; s/_$//')
+			_name=$(_submount_env_name "$_mp" "$project_dir")
 			[ -n "$_name" ] || continue
 			export "DRYDOCK_SUBMOUNT_${_name}_HOST_PATH=$_src"
 		done <<<"$_detected"

@@ -72,6 +72,20 @@ MOUNTS
 	grep -q '^  drydock:' "$SUBMOUNT_OVERLAY"
 	grep -q '^    volumes:' "$SUBMOUNT_OVERLAY"
 	grep -q '/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink:/home/rai/git/serendipilink/docs:rw' "$SUBMOUNT_OVERLAY"
+	# The overlay must also declare an environment: block with KEY-only entries
+	# so docker compose inherits the DRYDOCK_SUBMOUNT_*_HOST_PATH vars from the
+	# CLI shell into the container drydock (DooD passthrough).
+	grep -q '^    environment:' "$SUBMOUNT_OVERLAY"
+	grep -q '^      - DRYDOCK_SUBMOUNT_DOCS_HOST_PATH$' "$SUBMOUNT_OVERLAY"
+}
+
+@test "generate_submount_overlay: nested sub-mounts → distinct environment entries" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-nested.txt"
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount-nested.yml"
+	generate_submount_overlay "/home/rai/git/proj"
+	[ -f "$SUBMOUNT_OVERLAY" ]
+	grep -q '^      - DRYDOCK_SUBMOUNT_DOCS_HOST_PATH$' "$SUBMOUNT_OVERLAY"
+	grep -q '^      - DRYDOCK_SUBMOUNT_DOCS_SUB_HOST_PATH$' "$SUBMOUNT_OVERLAY"
 }
 
 @test "generate_submount_overlay: does NOT write file when no sub-mounts" {
