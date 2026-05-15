@@ -16,10 +16,10 @@ setup and usage.
 
 ## 2. Architectural Invariants
 
-Seven invariants, each following the Mercadona pattern — Rule, Why (with a specific falsifiable
+Eight invariants, each following the Mercadona pattern — Rule, Why (with a specific falsifiable
 failure mode), Consequence — ordered outside-in: credentials → state isolation → hooks defense →
-optional features → DooD foundation → meta-rule. Stable identifiers (`INV-N`) enable cross-artifact
-citation; section identifiers (`§N`) likewise.
+optional features → DooD foundation → meta-rule → runtime hardening defaults. Stable identifiers
+(`INV-N`) enable cross-artifact citation; section identifiers (`§N`) likewise.
 
 ### INV-1: Credential Isolation
 
