@@ -14,13 +14,19 @@ setup() {
 	INSTALL_SH="$BATS_TEST_TMPDIR/install.sh"
 	cp "$(pwd)/install.sh" "$INSTALL_SH"
 
-	# Create a minimal local bare repo as DRYDOCK_REPO_URL seam
+	# Create a minimal local bare repo as DRYDOCK_REPO_URL seam.
+	# Force `main` as the initial branch independent of host git config:
+	# CI runners may default to `master` (legacy), but install.sh clones
+	# `--branch main` so the fixture must have `main` regardless of host.
 	BARE_REPO="$BATS_TEST_TMPDIR/bare.git"
-	git init --bare "$BARE_REPO" >/dev/null 2>&1
+	git -c init.defaultBranch=main init --bare "$BARE_REPO" >/dev/null 2>&1
 
 	# Seed it with a minimal commit so clone succeeds
 	local _work="$BATS_TEST_TMPDIR/seed-work"
 	git clone "$BARE_REPO" "$_work" >/dev/null 2>&1
+	# Belt-and-suspenders: ensure the work clone is on `main`, regardless
+	# of host's init.defaultBranch (cloning an empty bare may not propagate).
+	git -C "$_work" symbolic-ref HEAD refs/heads/main
 	mkdir -p "$_work/bin" "$_work/lib"
 	printf '#!/usr/bin/env bash\necho drydock\n' >"$_work/bin/drydock"
 	chmod +x "$_work/bin/drydock"
