@@ -278,7 +278,17 @@ cmd_run() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock claude "${passthrough[@]}"
+	# Descriptive container name (vs auto-generated hash). Intentionally does
+	# NOT include the agent name (e.g. "claude") so the same scheme works when
+	# v0.2.0 adds multi-agent support (Codex, OpenCode, pi.dev, etc.); the
+	# agent that's actually running is implicit in the cmd_run code path. Pre-
+	# clean any stopped container with the same name to avoid `run --rm --name`
+	# conflict; running containers are NOT removed (silently skipped) so a
+	# parallel session in another terminal gets a clear name-collision error
+	# instead of being silently killed.
+	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}"
+	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
+	exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
 }
 
 cmd_shell() {
@@ -305,10 +315,17 @@ cmd_shell() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
+	# Descriptive container name (vs auto-generated hash). Distinct from
+	# cmd_run's name via the "-shell" suffix so a shell can coexist with a
+	# running main session for the same project. Pre-clean any stopped
+	# container with the same name; running ones are left so concurrent
+	# shells get a clear name-collision error.
+	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}-shell"
+	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
 	if [ "${#passthrough[@]}" -gt 0 ]; then
-		exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock "${passthrough[@]}"
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock "${passthrough[@]}"
 	else
-		exec "$DOCKER" compose "${compose_args[@]}" run --rm drydock bash
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock bash
 	fi
 }
 

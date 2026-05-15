@@ -63,19 +63,22 @@ _run_main() {
 @test "cmd_run: no extra args -> runs claude with no passthrough" {
   _run_cmd_run "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"run --rm drydock claude" ]]
+  [[ "$output" == *"run --rm --name drydock-"* ]]
+  [[ "$output" == *" drydock claude" ]]
 }
 
 @test "cmd_run: DIR -- --resume foo -> passes args to claude" {
   _run_cmd_run "$BATS_TEST_TMPDIR" -- --resume foo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"run --rm drydock claude --resume foo" ]]
+  [[ "$output" == *"run --rm --name drydock-"* ]]
+  [[ "$output" == *" drydock claude --resume foo" ]]
 }
 
 @test "cmd_run: -- --resume foo (no DIR) -> passes args to claude" {
   _run_cmd_run -- --resume foo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"run --rm drydock claude --resume foo" ]]
+  [[ "$output" == *"run --rm --name drydock-"* ]]
+  [[ "$output" == *" drydock claude --resume foo" ]]
 }
 
 # ── cmd_shell tests ────────────────────────────────────────────────────────────
@@ -83,13 +86,17 @@ _run_main() {
 @test "cmd_shell: no passthrough -> runs bash" {
   _run_cmd_shell "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"run --rm drydock bash" ]]
+  [[ "$output" == *"run --rm --name drydock-"* ]]
+  [[ "$output" == *"-shell "* ]]
+  [[ "$output" == *" drydock bash" ]]
 }
 
 @test "cmd_shell: DIR -- ls -la -> runs ls -la, not bash" {
   _run_cmd_shell "$BATS_TEST_TMPDIR" -- ls -la
   [ "$status" -eq 0 ]
-  [[ "$output" == *"run --rm drydock ls -la" ]]
+  [[ "$output" == *"run --rm --name drydock-"* ]]
+  [[ "$output" == *"-shell "* ]]
+  [[ "$output" == *" drydock ls -la" ]]
   [[ "$output" != *"drydock bash"* ]]
 }
 
@@ -98,11 +105,13 @@ _run_main() {
 @test "main -- --resume foo -> routes to cmd_run with passthrough" {
   _run_main -- --resume foo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"run --rm drydock claude --resume foo" ]]
+  [[ "$output" == *"run --rm --name drydock-"* ]]
+  [[ "$output" == *" drydock claude --resume foo" ]]
 }
 
 @test "main run -- --resume foo -> routes to cmd_run with passthrough" {
   _run_main run -- --resume foo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"run --rm drydock claude --resume foo" ]]
+  [[ "$output" == *"run --rm --name drydock-"* ]]
+  [[ "$output" == *" drydock claude --resume foo" ]]
 }
