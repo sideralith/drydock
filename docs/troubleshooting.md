@@ -139,6 +139,56 @@ cd ~/git/yourproject && drydock doctor
 - Check that the mount appears in `/proc/self/mountinfo` (not just `/proc/mounts`
   which can be stale). drydock reads `mountinfo` exclusively.
 
+## Sub-mount visible in drydock but NOT in containers launched via DooD
+
+The sub-mount propagation overlay only applies to the **drydock container
+itself**. When you (or the agent inside drydock) runs `docker compose up`
+against a project's own stack (Docker-out-of-Docker), those child containers
+talk to the host's Docker daemon — which does NOT see drvfs sub-mounts
+created post-boot of its WSL2 shared filesystem. The path `./docs` in your
+project's compose resolves to the same drvfs path the host daemon can't read,
+so the child container sees the mount as empty.
+
+**Symptom**: `drydock shell` lists `docs/` correctly, but
+`docker exec your-project-api ls /var/www/docs` is empty.
+
+**Fix**: drydock exports a translated host path as an env var for each
+detected sub-mount: `DRYDOCK_SUBMOUNT_<UPPER_RELPATH>_HOST_PATH`. Reference
+it in your project's `docker-compose.yml` with a portable fallback:
+
+```yaml
+# project-side docker-compose.yml
+services:
+  api:
+    volumes:
+      - ./backend:/var/www/html
+      # Use the drydock-translated path inside drydock; fall back to ./docs
+      # for collaborators without the bind mount (or running outside drydock).
+      - ${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-./docs}:/var/www/docs
+```
+
+The env var name is derived from the path of the sub-mount relative to
+`$PROJECT_DIR`: uppercased, with non-alphanumeric characters replaced by `_`.
+Examples:
+
+| Sub-mount path inside project | Env var name |
+|---|---|
+| `docs/` | `DRYDOCK_SUBMOUNT_DOCS_HOST_PATH` |
+| `vault/notes/` | `DRYDOCK_SUBMOUNT_VAULT_NOTES_HOST_PATH` |
+| `data/shared/` | `DRYDOCK_SUBMOUNT_DATA_SHARED_HOST_PATH` |
+
+The fallback `${DRYDOCK_SUBMOUNT_..._HOST_PATH:-./docs}` keeps the project's
+compose portable: collaborators on machines without the bind mount (or
+running `docker compose up` directly without going through drydock) use the
+literal `./docs` path. Inside drydock, the env var is exported and
+auto-substituted.
+
+**Why this gap exists**: drydock's sub-mount propagation rewrites paths for
+its own container, but cannot intercept arbitrary `docker compose` calls the
+agent makes internally — those go directly to the host daemon via the
+bind-mounted socket. Exposing the translated path as an env var lets each
+project opt in explicitly in its compose file.
+
 ## drydock can't find DRYDOCK_HOME / compose file
 
 The CLI resolves `DRYDOCK_HOME` by following the symlink at

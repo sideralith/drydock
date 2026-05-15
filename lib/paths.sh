@@ -95,7 +95,12 @@ host_fs_locks_unreliable() {
 #                   exotic; see classify() below.)
 #   exotic:<fst>  — nfs/cifs/fuse/tmpfs/overlay/etc.; source passed through;
 #                   generate_submount_overlay() emits a warn per row.
-# Output is sorted by mount-point (col 2), parent before child.
+# Output is sorted by mount-point (col 2) parent-before-child, then
+# deduplicated by mount-point. WSL2 occasionally stacks duplicate 9p
+# mounts on the same target (post-reboot mount-replay or repeated
+# `mount --bind` without unmount). Emitting both would generate
+# duplicate volume entries in the compose overlay, which Docker
+# Compose rejects. First occurrence (post-sort) wins.
 detect_submounts() {
 	local project_dir="$1"
 	[ -r "$MOUNTINFO_FILE" ] || return 0
@@ -177,5 +182,5 @@ detect_submounts() {
 			}
 			return src   # exotic — pass-through
 		}
-	' "$MOUNTINFO_FILE" | sort -t'|' -k2,2
+	' "$MOUNTINFO_FILE" | sort -t'|' -k2,2 | awk -F'|' '!seen[$2]++'
 }

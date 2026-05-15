@@ -165,6 +165,36 @@ export_compose_env() {
 			export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
 		fi
 	fi
+
+	# ── sub-mount host-path env vars (DooD passthrough) ───────────────────────
+	# For every detected sub-mount under project_dir, export a translated host
+	# path as DRYDOCK_SUBMOUNT_<UPPER_RELPATH>_HOST_PATH. The container drydock
+	# already gets the sub-mount via the generated overlay (submount-propagation
+	# SDD), but containers launched inside drydock via Docker-out-of-Docker
+	# (DooD) talk to the HOST daemon — which cannot see drvfs sub-mounts created
+	# post-boot of its WSL2 share. Exposing the translated path as an env var
+	# lets the project's docker-compose.yml reference it:
+	#
+	#   volumes:
+	#     - ${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-./docs}:/var/www/docs
+	#
+	# The :- fallback keeps the compose portable for collaborators without the
+	# bind mount. Naming: relative-to-project_dir, uppercased, non-alphanumeric
+	# → '_'. Nested sub-mounts produce distinct names (docs/sub → DOCS_SUB).
+	# Only non-empty docker-sources are exported (linux-native fallback misses
+	# are skipped by detect_submounts already; exotic fstypes pass through).
+	local _detected _src _mp _class _rel _name
+	_detected=$(detect_submounts "$project_dir") || true
+	if [ -n "$_detected" ]; then
+		while IFS='|' read -r _src _mp _class; do
+			[ -n "$_src" ] || continue
+			[ -n "$_mp" ] || continue
+			_rel="${_mp#"$project_dir"/}"
+			_name=$(printf '%s' "$_rel" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_' | sed 's/__*/_/g; s/^_//; s/_$//')
+			[ -n "$_name" ] || continue
+			export "DRYDOCK_SUBMOUNT_${_name}_HOST_PATH=$_src"
+		done <<<"$_detected"
+	fi
 }
 
 image_exists() {

@@ -134,3 +134,16 @@ setup() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"|/home/rai/git/proj/tmpfs-bind|exotic:tmpfs"* ]]
 }
+
+@test "duplicate 9p mounts on same target — deduplicated to one row" {
+	# WSL2 occasionally stacks a second 9p mount on the same target (post-reboot
+	# mount replay or repeated `mount --bind` without unmount). detect_submounts
+	# must emit only ONE row for that target — otherwise generate_submount_overlay
+	# would write duplicate volume entries and Docker Compose rejects the overlay.
+	export MOUNTINFO_FILE="$FIX/mountinfo-duplicate-drvfs.txt"
+	run detect_submounts "/home/rai/git/serendipilink"
+	[ "$status" -eq 0 ]
+	# Exactly ONE line containing the mount point, not two.
+	count=$(printf '%s\n' "$output" | grep -c '|/home/rai/git/serendipilink/docs|' || true)
+	[ "$count" -eq 1 ]
+}

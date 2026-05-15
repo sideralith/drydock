@@ -1,0 +1,3 @@
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/Rai/Documents/Obsidian/Vaults/Serendipilink /home/rai/git/serendipilink/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/,cache=5,access=client,msize=65536,trans=fd,rfd=5,wfd=5
+687 80 0:68 /Users/Rai/Documents/Obsidian/Vaults/Serendipilink /home/rai/git/serendipilink/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/,cache=5,access=client,msize=65536,trans=fd,rfd=5,wfd=5

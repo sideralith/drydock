@@ -380,3 +380,43 @@ _setup_pr2_engram_and_linux() {
 	log_contents="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log_contents" == *"image inspect"* ]]
 }
+
+# ── DRYDOCK_SUBMOUNT_*_HOST_PATH passthrough (DooD gap) ──────────────────────
+
+@test "export_compose_env: drvfs sub-mount → DRYDOCK_SUBMOUNT_<NAME>_HOST_PATH exported" {
+	# Use the drvfs-c fixture (mount_point = /home/rai/git/serendipilink/docs).
+	# project_dir basename is "serendipilink", sub-mount relpath is "docs" → DOCS.
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
+	# Use the fixture's project root path so the prefix filter matches.
+	mkdir -p "$BATS_TEST_TMPDIR/serendipilink"
+	export_compose_env "/home/rai/git/serendipilink"
+	[ "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" = "/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink" ]
+}
+
+@test "export_compose_env: nested sub-mount → distinct env var with relpath name" {
+	# Use the nested fixture (mount points docs/ and docs/sub).
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-nested.txt"
+	mkdir -p "$BATS_TEST_TMPDIR/proj"
+	export_compose_env "/home/rai/git/proj"
+	# Both env vars must be set. Nested 'docs/sub' relative to project_dir
+	# becomes DOCS_SUB after upper+non-alnum→_.
+	[ -n "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" ]
+	[ -n "${DRYDOCK_SUBMOUNT_DOCS_SUB_HOST_PATH:-}" ]
+	[ "$DRYDOCK_SUBMOUNT_DOCS_HOST_PATH" != "$DRYDOCK_SUBMOUNT_DOCS_SUB_HOST_PATH" ]
+}
+
+@test "export_compose_env: no sub-mounts → no DRYDOCK_SUBMOUNT_* vars" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	# Clean any leftover from prior tests in same shell (defensive).
+	unset DRYDOCK_SUBMOUNT_DOCS_HOST_PATH DRYDOCK_SUBMOUNT_DOCS_SUB_HOST_PATH
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" ]
+	[ -z "${DRYDOCK_SUBMOUNT_DOCS_SUB_HOST_PATH:-}" ]
+}
+
+@test "export_compose_env: duplicate drvfs mounts → single env var (dedup applied)" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-duplicate-drvfs.txt"
+	export_compose_env "/home/rai/git/serendipilink"
+	# Only ONE env var, set to the first (post-sort) docker-source.
+	[ "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" = "/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink" ]
+}
