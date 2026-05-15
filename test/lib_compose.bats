@@ -161,6 +161,42 @@ MOUNTS
 	[[ "$output" == *"docker-compose.gpg.yml"* ]]
 }
 
+# ── container hardening overlay (default on, literal-"1" opt-out) ────────────
+# DRYDOCK_NO_HARDENING=1 (literal) disables; other values do NOT disable.
+# Per D-Apply-1: guard is [ "${DRYDOCK_NO_HARDENING:-0}" = "1" ] — only "1" suppresses.
+
+@test "compose_files: default — hardening overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	unset DRYDOCK_NO_HARDENING
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.hardening.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_NO_HARDENING=1 — hardening overlay absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export DRYDOCK_NO_HARDENING=1
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"docker-compose.hardening.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_NO_HARDENING=true — hardening overlay PRESENT (non-\"1\" value does not suppress)" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export DRYDOCK_NO_HARDENING="true"
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.hardening.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_NO_HARDENING=0 — hardening overlay PRESENT (\"0\" is not the disable sentinel)" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export DRYDOCK_NO_HARDENING=0
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.hardening.yml"* ]]
+}
+
 @test "export_compose_env: deploy key present — sets DRYDOCK_SSH_DEPLOY_KEY" {
 	HOME="$BATS_TEST_TMPDIR/fakehome"
 	mkdir -p "$HOME/.config/drydock/keys"

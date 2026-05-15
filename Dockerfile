@@ -47,7 +47,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         less \
         procps \
         vim-tiny \
-        sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Docker CLI + Compose plugin ──────────────────────────────────────────────

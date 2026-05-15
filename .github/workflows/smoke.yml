@@ -39,3 +39,34 @@ jobs:
         # guards against any set -euo pipefail interaction with missing paths
         # that might surface as a non-zero exit on the runner.
         run: bin/drydock doctor || true
+
+      - name: Validate hardening overlay YAML (compose config)
+        # Renders the full -f chain (base + hardening overlay) and exits 0
+        # only if the merged YAML is syntactically valid. Catches YAML typos
+        # in docker-compose.hardening.yml and env-var substitution regressions
+        # in DRYDOCK_TMPFS_SIZE.
+        run: |
+          USER_NAME="$(id -un)" \
+          USER_UID="$(id -u)" \
+          USER_GID="$(id -g)" \
+          HOST_DOCKER_GID=1001 \
+          PROJECT_DIR="$GITHUB_WORKSPACE" \
+          PROJECT_NAME="drydock-smoke" \
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.hardening.yml \
+            config >/dev/null
+
+      - name: Validate hardening opt-out (DRYDOCK_NO_HARDENING=1)
+        # Confirms the base compose file is valid without the overlay,
+        # proving the overlay is opt-out-able without leaving a broken state.
+        run: |
+          USER_NAME="$(id -un)" \
+          USER_UID="$(id -u)" \
+          USER_GID="$(id -g)" \
+          HOST_DOCKER_GID=1001 \
+          PROJECT_DIR="$GITHUB_WORKSPACE" \
+          PROJECT_NAME="drydock-smoke" \
+          docker compose \
+            -f docker-compose.yml \
+            config >/dev/null

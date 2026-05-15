@@ -1,0 +1,38 @@
+# drydock — container hardening overlay (v0.1.1+).
+#
+# Auto-included by lib/compose.sh:compose_files() UNLESS DRYDOCK_NO_HARDENING
+# is set to the literal value "1" (nuclear opt-out per INV-8). Any other value
+# — including "0", "false", or empty — retains hardening. Implements three
+# accident-class defenses anchored in threat model A (INV-7):
+#
+#   1. cap_drop: ALL + minimum cap_add — bounds privileged syscall accidents
+#      (e.g. a confused agent running `mount`, `ptrace`, or raw-socket bind).
+#   2. security_opt: no-new-privileges:true — defeats sudo/SUID escalation,
+#      ensuring the cap drop cannot be bypassed by an existing binary.
+#   3. tmpfs /tmp size cap — bounds runaway-loop disk fill on the host's
+#      tmpfs-backed memory; default 1g, tunable via DRYDOCK_TMPFS_SIZE.
+#
+# Each cap in cap_add is documented inline so removals require justification
+# (per CLAUDE.md §3 and INV-8 invariant).
+
+services:
+  drydock:
+    cap_drop:
+      - ALL
+    cap_add:
+      # rsync -a preserves modes; some npm post-install scripts chmod files
+      # under node_modules. Without DAC_OVERRIDE: EACCES on first install.
+      - DAC_OVERRIDE
+      # rsync -a preserves ownership when copying ~/.claude → ~/.claude-container.
+      # gpg-agent creates UNIX-domain sockets and needs CHOWN to set ownership.
+      - CHOWN
+      # gpg-agent lockfile and socket ownership operations during startup.
+      - FOWNER
+      # Required by the entrypoint user-switch and any user-owned tool that
+      # opens uid-mismatched files (rsync cross-uid metadata operations).
+      - SETUID
+      - SETGID
+    security_opt:
+      - "no-new-privileges:true"
+    tmpfs:
+      - "/tmp:size=${DRYDOCK_TMPFS_SIZE:-1g}"

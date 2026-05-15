@@ -134,6 +134,32 @@ citation; section identifiers (`§N`) likewise.
 - **Where this lives in code**: `N/A — project-policy invariant, enforced socially via §4`
 - **Deep dive**: [docs/security.md](docs/security.md)
 
+### INV-8: Container Hardening Defaults
+
+- **Rule**: The container service MUST run with `cap_drop: [ALL]` plus the documented minimum
+  `cap_add` set (`DAC_OVERRIDE`, `CHOWN`, `FOWNER`, `SETUID`, `SETGID`),
+  `security_opt: [no-new-privileges:true]`, and a size-bounded tmpfs on `/tmp`. These defaults
+  ship via the auto-included `docker-compose.hardening.yml` overlay and MAY be disabled
+  per-invocation via `DRYDOCK_NO_HARDENING=1` (nuclear opt-out, literal value `"1"` only) or
+  tuned via `DRYDOCK_TMPFS_SIZE` (granular tmpfs sizing). Removing any of the three default
+  protections from the overlay itself requires re-opening this invariant.
+- **Why**: Under threat model A (INV-7) — accidents, not adversaries — a buggy or
+  prompt-injected agent issuing `mount -o bind` against unintended host paths succeeds silently
+  without `cap_drop: ALL` (`SYS_ADMIN` dropped makes it EPERM instead). A misguided
+  `sudo cat /etc/shadow` or invocation of any setuid binary bypasses the cap drop unless
+  `no-new-privileges:true` is active — a setuid binary can re-acquire dropped caps without this
+  guard. A runaway test or build loop writing to `/tmp` fills the host's memory-backed tmpfs and
+  stalls the developer's WSL2 VM or macOS host; the size cap bounds that accident class at 1g by
+  default. Each defense is sub-10 lines of YAML and the marginal cost to contributors is zero.
+- **Consequence of violating**: An accident-class agent failure fills the host's memory via `/tmp`,
+  escalates via a setuid binary that should have been a no-op, or completes a privileged syscall
+  that should have returned EPERM. The failure mode is silent success of the wrong-by-default
+  operation — exactly the accident class drydock exists to defend against.
+- **Where this lives in code**: `docker-compose.hardening.yml` (overlay definition);
+  `lib/compose.sh` (`COMPOSE_HARDENING` constant + the `compose_files()` conditional that includes
+  the overlay unless `DRYDOCK_NO_HARDENING` is set to the literal value `"1"`).
+- **Deep dive**: [docs/security.md](docs/security.md)
+
 ## 3. Code / Tooling Conventions
 
 ### Bash

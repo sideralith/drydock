@@ -16,6 +16,38 @@ adversarial agent**. Read this so you don't develop a false sense of security.
 - **Damage to other projects under `~/`** — only `$PROJECT_DIR` is mounted;
   sibling projects aren't visible.
 
+## Container hardening defaults (v0.1.1+)
+
+drydock auto-applies a hardening overlay (`docker-compose.hardening.yml`) that bounds
+accident-class privilege and resource use. These defaults are anchored as **INV-8** in
+`CLAUDE.md` — they are project invariants, not per-release polish.
+
+| Defense | Effect | Opt-out |
+|---|---|---|
+| `cap_drop: [ALL]` + minimum `cap_add` | Privileged syscalls (`mount -o bind`, `ptrace`, raw-socket `bind`) return EPERM rather than completing silently | `DRYDOCK_NO_HARDENING=1` (nuclear) |
+| `security_opt: no-new-privileges:true` | A setuid binary or `sudo` cannot re-acquire dropped caps — the cap drop cannot be bypassed by an existing binary | `DRYDOCK_NO_HARDENING=1` (nuclear) |
+| `tmpfs /tmp` with `size=1g` (default) | Runaway loops writing to `/tmp` halt at 1G instead of filling the host's memory-backed tmpfs | `DRYDOCK_TMPFS_SIZE=<size>` (granular) or `DRYDOCK_NO_HARDENING=1` (nuclear) |
+
+The `cap_add` set — `DAC_OVERRIDE`, `CHOWN`, `FOWNER`, `SETUID`, `SETGID` — is the documented
+minimum for rsync, gpg-agent, and the entrypoint user-switch. Each entry has an inline comment
+in `docker-compose.hardening.yml` documenting which workflow requires it. Adding a cap MUST
+come with a new inline comment; removing one requires reopening INV-8.
+
+To opt out of all hardening for a single invocation:
+
+```sh
+DRYDOCK_NO_HARDENING=1 drydock
+```
+
+To tune the tmpfs size (granular — hardening otherwise active):
+
+```sh
+DRYDOCK_TMPFS_SIZE=4g drydock
+```
+
+These defenses defeat **accidents**, not adversaries. The Docker socket mount remains
+root-equivalent (see below) — INV-8 is additive defense in depth, not a replacement for INV-6.
+
 ## What drydock does NOT protect against
 
 - **Adversarial agent using the Docker socket** — a process with

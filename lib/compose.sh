@@ -20,6 +20,7 @@ COMPOSE_GPG="$DRYDOCK_HOME/docker-compose.gpg.yml"
 COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
 COMPOSE_MCP_AUTH="$DRYDOCK_HOME/docker-compose.mcp-auth.yml"
 COMPOSE_CCSTATUSLINE="$DRYDOCK_HOME/docker-compose.ccstatusline.yml"
+COMPOSE_HARDENING="$DRYDOCK_HOME/docker-compose.hardening.yml"
 # shellcheck disable=SC2034  # used in lib/commands.sh (cmd_init)
 DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
 
@@ -209,6 +210,14 @@ compose_files() {
 	generate_submount_overlay "$project_dir"
 	if [ -f "${SUBMOUNT_OVERLAY:-}" ] && [ -s "${SUBMOUNT_OVERLAY:-}" ]; then
 		printf '%s\n' "-f" "$SUBMOUNT_OVERLAY"
+	fi
+	# Container hardening defaults (cap_drop, no-new-privileges, tmpfs /tmp).
+	# Suppressed ONLY when DRYDOCK_NO_HARDENING is set to the literal value "1"
+	# (nuclear opt-out per INV-8). Values like "0", "false", "true", or empty
+	# retain hardening — only the exact literal "1" disables.
+	# DRYDOCK_TMPFS_SIZE is interpolated inside the overlay for granular tmpfs sizing.
+	if [ "${DRYDOCK_NO_HARDENING:-0}" != "1" ]; then
+		printf '%s\n' "-f" "$COMPOSE_HARDENING"
 	fi
 	# Optional, host opt-in — these vars are set by export_compose_env (called
 	# before this fn) so the -f list and the overlay YAMLs share one decision.
