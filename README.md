@@ -18,8 +18,10 @@ Debian 12 slim container that:
 - **Mounts only your project** — `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
   and every other unrelated project under `~/` aren't visible from inside.
 - **RO-overlays the agent's hooks** — it can't self-edit its own guardrails.
-- **Splits memory and config** — the container has its own engram DB and its
-  own `~/.claude/` + `~/.claude.json` siblings, so concurrent host sessions on
+- **Splits memory and config** — the container has its own
+  [engram](https://github.com/Gentleman-Programming/engram) DB (optional —
+  see [Using drydock without engram](#using-drydock-without-engram)) and its own
+  `~/.claude/` + `~/.claude.json` siblings, so concurrent host sessions on
   other projects don't race.
 - **Bind-mounts the Docker socket (DooD)** — `docker exec`, `make shell-api`,
   project Makefiles all work transparently against your existing stack.
@@ -201,6 +203,17 @@ dynamically-generated overlay propagates sub-mounts under `$PROJECT_DIR`.
 
 Full mount map, the two-config-location detail, the split rationale, and the
 sub-mount propagation design: **[docs/architecture.md](docs/architecture.md)**.
+
+**Container hardening (v0.1.1+):** `docker-compose.hardening.yml` is auto-applied on every
+invocation (caps dropped, no-new-privileges, `/tmp` size-bounded to 1 GB by default). Two
+env-var knobs:
+
+| Env var | Effect |
+|---|---|
+| `DRYDOCK_NO_HARDENING=1` | Nuclear opt-out — disables the hardening overlay entirely for one invocation |
+| `DRYDOCK_TMPFS_SIZE=<size>` | Override `/tmp` size cap (e.g. `4g`, `512m`) — hardening otherwise active |
+
+See [docs/security.md](docs/security.md) for the cap list rationale.
 
 ## Documentation
 
