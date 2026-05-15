@@ -146,9 +146,9 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Why**: Under threat model A (INV-7) — accidents, not adversaries — a buggy or
   prompt-injected agent issuing `mount -o bind` against unintended host paths succeeds silently
   without `cap_drop: ALL` (`SYS_ADMIN` dropped makes it EPERM instead). A misguided
-  `sudo cat /etc/shadow` or invocation of any setuid binary bypasses the cap drop unless
-  `no-new-privileges:true` is active — a setuid binary can re-acquire dropped caps without this
-  guard. A runaway test or build loop writing to `/tmp` fills the host's memory-backed tmpfs and
+  invocation of any setuid-root binary present in the base image (`su`, `mount`, `passwd`)
+  bypasses the cap drop unless `no-new-privileges:true` is active — a setuid binary can
+  re-acquire dropped caps without this guard. A runaway test or build loop writing to `/tmp` fills the host's memory-backed tmpfs and
   stalls the developer's WSL2 VM or macOS host; the size cap bounds that accident class at 1g by
   default. Each defense is sub-10 lines of YAML and the marginal cost to contributors is zero.
 - **Consequence of violating**: An accident-class agent failure fills the host's memory via `/tmp`,

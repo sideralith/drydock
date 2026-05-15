@@ -246,8 +246,9 @@ drydock's threat model is "defense against accidents, not adversaries" — see
 
 Base image: `debian:12-slim`. Tooling installed: `docker-ce-cli`,
 `docker-compose-plugin` (+ a `docker-compose` v1-name shim), `gh`, `make`,
-`git`, `rsync`, `jq`, `curl`, plus `procps`/`vim-tiny`/`less`/`sudo` for
-ergonomics.
+`git`, `rsync`, `jq`, `curl`, plus `procps`/`vim-tiny`/`less` for
+ergonomics. `sudo` is intentionally NOT installed — `no-new-privileges:true`
+(INV-8) would make it a no-op anyway, so it would only be image weight.
 
 The image is built with `USER_UID` / `USER_GID` / `HOST_DOCKER_GID` build
 args (the CLI auto-detects from `id` and `stat /var/run/docker.sock`). The

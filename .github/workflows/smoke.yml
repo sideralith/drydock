@@ -57,9 +57,11 @@ jobs:
             -f docker-compose.hardening.yml \
             config >/dev/null
 
-      - name: Validate hardening opt-out (DRYDOCK_NO_HARDENING=1)
-        # Confirms the base compose file is valid without the overlay,
-        # proving the overlay is opt-out-able without leaving a broken state.
+      - name: Validate base compose renders alone (overlay-removed path)
+        # Confirms docker-compose.yml is valid as a standalone file (no overlays),
+        # so the runtime opt-out path (DRYDOCK_NO_HARDENING=1, which drops the
+        # hardening overlay from `compose_files()`) cannot land in a broken state.
+        # Gate semantics themselves are covered by bats tests in test/lib_compose.bats.
         run: |
           USER_NAME="$(id -un)" \
           USER_UID="$(id -u)" \
