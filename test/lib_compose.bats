@@ -204,6 +204,48 @@ MOUNTS
 	[[ "$output" == *"docker-compose.engram.yml"* ]]
 }
 
+# ── mcp-auth + ccstatusline opt-in overlays ───────────────────────────────────
+
+@test "compose_files: no ~/.mcp-auth/ — mcp-auth overlay absent" {
+	HOME="$BATS_TEST_TMPDIR/fakehome-no-mcp"
+	mkdir -p "$HOME"
+	[ ! -d "$HOME/.mcp-auth" ]
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.mcp-auth.yml"* ]]
+}
+
+@test "compose_files: ~/.mcp-auth/ exists — mcp-auth overlay present" {
+	HOME="$BATS_TEST_TMPDIR/fakehome-with-mcp"
+	mkdir -p "$HOME/.mcp-auth"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" == *"docker-compose.mcp-auth.yml"* ]]
+}
+
+@test "compose_files: no ~/.config/ccstatusline/ — ccstatusline overlay absent" {
+	HOME="$BATS_TEST_TMPDIR/fakehome-no-ccsl"
+	mkdir -p "$HOME"
+	[ ! -d "$HOME/.config/ccstatusline" ]
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.ccstatusline.yml"* ]]
+}
+
+@test "compose_files: ~/.config/ccstatusline/ exists — ccstatusline overlay present" {
+	HOME="$BATS_TEST_TMPDIR/fakehome-with-ccsl"
+	mkdir -p "$HOME/.config/ccstatusline"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" == *"docker-compose.ccstatusline.yml"* ]]
+}
+
+@test "compose_files: ccstatusline overlay activates → cache dir auto-created (idempotent)" {
+	HOME="$BATS_TEST_TMPDIR/fakehome-ccsl-cache"
+	mkdir -p "$HOME/.config/ccstatusline"
+	[ ! -d "$HOME/.cache/ccstatusline" ]
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	# Cache dir must exist post-call so the bind mount in the overlay doesn't fail.
+	[ -d "$HOME/.cache/ccstatusline" ]
+}
+
 @test "export_compose_env: engram usable (engram on PATH + Linux) — DRYDOCK_ENGRAM_SOURCE set to engram-container" {
 	# Simulate engram on PATH via a fake binary in a tmpdir.
 	local fake_bin="$BATS_TEST_TMPDIR/fake-bin"

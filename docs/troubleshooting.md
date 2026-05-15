@@ -245,6 +245,56 @@ bind-mounted socket. Exposing the translated path as an env var lets each
 project opt in explicitly in its compose file, and the three-layer
 auto-population (shell + container env + `.env`) covers every common flow.
 
+## ccstatusline / MCP-remote OAuth tools not working inside drydock
+
+Two opt-in compose overlays activate **automatically** when drydock detects
+the user has the relevant tool configured on host:
+
+| Overlay | Activated when | What it mounts |
+|---|---|---|
+| `docker-compose.mcp-auth.yml` | `~/.mcp-auth/` exists on host | `~/.mcp-auth/` RW (mcp-remote OAuth tokens) |
+| `docker-compose.ccstatusline.yml` | `~/.config/ccstatusline/` exists on host | `~/.config/ccstatusline/` + `~/.cache/ccstatusline/` RW |
+
+These overlays are **strictly opt-in** — drydock does NOT create empty dirs
+in users' homes for tools they don't use. To activate:
+
+- **mcp-remote** (Cloudflare-bindings MCP, etc.): authenticate once from
+  host claude (where the browser flow works); `mcp-remote` creates
+  `~/.mcp-auth/<server-hash>/` with the OAuth tokens. From then on every
+  drydock session sees them and the MCP server connects without re-auth.
+  Symptom of missing this: `MCP server "cloudflare-bindings" connection
+  timed out after 30000ms` because mcp-remote falls back to launching a
+  browser that does not exist inside the container.
+
+- **ccstatusline**: run `npx ccstatusline` once from host claude and save
+  your preferences. The directory `~/.config/ccstatusline/` is created
+  automatically and from then on drydock mounts it. Symptom of missing
+  this: status line shows defaults (segments/themes from ccstatusline are
+  NOT applied) even after `drydock sync` ran. `drydock sync` only copies
+  the `statusLine` block inside `~/.claude/settings.json` (which tells
+  Claude WHICH command to run); the actual personalization lives in
+  `~/.config/ccstatusline/settings.json` which is OUT of the `~/.claude/`
+  sync scope by design.
+
+The detection happens in `lib/compose.sh:compose_files()` — runs on every
+`drydock` invocation, no manual step required. To verify which overlays
+are active for your current session, inspect:
+
+```bash
+cd ~/git/yourproject
+# As-if-invoked compose command (does not actually run docker):
+DRYDOCK_HOME=~/.local/share/drydock bash -c '
+  source $DRYDOCK_HOME/lib/common.sh
+  source $DRYDOCK_HOME/lib/paths.sh
+  source $DRYDOCK_HOME/lib/compose.sh
+  export_compose_env $PWD
+  compose_files $PWD
+'
+# Look for -f docker-compose.mcp-auth.yml and -f docker-compose.ccstatusline.yml
+# in the output. Absence = overlay not activated (and that's correct if you
+# don't use the corresponding tool).
+```
+
 ## drydock can't find DRYDOCK_HOME / compose file
 
 The CLI resolves `DRYDOCK_HOME` by following the symlink at

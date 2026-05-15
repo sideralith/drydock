@@ -1,0 +1,22 @@
+# drydock — mcp-remote OAuth cache overlay (opt-in).
+#
+# Applied via `docker compose -f docker-compose.yml -f docker-compose.mcp-auth.yml`
+# when the host has the directory `${HOME}/.mcp-auth/` (created by the
+# `mcp-remote` npm package on its first successful OAuth authentication).
+#
+# What it solves: SSE/HTTP MCP servers proxied via `mcp-remote` (e.g.
+# Cloudflare-bindings, Cloudflare-docs) use OAuth and cache their tokens in
+# `~/.mcp-auth/`. Without this overlay the container has no access to the
+# host's cached tokens and `mcp-remote` falls back to launching a browser
+# that does not exist inside the container — symptom is a 30-second
+# connection timeout when claude tries to reconnect to the MCP server.
+#
+# Activated automatically by the drydock CLI when `${HOME}/.mcp-auth/`
+# exists on the host. To opt in for the first time, run an mcp-remote auth
+# flow once from HOST claude (where the browser works); that creates the
+# directory + tokens, and from then on every drydock session sees them.
+
+services:
+  drydock:
+    volumes:
+      - "${HOME}/.mcp-auth:${HOME}/.mcp-auth:rw"

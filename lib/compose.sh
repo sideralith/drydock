@@ -18,6 +18,8 @@ COMPOSE_BASE="$DRYDOCK_HOME/docker-compose.yml"
 COMPOSE_SSH="$DRYDOCK_HOME/docker-compose.ssh.yml"
 COMPOSE_GPG="$DRYDOCK_HOME/docker-compose.gpg.yml"
 COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
+COMPOSE_MCP_AUTH="$DRYDOCK_HOME/docker-compose.mcp-auth.yml"
+COMPOSE_CCSTATUSLINE="$DRYDOCK_HOME/docker-compose.ccstatusline.yml"
 # shellcheck disable=SC2034  # used in lib/commands.sh (cmd_init)
 DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
 
@@ -219,6 +221,22 @@ compose_files() {
 	if [ -n "${DRYDOCK_ENGRAM_SOURCE:-}" ]; then
 		printf '%s\n' "-f" "$COMPOSE_ENGRAM"
 	fi
+	# Auto-detect user-config opt-in overlays based on host directory presence.
+	# Activated only when the user has actually configured the tool — never
+	# creates empty dirs on hosts that don't use these tools. To opt in for the
+	# first time, run the tool's setup once from host claude (where browser /
+	# init flows work) and the directory appears automatically.
+	if [ -d "$HOME/.mcp-auth" ]; then
+		printf '%s\n' "-f" "$COMPOSE_MCP_AUTH"
+	fi
+	if [ -d "$HOME/.config/ccstatusline" ]; then
+		printf '%s\n' "-f" "$COMPOSE_CCSTATUSLINE"
+		# Co-mount cache only if the overlay activates — keeps the bind-mount
+		# source list consistent with the overlay's expectations. ccstatusline
+		# auto-creates its cache dir at first invocation, but bind mounts need
+		# it pre-existing; make it idempotently when the parent overlay applies.
+		[ -d "$HOME/.cache/ccstatusline" ] || mkdir -p "$HOME/.cache/ccstatusline"
+	fi
 }
 
 # Export env vars needed by docker-compose.yml interpolation.
@@ -342,14 +360,6 @@ ensure_prereqs() {
 }
 
 ensure_runtime_dirs() {
-	# Defensive: bind mounts fail if the source dir is absent on the host.
-	# ~/.mcp-auth/ is the OAuth-token cache used by mcp-remote (Cloudflare-
-	# bindings MCP, etc.). On a fresh host the directory has never been
-	# created — make it empty here so the compose bind mount succeeds.
-	# Shared RW with the container so first-time auth from either side
-	# persists to the other.
-	mkdir -p "$HOME/.mcp-auth"
-
 	# Auto-setup if missing. Transparent for first-time users — cmd_setup is
 	# idempotent and prints a note when it runs.
 	# The engram dir guard is conditional: only included when engram is usable in

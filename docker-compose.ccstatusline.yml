@@ -1,0 +1,30 @@
+# drydock — ccstatusline config + cache overlay (opt-in).
+#
+# Applied via `docker compose -f docker-compose.yml -f docker-compose.ccstatusline.yml`
+# when the host has the directory `${HOME}/.config/ccstatusline/` (created
+# by ccstatusline when the user first runs `npx ccstatusline init` or saves
+# settings).
+#
+# What it solves: ccstatusline (https://github.com/sirmalloc/ccstatusline)
+# reads its personalization from `~/.config/ccstatusline/settings.json` and
+# caches block evaluations in `~/.cache/ccstatusline/`. The statusLine block
+# in `~/.claude/settings.json` is synced by `drydock sync`, but it only tells
+# Claude WHICH command to run (typically `npx -y ccstatusline@latest`); the
+# actual personalization (segments, themes, fonts) lives in the config/cache
+# dirs mounted here. Without the overlay the container falls back to
+# defaults and the user's customized status line never appears.
+#
+# Activated automatically by the drydock CLI when
+# `${HOME}/.config/ccstatusline/` exists on the host. To opt in for the
+# first time, run `npx ccstatusline` once from host claude and save your
+# preferences; the directory is created automatically, and from then on
+# every drydock session sees the customizations.
+#
+# Per-subdir mount (not all of ~/.config or ~/.cache) keeps the surface
+# narrow — only the directories ccstatusline actually owns are shared.
+
+services:
+  drydock:
+    volumes:
+      - "${HOME}/.config/ccstatusline:${HOME}/.config/ccstatusline:rw"
+      - "${HOME}/.cache/ccstatusline:${HOME}/.cache/ccstatusline:rw"
