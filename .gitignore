@@ -20,3 +20,7 @@ Thumbs.db
 # Per-developer drydock init output (host-path-substituted .claude/settings.json).
 # The canonical template lives at templates/default-settings.json.
 .claude/
+
+# Per-session AI handoff briefings — engram is the source of truth; this is
+# only a path-discoverable mirror for the next session and must not be versioned.
+/.handoff/
