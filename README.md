@@ -94,7 +94,7 @@ example, an Obsidian vault bind-mounted via WSL2's 9P drvfs layer:
 # Example: ~/git/myproject/docs is a drvfs bind from Windows
 ls ~/git/myproject/docs   # works on host — files visible
 drydock shell
-ls /home/rai/git/myproject/docs  # empty without sub-mount propagation!
+ls ~/git/myproject/docs  # empty without sub-mount propagation!
 ```
 
 drydock automatically detects sub-mounts under `${PROJECT_DIR}` and generates
@@ -102,10 +102,10 @@ a temporary compose overlay that propagates them into the container. Run
 `drydock doctor` to see what was detected:
 
 ```
-── sub-mounts under /home/rai/git/myproject ──
-  ✓ /home/rai/git/myproject/docs → /mnt/c/Users/Rai/Documents/Obsidian/Vaults/MyProject (drvfs auto-translated)
-  ✓ /home/rai/git/myproject/data → /data/foo (Linux-native bind)
-  ⚠ /home/rai/git/myproject/nfsmount → server:/export (nfs, may not propagate)
+── sub-mounts under /home/you/git/myproject ──
+  ✓ /home/you/git/myproject/docs → /mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject (drvfs auto-translated)
+  ✓ /home/you/git/myproject/data → /data/foo (Linux-native bind)
+  ⚠ /home/you/git/myproject/nfsmount → server:/export (nfs, may not propagate)
 ```
 
 Three classes of sub-mount:
