@@ -1,11 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256" role="img" aria-label="drydock logo: an AI vessel levitating above a dry dock">
   <title>drydock</title>
-  <!-- container shell -->
-  <rect x="6" y="6" width="52" height="52" rx="14" fill="#11324A"/>
-  <!-- AI sparkle: the vessel, keel descending into the dock -->
-  <path d="M32 20 Q32 34 46 34 Q32 34 32 48 Q32 34 18 34 Q32 34 32 20 Z" fill="#F4B740"/>
-  <!-- dry dock: fine stepped top-face outline, the empty berth below -->
-  <path d="M8 43 L22 43 L22 46 L26 46 L26 49 L30 49 L30 52 L34 52 L34 49 L38 49 L38 46 L42 46 L42 43 L56 43"
-        fill="none" stroke="#C9D4DC" stroke-width="1"
+  <style>
+    /* light theme (default): darker strokes survive on white */
+    .vessel { stroke: #B8860B; }
+    .berth  { stroke: #5C6B7A; }
+    /* dark theme: the original glowing palette */
+    @media (prefers-color-scheme: dark) {
+      .vessel { stroke: #F4B740; }
+      .berth  { stroke: #C9D4DC; }
+    }
+  </style>
+  <!-- AI sparkle: the vessel as a fine outline silhouette -->
+  <path class="vessel" d="M32 20 Q32 34 46 34 Q32 34 32 48 Q32 34 18 34 Q32 34 32 20 Z"
+        fill="none" stroke="#B8860B" stroke-width="0.3"
+        stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- dry dock: hairline stepped berth outline -->
+  <path class="berth" d="M8 43 L22 43 L22 46 L26 46 L26 49 L30 49 L30 52 L34 52 L34 49 L38 49 L38 46 L42 46 L42 43 L56 43"
+        fill="none" stroke="#5C6B7A" stroke-width="0.6"
         stroke-linejoin="round" stroke-linecap="round"/>
 </svg>
