@@ -769,3 +769,55 @@ MI
 	export_compose_env "$dotted_dir"
 	[ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/sideralith-com_deploy" ]
 }
+
+# ── deploy-key migration warning (REQ-11, S11.1–S11.4) ───────────────────────
+
+@test "export_compose_env: S11.1 — old-named key exists → warn names new key filename" {
+	local parent_dir="$BATS_TEST_TMPDIR/s11-parent"
+	local dotted_dir="$parent_dir/sideralith.com"
+	mkdir -p "$dotted_dir"
+	HOME="$BATS_TEST_TMPDIR/fakehome-s11"
+	mkdir -p "$HOME/.config/drydock/keys"
+	# Create the OLD-named key file (raw basename, not sanitized)
+	: >"$HOME/.config/drydock/keys/sideralith.com_deploy"
+	# Run and capture stderr
+	local stderr_out
+	stderr_out="$(export_compose_env "$dotted_dir" 2>&1 >/dev/null)"
+	[[ "$stderr_out" == *"sideralith-com_deploy"* ]]
+}
+
+@test "export_compose_env: S11.2 — dotted basename but NO old key → no warning" {
+	local parent_dir="$BATS_TEST_TMPDIR/s112-parent"
+	local dotted_dir="$parent_dir/sideralith.com"
+	mkdir -p "$dotted_dir"
+	HOME="$BATS_TEST_TMPDIR/fakehome-s112"
+	mkdir -p "$HOME/.config/drydock/keys"
+	# No key file at all
+	local stderr_out
+	stderr_out="$(export_compose_env "$dotted_dir" 2>&1 >/dev/null)"
+	[[ "$stderr_out" != *"rename"* ]]
+}
+
+@test "export_compose_env: S11.3 — valid basename (no drift) + old key exists → no warning" {
+	local parent_dir="$BATS_TEST_TMPDIR/s113-parent"
+	local valid_dir="$parent_dir/drydock"
+	mkdir -p "$valid_dir"
+	HOME="$BATS_TEST_TMPDIR/fakehome-s113"
+	mkdir -p "$HOME/.config/drydock/keys"
+	# The basename "drydock" sanitizes to "drydock" — raw == sanitized, condition a fails
+	: >"$HOME/.config/drydock/keys/drydock_deploy"
+	local stderr_out
+	stderr_out="$(export_compose_env "$valid_dir" 2>&1 >/dev/null)"
+	[[ "$stderr_out" != *"rename"* ]]
+}
+
+@test "export_compose_env: S11.4 — warning is non-fatal, function exits 0" {
+	local parent_dir="$BATS_TEST_TMPDIR/s114-parent"
+	local dotted_dir="$parent_dir/sideralith.com"
+	mkdir -p "$dotted_dir"
+	HOME="$BATS_TEST_TMPDIR/fakehome-s114"
+	mkdir -p "$HOME/.config/drydock/keys"
+	: >"$HOME/.config/drydock/keys/sideralith.com_deploy"
+	run export_compose_env "$dotted_dir"
+	[ "$status" -eq 0 ]
+}
