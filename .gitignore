@@ -24,3 +24,6 @@ Thumbs.db
 # Per-session AI handoff briefings — engram is the source of truth; this is
 # only a path-discoverable mirror for the next session and must not be versioned.
 /.handoff/
+
+# Social media post drafts — local-only working notes, not part of the project
+/.social/
