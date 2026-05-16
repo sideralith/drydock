@@ -254,6 +254,16 @@ cmd_sync() {
 	ok "Sync done"
 }
 
+# is_container_running — return 0 iff the named container is currently running.
+# Pure-ish: reads Docker state, no mutations. Exact-name match is by-design
+# (docker inspect matches exact name or ID, never a prefix) — REQ-5 S5.4.
+is_container_running() {
+	local name="${1:-}" state
+	[ -n "$name" ] || return 1
+	state="$("$DOCKER" inspect --format '{{.State.Running}}' "$name" 2>/dev/null)" || return 1
+	[ "$state" = "true" ]
+}
+
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]
 	local project_dir_arg=""
@@ -288,6 +298,14 @@ cmd_run() {
 	# instead of being silently killed.
 	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}"
 	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
+	if is_container_running "$_name"; then
+		printf 'drydock: container %s is already running.\n' "$_name" >&2
+		printf '  drydock will not kill a running session.\n' >&2
+		printf '  Attach a shell to it:  docker exec -it %s bash\n' "$_name" >&2
+		printf '  Stop it:               docker stop %s\n' "$_name" >&2
+		printf '  If two projects normalized to the same name, rename one.\n' >&2
+		return 1
+	fi
 	exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
 }
 
@@ -322,6 +340,14 @@ cmd_shell() {
 	# shells get a clear name-collision error.
 	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}-shell"
 	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
+	if is_container_running "$_name"; then
+		printf 'drydock: container %s is already running.\n' "$_name" >&2
+		printf '  drydock will not kill a running session.\n' >&2
+		printf '  Attach a shell to it:  docker exec -it %s bash\n' "$_name" >&2
+		printf '  Stop it:               docker stop %s\n' "$_name" >&2
+		printf '  If two projects normalized to the same name, rename one.\n' >&2
+		return 1
+	fi
 	if [ "${#passthrough[@]}" -gt 0 ]; then
 		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock "${passthrough[@]}"
 	else
