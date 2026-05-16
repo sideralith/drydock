@@ -646,3 +646,77 @@ setup() {
 	[[ "$output" == *"shared (~/.engram)"* ]]
 	unset DRYDOCK_ENGRAM_SHARED
 }
+
+# ── PROJECT_NAME consumer propagation via cmd_run/cmd_shell (REQ-3, S3.3–S3.4) ─
+# These tests live in lib_commands.bats because cmd_run/cmd_shell require
+# commands.sh to be sourced. (S3.1–S3.2 live in lib_compose.bats.)
+
+@test "cmd_run: S3.3 — dotted project dir → container name is drydock-sideralith-com" {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	# Create a project dir whose basename is exactly "sideralith.com"
+	local parent_dir="$BATS_TEST_TMPDIR/s33-parent"
+	local project_dir="$parent_dir/sideralith.com"
+	mkdir -p "$project_dir"
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-s33.log"
+	touch "$DOCKER_CALL_LOG"
+
+	# cmd_run does exec so use a no-op replacement for docker compose run
+	# We capture the rm call and the compose call without actually exec-ing
+	# Override exec via a helper that records and returns instead of replacing process
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_run "$project_dir"
+
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--name drydock-sideralith-com"* ]]
+}
+
+@test "cmd_shell: S3.4 — dotted project dir → container name is drydock-sideralith-com-shell" {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local parent_dir="$BATS_TEST_TMPDIR/s34-parent"
+	local project_dir="$parent_dir/sideralith.com"
+	mkdir -p "$project_dir"
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-s34.log"
+	touch "$DOCKER_CALL_LOG"
+
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_shell "$project_dir"
+
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--name drydock-sideralith-com-shell"* ]]
+}
