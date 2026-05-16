@@ -286,6 +286,16 @@ export_compose_env() {
 	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
 	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
 
+	# ── deploy-key migration warning (REQ-11) ─────────────────────────────────
+	# If the raw basename differs from the sanitized PROJECT_NAME AND an old-named
+	# key file exists at the old location, warn the user to rename it. Non-fatal.
+	local _raw_basename
+	_raw_basename="$(basename "$project_dir")"
+	if [ "$_raw_basename" != "$PROJECT_NAME" ] \
+			&& [ -f "$HOME/.config/drydock/keys/${_raw_basename}_deploy" ]; then
+		warn "project name normalized to '$PROJECT_NAME'; deploy key '${_raw_basename}_deploy' will not be found — rename it to '${PROJECT_NAME}_deploy'"
+	fi
+
 	# ── optional git-credential overlays (host opt-in) ────────────────────────
 	# Detected here so compose_files() and the overlay YAMLs share one source of
 	# truth. Material lives under ~/.config/drydock/ (NEVER ~/.ssh or ~/.gnupg),
