@@ -1,8 +1,15 @@
+<div align="center">
+
+<img src="assets/drydock-logo.svg" alt="drydock" width="128" />
+
 # drydock
 
-> A defense-in-depth sandbox for AI coding agents. Containerized workspace,
-> host Docker socket access for project tooling, isolated memory and config
-> from the host. Multi-project, single-image.
+**A defense-in-depth sandbox for AI coding agents.**
+
+</div>
+
+> Containerized workspace, host Docker socket access for project tooling,
+> isolated memory and config from the host. Multi-project, single-image.
 >
 > Currently supports **Claude Code** (engram-aware). Adapters for other agents
 > are on the [roadmap](#roadmap).
