@@ -5,9 +5,21 @@
 #   export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls.log"
 #   export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
 #
-# The mock appends every invocation's arguments to DOCKER_CALL_LOG, then
-# exits with MOCK_DOCKER_EXIT (default 0). Tests can inspect the log file
+# The mock appends every invocation's arguments to DOCKER_CALL_LOG (UNCONDITIONAL),
+# then exits with MOCK_DOCKER_EXIT (default 0). Tests can inspect the log file
 # to assert which docker commands were issued, or set MOCK_DOCKER_EXIT=1
 # to simulate docker failures.
+#
+# Per-subcommand stdout (additive — backward-compatible):
+#   MOCK_DOCKER_INSPECT_OUTPUT — when set to a non-empty value AND the first
+#     argument is "inspect", prints that value on stdout before exiting.
+#     When unset or empty, no stdout is emitted (original behavior).
+#     Usage:
+#       MOCK_DOCKER_INSPECT_OUTPUT=true  → running container
+#       MOCK_DOCKER_INSPECT_OUTPUT=false → stopped container
+#       MOCK_DOCKER_EXIT=1               → absent container (inspect exits non-zero)
 echo "$*" >> "${DOCKER_CALL_LOG:?DOCKER_CALL_LOG must be set}"
+if [ "${1:-}" = "inspect" ] && [ -n "${MOCK_DOCKER_INSPECT_OUTPUT:-}" ]; then
+	printf '%s\n' "$MOCK_DOCKER_INSPECT_OUTPUT"
+fi
 exit "${MOCK_DOCKER_EXIT:-0}"
