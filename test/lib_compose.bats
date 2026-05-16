@@ -647,3 +647,125 @@ MI
 	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
 	unset DRYDOCK_SKIP_ENV_WRITE
 }
+
+# ── sanitize_project_name (REQ-1, S1.1–S1.11) ────────────────────────────────
+
+@test "sanitize_project_name: S1.1 — period mapped to dash" {
+	run sanitize_project_name "sideralith.com"
+	[ "$status" -eq 0 ]
+	[ "$output" = "sideralith-com" ]
+}
+
+@test "sanitize_project_name: S1.2 — lowercase + space mapped to dash" {
+	run sanitize_project_name "My Project"
+	[ "$status" -eq 0 ]
+	[ "$output" = "my-project" ]
+}
+
+@test "sanitize_project_name: S1.3 — uppercase only lowercased" {
+	run sanitize_project_name "Foo"
+	[ "$status" -eq 0 ]
+	[ "$output" = "foo" ]
+}
+
+@test "sanitize_project_name: S1.4 — leading underscore stripped" {
+	run sanitize_project_name "_foo"
+	[ "$status" -eq 0 ]
+	[ "$output" = "foo" ]
+}
+
+@test "sanitize_project_name: S1.5 — leading dash stripped" {
+	run sanitize_project_name "-foo"
+	[ "$status" -eq 0 ]
+	[ "$output" = "foo" ]
+}
+
+@test "sanitize_project_name: S1.6 — leading digit preserved (alphanumeric)" {
+	run sanitize_project_name "2foo"
+	[ "$status" -eq 0 ]
+	[ "$output" = "2foo" ]
+}
+
+@test "sanitize_project_name: S1.7 — all invalid chars → fallback 'project'" {
+	run sanitize_project_name "...."
+	[ "$status" -eq 0 ]
+	[ "$output" = "project" ]
+}
+
+@test "sanitize_project_name: S1.8 — already-valid name is idempotent" {
+	run sanitize_project_name "drydock"
+	[ "$status" -eq 0 ]
+	[ "$output" = "drydock" ]
+}
+
+@test "sanitize_project_name: S1.9 — dotted run collapsed to single dash" {
+	run sanitize_project_name "a...b"
+	[ "$status" -eq 0 ]
+	[ "$output" = "a-b" ]
+}
+
+@test "sanitize_project_name: S1.9b — underscore run preserved (mid-string-valid)" {
+	run sanitize_project_name "a___b"
+	[ "$status" -eq 0 ]
+	[ "$output" = "a___b" ]
+}
+
+@test "sanitize_project_name: S1.10 — trailing dash/underscore stripped" {
+	run sanitize_project_name "foo-"
+	[ "$status" -eq 0 ]
+	[ "$output" = "foo" ]
+	run sanitize_project_name "foo_"
+	[ "$status" -eq 0 ]
+	[ "$output" = "foo" ]
+}
+
+@test "sanitize_project_name: S1.11 — idempotency (sanitize of sanitized output)" {
+	run sanitize_project_name "sideralith.com"
+	[ "$status" -eq 0 ]
+	local once="$output"
+	run sanitize_project_name "$once"
+	[ "$status" -eq 0 ]
+	[ "$output" = "sideralith-com" ]
+}
+
+# ── export_compose_env PROJECT_NAME sanitization integration (REQ-2, S2.1–S2.2) ─
+
+@test "export_compose_env: S2.1 — dotted basename sanitized to PROJECT_NAME=sideralith-com" {
+	local dotted_dir="$BATS_TEST_TMPDIR/sideralith.com"
+	mkdir -p "$dotted_dir"
+	export_compose_env "$dotted_dir"
+	[ "$PROJECT_NAME" = "sideralith-com" ]
+}
+
+@test "export_compose_env: S2.2 — valid basename unchanged (drydock → drydock)" {
+	local valid_dir="$BATS_TEST_TMPDIR/drydock"
+	mkdir -p "$valid_dir"
+	export_compose_env "$valid_dir"
+	[ "$PROJECT_NAME" = "drydock" ]
+}
+
+# ── consumer propagation (REQ-3, S3.1–S3.2) ──────────────────────────────────
+# S3.3 and S3.4 (cmd_run/cmd_shell DOCKER_CALL_LOG) live in lib_commands.bats
+# because those commands are only available after sourcing commands.sh.
+
+@test "export_compose_env: S3.1 — COMPOSE_PROJECT_NAME equals drydock-sideralith-com" {
+	# Use a parent dir so basename is exactly "sideralith.com"
+	local parent_dir="$BATS_TEST_TMPDIR/s31-parent"
+	local dotted_dir="$parent_dir/sideralith.com"
+	mkdir -p "$dotted_dir"
+	export_compose_env "$dotted_dir"
+	[ "$COMPOSE_PROJECT_NAME" = "drydock-sideralith-com" ]
+}
+
+@test "export_compose_env: S3.2 — deploy-key path uses sanitized PROJECT_NAME" {
+	# Use a parent dir so basename is exactly "sideralith.com"
+	local parent_dir="$BATS_TEST_TMPDIR/s32-parent"
+	local dotted_dir="$parent_dir/sideralith.com"
+	mkdir -p "$dotted_dir"
+	HOME="$BATS_TEST_TMPDIR/fakehome-s32"
+	mkdir -p "$HOME/.config/drydock/keys"
+	# Create only the sanitized key — assert it is found (i.e., the path uses sideralith-com)
+	: >"$HOME/.config/drydock/keys/sideralith-com_deploy"
+	export_compose_env "$dotted_dir"
+	[ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/sideralith-com_deploy" ]
+}

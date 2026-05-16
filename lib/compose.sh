@@ -33,6 +33,25 @@ engram_usable() {
 	command -v engram >/dev/null 2>&1 && host_is_linux
 }
 
+# sanitize_project_name — pure transform: directory basename → Docker Compose-safe
+# project name. Accepts one argument (raw string), emits the sanitized name on
+# stdout. No side effects, no globals. Steps per REQ-1:
+#   1. Lowercase all characters.
+#   2. Map every character outside [a-z0-9_-] to '-'.
+#   3. Collapse repeated '-' into a single '-' (belt-and-suspenders with tr -s).
+#   4. Strip ALL leading characters that are not [a-z0-9] (dashes AND underscores).
+#   5. Strip trailing '-' and '_'.
+#   6. If the result is empty, output the literal string 'project'.
+sanitize_project_name() {
+	local raw="$1" name
+	name="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-')"
+	# collapse repeated dashes; strip leading non-alphanumerics (dash AND underscore);
+	# strip trailing dash/underscore
+	name="$(printf '%s' "$name" | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	[ -n "$name" ] || name="project"
+	printf '%s' "$name"
+}
+
 # _submount_env_name — derive the env-var basename for a sub-mount.
 # Shared by export_compose_env (host-side, where the value is set),
 # generate_submount_overlay (YAML environment: block, where the name is
@@ -253,7 +272,7 @@ export_compose_env() {
 	local project_dir="$1"
 	export PROJECT_DIR="$project_dir"
 	export PROJECT_NAME
-	PROJECT_NAME="$(basename "$project_dir")"
+	PROJECT_NAME="$(sanitize_project_name "$(basename "$project_dir")")"
 	export USER_UID
 	USER_UID="$(id -u)"
 	export USER_GID
