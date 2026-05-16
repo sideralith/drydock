@@ -43,14 +43,34 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Rule**: Container mounts MUST point at `~/.claude-container/`, `~/.claude-container.json`,
   and `~/.engram-container/` — never at the host's `~/.claude/`, `~/.claude.json`, or
   `~/.engram/`.
-- **Why**: SQLite uses `fcntl` advisory locks for WAL-mode writes. On WSL2 (9P filesystem) and
-  macOS (virtiofs), `fcntl` lock semantics are unreliable — `host_fs_locks_unreliable()` at
-  `lib/paths.sh:74-79` detects both. When host Claude and container Claude run concurrently against
-  the same SQLite file, the result is either silent DB corruption (last-writer-wins page clash) or
-  an OAuth token refresh race where both sides re-mint tokens and invalidate each other's session.
-- **Consequence of violating**: Sharing `~/.claude/` between host and container silently corrupts
-  the SQLite state file with no error message, or triggers an OAuth lockout requiring
-  re-authentication of both sessions — data loss with no obvious cause.
+- **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
+  Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
+  when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).
+  (1) **Universal — `~/.claude.json` hot last-writer-wins clobber.** `~/.claude.json` is a plain
+  JSON file Claude Code constantly rewrites (changelog timestamps, per-project `lastUsed`, MCP
+  state). Two concurrent sessions performing read-modify-write on it have no merge step; the later
+  `write()` wins and silently discards the other session's changes.
+  (2) **Universal — `~/.claude/.credentials.json` OAuth refresh race.** This file holds the OAuth
+  token. When a host session and a container session refresh concurrently, each re-mints and writes
+  a token, invalidating the other's — both sessions get logged out.
+  (3) **When engram is in use — divergent MCP config.** The container's Claude config has the engram
+  MCP entry filtered out via `jq 'del(.mcpServers.engram, ...)'` (`commands.sh:110,244`). If the
+  container shared the host's live `~/.claude.json`, that filter would destructively mutate it —
+  stripping the engram MCP entry from the host's own config.
+  (4) **When engram is in use — `~/.engram/engram.db` SQLite WAL corruption.** The hazard is NOT
+  concurrency alone: SQLite WAL is explicitly designed for concurrent access. Corruption requires
+  concurrency PLUS a filesystem where `fcntl` advisory locks are UNRELIABLE — the WSL2 9P bridge,
+  macOS virtiofs, or a bind-mount crossing the Docker Desktop VM boundary. On a native filesystem
+  with working `fcntl` locks, multiple sessions are safe; the cross-VM-boundary mount is what breaks
+  the lock guarantee. (The engram DB lock semantics are governed in detail by INV-5.)
+- **Consequence of violating**: Sharing host `~/.claude/`, `~/.claude.json`, and `~/.engram/` with
+  the container produces silent failure across all four reasons: concurrent sessions clobber
+  `~/.claude.json` writes (last-writer-wins, lost config — no error); trigger an OAuth lockout
+  requiring re-authentication of both sessions via `.credentials.json`; have the container's MCP
+  filter destructively mutate the host's live config, destroying the host's engram MCP entry; and —
+  on an unreliable-`fcntl`-lock filesystem (WSL2 9P, macOS virtiofs, Docker Desktop VM boundary) —
+  silently corrupt `~/.engram/engram.db` via a WAL page clash. Every failure mode is silent: data
+  loss or auth loss with no obvious cause.
 - **Where this lives in code**: `lib/paths.sh:23-33` (container path constants);
   `docker-compose.yml:61-62` (mounts).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
