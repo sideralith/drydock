@@ -1,0 +1,71 @@
+# Changelog
+
+All notable changes to drydock are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.1] - 2026-05-15
+
+Container hardening defaults.
+
+### Added
+- Default container hardening, applied to every session via an auto-included
+  `docker-compose.hardening.yml` overlay:
+  - `cap_drop: ALL` plus a minimum `cap_add` set (`DAC_OVERRIDE`, `CHOWN`,
+    `FOWNER`, `SETUID`, `SETGID`). Accidental privileged syscalls such as
+    `mount -o bind` now return `EPERM`.
+  - `security_opt: no-new-privileges:true`. Setuid binaries can no longer
+    re-acquire dropped capabilities.
+  - A size-bounded `tmpfs` on `/tmp` (1 GB default). A runaway loop can no
+    longer fill the host's memory-backed tmpfs.
+- `DRYDOCK_NO_HARDENING=1` — per-invocation opt-out that disables the hardening
+  overlay entirely (literal value `1`).
+- `DRYDOCK_TMPFS_SIZE` — tune the `/tmp` size cap (e.g. `4g`, `512m`) without
+  disabling the rest of the hardening.
+
+### Changed
+- Syscalls requiring dropped capabilities (mount, raw-socket bind, cross-uid
+  `ptrace`) now return `EPERM` inside the container.
+
+### Removed
+- `sudo` is no longer installed in the base image. No drydock code path invoked
+  it, and with `no-new-privileges:true` it would be a no-op.
+
+### Upgrade notes
+- Rebuild the image with `drydock build`, then run as usual. No configuration
+  changes are required for most workflows. If a workflow needs a dropped
+  capability, run with `DRYDOCK_NO_HARDENING=1`.
+- Rationale and failure modes: see INV-8 in [`CLAUDE.md`](CLAUDE.md) and
+  [`docs/security.md`](docs/security.md).
+
+## [0.1.0] - 2026-05-15
+
+First public release. A defense-in-depth sandbox for AI coding agents: a
+containerized Claude Code workspace with Docker-out-of-Docker via the host
+socket, and memory and config isolated from the host.
+
+### Added
+- Containerized agent workspace — Claude Code, the engram MCP server, and
+  plugins run in a Debian 12 slim container.
+- Docker-out-of-Docker via the host socket — the containerized agent drives
+  the host Docker daemon, with no nested daemon.
+- Credential isolation — `~/.ssh`, `~/.gnupg`, `~/.aws`, and `~/.kube` are
+  never mounted. SSH and GPG material lives under `~/.config/drydock/` and is
+  activated only through opt-in overlays.
+- Container-state split — the container has its own `~/.claude-container/`,
+  `~/.claude-container.json`, and `~/.engram-container/`, so concurrent host
+  and container sessions do not race over SQLite WAL.
+- Hooks read-only overlay — `~/.claude/hooks/` is mounted `:ro`; the agent
+  cannot edit its own guardrails.
+- Engram is fully optional — auto-detected, and its absence is a supported,
+  tested configuration with no startup error noise.
+- Sub-mount auto-detection — sub-mounts under the project (WSL2 9P / drvfs,
+  Linux-native binds, and NFS/CIFS/FUSE) are detected, classified, and
+  propagated into the container.
+- `install.sh` — curl-pipe and clone-and-run installation.
+- Example projects — `examples/minimal/` and `examples/web-stack/`.
+- MIT license.
+
+[0.1.1]: https://github.com/sideralith/drydock/releases/tag/v0.1.1
+[0.1.0]: https://github.com/sideralith/drydock/releases/tag/v0.1.0
