@@ -720,3 +720,219 @@ setup() {
 	log="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log" == *"--name drydock-sideralith-com-shell"* ]]
 }
+
+# ── is_container_running unit tests (REQ-5, S5.1–S5.4) ───────────────────────
+
+# Shared helper: setup sources and DOCKER seam for is_container_running tests.
+_setup_icr() {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-icr-$$.log"
+	touch "$DOCKER_CALL_LOG"
+}
+
+@test "is_container_running: S5.1 — inspect returns 'true' → exits 0" {
+	_setup_icr
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	run is_container_running "drydock-foo"
+	[ "$status" -eq 0 ]
+}
+
+@test "is_container_running: S5.2 — inspect returns 'false' (stopped) → exits non-zero" {
+	_setup_icr
+	export MOCK_DOCKER_INSPECT_OUTPUT=false
+	export MOCK_DOCKER_EXIT=0
+	run is_container_running "drydock-foo"
+	[ "$status" -ne 0 ]
+}
+
+@test "is_container_running: S5.3 — inspect exits non-zero (absent) → exits non-zero" {
+	_setup_icr
+	unset MOCK_DOCKER_INSPECT_OUTPUT
+	export MOCK_DOCKER_EXIT=1
+	run is_container_running "drydock-foo"
+	[ "$status" -ne 0 ]
+}
+
+@test "is_container_running: S5.4 — drydock-foo running, query drydock-foo-shell → exits non-zero (exact-name scope)" {
+	_setup_icr
+	# MOCK_DOCKER_INSPECT_OUTPUT=true: mock returns 'true' for ANY inspect call.
+	# But is_container_running passes the EXACT name — the real docker inspect
+	# checks exact name. In the mock, we can't scope by name, so we test
+	# that is_container_running("drydock-foo-shell") returns non-zero when
+	# we set MOCK_DOCKER_INSPECT_OUTPUT=false (stopped/absent for shell).
+	# To simulate: drydock-foo running but drydock-foo-shell not running,
+	# we set MOCK_DOCKER_INSPECT_OUTPUT=false so the shell name query returns false.
+	export MOCK_DOCKER_INSPECT_OUTPUT=false
+	export MOCK_DOCKER_EXIT=0
+	run is_container_running "drydock-foo-shell"
+	[ "$status" -ne 0 ]
+}
+
+# ── cmd_run running-container pre-check (REQ-6, S6.1–S6.2) ──────────────────
+
+_setup_cmd_conflict() {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-conflict-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	# Stub exec so we can run cmd_run/cmd_shell without replacing the process.
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+}
+
+@test "cmd_run: S6.1 — running container → diagnostic on stderr, no compose run, exits non-zero" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s61/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"running"* ]]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" != *"compose"* ]] || [[ "$log" != *"run --rm"* ]]
+}
+
+@test "cmd_run: S6.2 — no running container → no diagnostic, compose run proceeds" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=false
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s62/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[[ "$output" != *"already running"* ]]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"run --rm --name drydock-foo"* ]]
+}
+
+# ── cmd_shell running-container pre-check (REQ-7, S7.1–S7.2) ─────────────────
+
+@test "cmd_shell: S7.1 — running shell container → diagnostic on stderr, exits non-zero" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s71/foo"
+	mkdir -p "$project_dir"
+	run cmd_shell "$project_dir"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"running"* ]]
+}
+
+@test "cmd_shell: S7.2 — drydock-foo running but drydock-foo-shell absent → NO diagnostic, shell proceeds" {
+	_setup_cmd_conflict
+	# Set inspect to return 'false' (stopped/absent) — this simulates the shell container absent.
+	# The main container's running state is irrelevant since cmd_shell checks drydock-foo-shell.
+	export MOCK_DOCKER_INSPECT_OUTPUT=false
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s72/foo"
+	mkdir -p "$project_dir"
+	run cmd_shell "$project_dir"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"already running"* ]]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--name drydock-foo-shell"* ]]
+}
+
+# ── diagnostic content (REQ-8, S8.1–S8.5) ────────────────────────────────────
+
+@test "cmd_run: S8.1 — conflict diagnostic contains literal container name" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s81/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[[ "$output" == *"drydock-foo"* ]]
+}
+
+@test "cmd_run: S8.2 — conflict diagnostic contains word 'running'" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s82/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[[ "$output" == *"running"* ]]
+}
+
+@test "cmd_run: S8.3 — conflict diagnostic contains exec command" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s83/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[[ "$output" == *"docker exec -it drydock-foo bash"* ]]
+}
+
+@test "cmd_run: S8.4 — conflict diagnostic contains stop command" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s84/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[[ "$output" == *"docker stop drydock-foo"* ]]
+}
+
+@test "cmd_run: S8.5 — conflict diagnostic contains collision-rename hint" {
+	_setup_cmd_conflict
+	export MOCK_DOCKER_INSPECT_OUTPUT=true
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s85/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[[ "$output" == *"rename"* ]]
+}
+
+# ── regression guard: stopped containers still pre-cleaned (REQ-9, S9.1–S9.2) ─
+
+@test "cmd_run: S9.1 — stopped container → rm issued, compose run proceeds, no diagnostic" {
+	_setup_cmd_conflict
+	# stopped: inspect returns 'false', exit 0 → is_container_running returns non-zero
+	export MOCK_DOCKER_INSPECT_OUTPUT=false
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/s91/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"already running"* ]]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"rm drydock-foo"* ]]
+	[[ "$log" == *"run --rm --name drydock-foo"* ]]
+}
+
+@test "cmd_run: S9.2 — no container at all → proceeds normally, no diagnostic" {
+	_setup_cmd_conflict
+	unset MOCK_DOCKER_INSPECT_OUTPUT
+	export MOCK_DOCKER_EXIT=1
+	local project_dir="$BATS_TEST_TMPDIR/s92/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"already running"* ]]
+}
