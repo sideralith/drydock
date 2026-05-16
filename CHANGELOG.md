@@ -5,6 +5,57 @@ All notable changes to drydock are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-05-16
+
+Project name sanitization, running-container diagnostic, and constitution correction.
+
+### Added
+- `sanitize_project_name()` pure helper in `lib/compose.sh` transforms a directory
+  basename into a Docker Compose-safe project name: lowercases, maps non-`[a-z0-9_-]`
+  characters to dashes, collapses repeated dashes, strips leading non-alphanumeric
+  characters (dashes and underscores), and strips trailing dashes and underscores.
+  Falls back to the literal string `project` if the result is empty.
+- `is_container_running()` pure helper in `lib/commands.sh` that wraps
+  `docker inspect --format '{{.State.Running}}'` to detect an already-running container
+  by exact name match.
+- Running-container conflict diagnostic: when `drydock run` or `drydock shell` detects
+  a same-named container already running, it now prints a drydock-formatted message to
+  stderr with the container name, an attach command (`docker exec -it <name> bash`),
+  a stop command (`docker stop <name>`), and a collision-rename hint. The command exits
+  non-zero without issuing the compose run.
+
+### Changed
+- `export_compose_env` now sets `PROJECT_NAME` through `sanitize_project_name`, making
+  the sanitizer apply globally. Every downstream consumer — `COMPOSE_PROJECT_NAME`,
+  the deploy-key path, and `cmd_run`/`cmd_shell` container names — inherits the clean
+  value automatically with no per-consumer change.
+- INV-2 "Why" and "Consequence" in `CLAUDE.md` corrected: the previous text attributed
+  SQLite/fcntl/WAL contention to `~/.claude/` and `~/.claude.json` (those paths contain
+  no SQLite files). The rewritten section states four reasons for the host-vs-container
+  state split — two universal (`.claude.json` last-writer-wins clobber, OAuth refresh
+  race) and two engram-specific (MCP config filter divergence, `~/.engram/engram.db`
+  WAL corruption on unreliable-`fcntl`-lock filesystems).
+
+### Fixed
+- `drydock run` and `drydock shell` with a project directory whose basename contains
+  dots, spaces, or other characters invalid in a Docker Compose project name no longer
+  produce a raw Docker daemon error. The name is sanitized before use.
+- `drydock run`/`drydock shell` now emit a friendly diagnostic instead of a raw Docker
+  name-collision error when a same-named container is already running.
+
+### Known limitations
+- Two project directories whose basenames sanitize to the same name (e.g.
+  `sideralith.com` and `sideralith-com` both become `sideralith-com`) share a
+  container namespace and deploy-key path. No collision detection is added; the
+  collision-rename hint in the conflict diagnostic is the recovery path.
+
+### Migration notes
+- Deploy keys named after a dotted project directory (e.g. `sideralith.com_deploy`)
+  are no longer found automatically after this change — the deploy-key path now uses
+  the sanitized name (`sideralith-com_deploy`). Rename the key file to the sanitized
+  form to restore SSH deploy access. A warning is emitted at startup if a key exists
+  under the old (unsanitized) filename.
+
 ## [0.1.1] - 2026-05-15
 
 Container hardening defaults.
