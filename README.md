@@ -241,19 +241,8 @@ See [docs/security.md](docs/security.md) for the cap list rationale.
 
 ## Roadmap
 
-drydock today is Claude Code-focused. The architecture (storage split + hooks
-RO + DooD) is agent-agnostic; only mount paths and config formats differ per
-agent. On the table:
-
-- [ ] **Codex CLI** adapter — different config dir, different settings schema
-- [ ] **OpenCode** adapter · **pi.dev** adapter
-- [ ] **Multi-agent rotation** — same drydock infra, switch agents on demand
-- [ ] **Per-project profiles** — different deny lists / mount sets for
-  sensitive vs. public projects
-- [ ] **Socket-proxy integration** — optional `cetusguard` / `Tecnativa`
-  layer for adversarial threat models
-- [ ] **macOS support** — Docker Desktop quirks around the socket + gRPC FUSE
-- [ ] **Cloud sandbox mode** — same architecture in a remote VM
+See **[docs/ROADMAP.md](docs/ROADMAP.md)** — the canonical backlog: what is
+planned, why, and in which release.
 
 ## Contributing
 
