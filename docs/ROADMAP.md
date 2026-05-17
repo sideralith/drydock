@@ -27,15 +27,15 @@ file.
 
 | Item | Scope | Issue | Status |
 |------|-------|-------|--------|
-| [link-sibling-projects](#link-sibling-projects) | v0.2.0 | — | Planned |
-| [install-interactive](#install-interactive) | v0.2.0 | — | Planned |
-| [auto-sync](#auto-sync) | v0.2.0 | — | Planned |
+| [link-sibling-projects](#link-sibling-projects) | v0.2.0 | [#13][i13] | Planned |
+| [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Planned |
+| [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Planned |
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Planned |
 | [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Planned |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
-| [toolchain-mise](#toolchain-mise) | v0.3.0 | — | Planned |
-| [per-project-image-layer](#per-project-image-layer) | v0.3.0 | — | Planned |
-| [agent-adapter](#agent-adapter) | v0.4.0 | — | Planned |
+| [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
+| [per-project-image-layer](#per-project-image-layer) | v0.3.0 | [#17][i17] | Planned |
+| [agent-adapter](#agent-adapter) | v0.4.0 | [#18][i18] | Planned |
 
 Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene ·
 **v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
@@ -46,6 +46,12 @@ Resolution order within a release is not yet decided.
 [i8]: https://github.com/sideralith/drydock/issues/8
 [i9]: https://github.com/sideralith/drydock/issues/9
 [i10]: https://github.com/sideralith/drydock/issues/10
+[i13]: https://github.com/sideralith/drydock/issues/13
+[i14]: https://github.com/sideralith/drydock/issues/14
+[i15]: https://github.com/sideralith/drydock/issues/15
+[i16]: https://github.com/sideralith/drydock/issues/16
+[i17]: https://github.com/sideralith/drydock/issues/17
+[i18]: https://github.com/sideralith/drydock/issues/18
 
 ---
 
