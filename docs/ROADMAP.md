@@ -6,11 +6,15 @@ file.
 
 ## How this file works
 
-- An item does not exist until it is listed here. New ideas are added here first.
-- **GitHub issues are a derived execution surface.** An issue is opened from an
-  item below only when work on it is imminent; it carries the discussion and the
-  PRs and is closed when the item ships. Issues link back here; this file links
-  to them.
+- This file is the **curated, accepted backlog** — what drydock has decided to
+  build and roughly when. It is the single source of truth for the *plan*.
+- **Ideas come in through GitHub issues.** Anyone can open one to report a bug or
+  propose a feature — that is the front door, and where discussion happens (see
+  [CONTRIBUTING.md](../CONTRIBUTING.md)). drydock's contribution surface is GitHub
+  issues and PRs (`CLAUDE.md` §5).
+- A maintainer **promotes** an accepted idea onto this file, with a scope and a
+  rationale. Not every issue becomes a roadmap item — this file is the curated
+  subset, not the raw intake. An item may link the issue it came from.
 - Release scopes (`v0.2.0`, `v0.2.1`, …) are planning targets, not promises. An
   item moves between releases only by an explicit decision, recorded here.
 - A discarded item stays listed, with its reason, so it is not silently
