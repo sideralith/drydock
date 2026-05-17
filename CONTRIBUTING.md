@@ -30,8 +30,24 @@ npm install -g bats
 ### Run the suite
 
 ```bash
-bats test/
+scripts/test.sh        # recommended — wraps `bats test/`
 ```
+
+`scripts/test.sh` is a thin wrapper around `bats test/`. On a normal host it is
+transparent. Pass through specific files or flags as usual:
+`scripts/test.sh test/lib_paths.bats`.
+
+#### Running the suite inside a drydock container
+
+`scripts/test.sh` exists so the suite is runnable from *inside* a drydock
+container too. The container hardening overlay (INV-8) mounts `/tmp` as a
+`noexec` tmpfs; bats writes stub executables under `$TMPDIR`, so a bare
+`bats test/` fails ~20 tests with `Permission denied`. The wrapper detects a
+`noexec` tmpdir and redirects bats to an exec-allowed path under `$HOME`
+(`~/.cache/drydock/bats-tmp`) — the `/tmp` hardening is left untouched. It also
+falls back to `npx --yes bats` when no `bats` binary is on `PATH` (the base
+image ships none). Always use `scripts/test.sh` inside the container; plain
+`bats test/` is the host-only invocation.
 
 ### No submodule step needed
 
@@ -157,9 +173,9 @@ GitHub Issues is the only intake channel for v0.1.0 — there is no Discord, mai
 Run these three checks locally before pushing. CI runs the same gates and a red build blocks merge.
 
 ```bash
-shellcheck bin/drydock lib/*.sh install.sh   # must produce no errors
-shfmt -d bin/drydock lib/ install.sh         # must produce no diff
-bats test/                                   # all tests must pass
+shellcheck bin/drydock lib/*.sh scripts/*.sh install.sh   # must produce no errors
+shfmt -d bin/drydock lib/ scripts/ install.sh             # must produce no diff
+scripts/test.sh                                           # all tests must pass
 ```
 
 Every script MUST start with `set -euo pipefail` — see [CLAUDE.md §3: Code / Tooling Conventions](CLAUDE.md#3-code--tooling-conventions) for the full Bash conventions.
