@@ -41,7 +41,9 @@ Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene
 **v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
 agent-agnostic infrastructure.
 
-Resolution order within a release is not yet decided.
+Resolution order — **v0.2.0**: self-awareness → install-interactive → auto-sync →
+concurrent-sessions → link-sibling-projects. Order for later releases is not yet
+decided.
 
 [i8]: https://github.com/sideralith/drydock/issues/8
 [i9]: https://github.com/sideralith/drydock/issues/9
