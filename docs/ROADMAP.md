@@ -34,11 +34,13 @@ file.
 | [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Planned |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | — | Planned |
-| [agent-adapter](#agent-adapter) | v0.3.0 | — | Planned |
+| [per-project-image-layer](#per-project-image-layer) | v0.3.0 | — | Planned |
+| [agent-adapter](#agent-adapter) | v0.4.0 | — | Planned |
 | [unreal-template](#unreal-template) | — | — | Discarded |
 
 Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene ·
-**v0.3.0**: drydock as agent-agnostic infrastructure.
+**v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
+agent-agnostic infrastructure.
 
 Resolution order within a release is not yet decided.
 
@@ -187,7 +189,7 @@ check.
 
 ---
 
-## v0.3.0 — drydock as agent-agnostic infrastructure
+## v0.3.0 — Per-project environment customization
 
 ### toolchain-mise
 
@@ -201,11 +203,11 @@ binary in the image; toolchains themselves live in a host-mounted volume, not th
 image. Per-project `.mise.toml`, matching drydock's per-project declarative
 pattern.
 
-**Why this scope.** Pairs with `agent-adapter` as the "agent-agnostic
-infrastructure" release. It touches the Dockerfile and volume layout — a
-different kind of change from v0.2.0's ergonomics items. (Moved here from v0.2.0
-by an explicit decision: keeping the pair together gives both releases a clean
-identity.)
+**Why this scope.** Pairs with `per-project-image-layer` under the "per-project
+environment customization" theme — `mise` handles language runtimes, the image
+layer handles system packages. Co-designed so the two do not become overlapping
+"add stuff" mechanisms. Touches the Dockerfile and volume layout — a different
+kind of change from v0.2.0's ergonomics items.
 
 **Invariants touched.** §3 Docker convention — `mise` is the design chosen
 *because* it keeps the image minimal.
@@ -215,6 +217,57 @@ identity.)
 managers.
 
 **Provenance.** engram #1010.
+
+### per-project-image-layer
+
+**Problem.** `drydock build` builds one shared image for every project
+(`cmd_build`). A heavy, optional dependency that one project needs — the Chromium
+runtime libraries for the Playwright MCP, ~150 MB — was hardcoded into that
+shared image, so every project inherits the bloat whether it does browser
+automation or not. This is a §3 ("the image stays minimal") drift, and the next
+heavy optional dependency will repeat it.
+
+**Proposed solution.** A per-project derived image. drydock keeps building the
+minimal shared base; a project that declares extra needs gets a thin
+`drydock-<project>` image built `FROM` the base. Two tiers:
+
+- **Declarative (the common case)** — a file committed in the project repo
+  listing extra Debian packages, and optionally extra apt sources *as data*
+  (repo URL + signing key). drydock turns it into image layers. Declarative data
+  only, never arbitrary commands — so a committed file is not a root-code
+  execution vector.
+- **Escape hatch (advanced)** — a project may instead ship its own Dockerfile
+  `FROM` the drydock base for arbitrary build steps. Explicit opt-in, full power,
+  owned by the dev. This is why the declarative file does *not* need to grow a
+  "run any command" capability.
+
+Both tiers produce the per-project derived image; Docker layer caching keeps
+rebuilds cheap.
+
+**Why this scope.** Pairs with `toolchain-mise` under the "per-project
+environment customization" theme — `mise` handles language runtimes (userspace,
+host-mounted volume), this handles system packages (root, image build).
+Co-designed so the two do not become overlapping "add stuff" mechanisms.
+
+**Invariants touched.** §3 Docker convention — *restores* "the image stays
+minimal" for the base (the bloat moves per-project); the v0.1.x Playwright
+hardcoding is the concrete drift this undoes. INV-8 — packages install at build
+time because the running container is non-root with `no-new-privileges` (runtime
+`apt` is impossible). INV-7 — the declarative file is data, not commands, so a
+committed file is not an execution vector; the BYO-Dockerfile escape hatch is an
+explicit advanced opt-in (standard Docker, owned by the dev).
+
+**Open questions.** File format and name; whether the declarative file and a BYO
+project Dockerfile are alternatives or composable; per-project image naming and
+cache invalidation; whether a per-dev layer in `~/.config/drydock/` is a
+follow-up.
+
+**Provenance.** This session — exploration triggered by the Playwright Dockerfile
+addition (engram #1129) bloating the shared image.
+
+---
+
+## v0.4.0 — drydock as agent-agnostic infrastructure
 
 ### agent-adapter
 
@@ -226,8 +279,8 @@ baked into the CLI.
 config paths, container state layout, MCP wiring — so drydock can host more than
 one agent.
 
-**Why this scope.** The headline of the agent-agnostic release; pairs with
-`toolchain-mise`.
+**Why this scope.** A release of its own — abstracting the agent boundary is a
+large, distinct effort, separate from the per-project-environment theme of v0.3.0.
 
 **Invariants touched.** INV-2 (each agent needs its own container-state split);
 INV-4 (the engram-optional principle generalizes — no agent should be
@@ -237,7 +290,7 @@ hard-required).
 exploration before it is actionable — currently the least-defined item on the
 roadmap.
 
-**Provenance.** Referenced as v0.3.0-paired work in engram #1010 and #1053; no
+**Provenance.** Referenced as future-release work in engram #1010 and #1053; no
 dedicated memo.
 
 ---
