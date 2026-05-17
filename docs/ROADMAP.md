@@ -20,8 +20,8 @@ file.
 - **GitHub milestones mirror this file** — a milestone is a derived grouping for
   the GitHub UI, not an authority. If a milestone and this file disagree, this
   file is right and the milestone is fixed.
-- A discarded item stays listed, with its reason, so it is not silently
-  re-proposed.
+- A rejected idea is closed as a `wontfix` issue, with the reason in the issue —
+  not kept as a tombstone here.
 
 ## Summary
 
@@ -36,7 +36,6 @@ file.
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | — | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.3.0 | — | Planned |
 | [agent-adapter](#agent-adapter) | v0.4.0 | — | Planned |
-| [unreal-template](#unreal-template) | — | — | Discarded |
 
 Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene ·
 **v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
@@ -292,18 +291,3 @@ roadmap.
 
 **Provenance.** Referenced as future-release work in engram #1010 and #1053; no
 dedicated memo.
-
----
-
-## Discarded
-
-### unreal-template
-
-**What it was.** An `examples/unreal/` template with deny-list entries for Unreal
-Engine's generated directories (`Saved/`, `Intermediate/`, `Build/`, `Binaries/`).
-
-**Why discarded.** No acceptance criteria and no demonstrated demand. Recorded
-here so it is not silently re-proposed; revivable if a real Unreal Engine user
-asks.
-
-**Provenance.** v0.2.0 handoff (optional item).
