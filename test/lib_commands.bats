@@ -762,19 +762,40 @@ _setup_icr() {
 	[ "$status" -ne 0 ]
 }
 
-@test "is_container_running: S5.4 — drydock-foo running, query drydock-foo-shell → exits non-zero (exact-name scope)" {
+@test "is_container_running: S5.4 — exact name forwarded to docker inspect, false output → exits non-zero" {
 	_setup_icr
-	# MOCK_DOCKER_INSPECT_OUTPUT=true: mock returns 'true' for ANY inspect call.
-	# But is_container_running passes the EXACT name — the real docker inspect
-	# checks exact name. In the mock, we can't scope by name, so we test
-	# that is_container_running("drydock-foo-shell") returns non-zero when
-	# we set MOCK_DOCKER_INSPECT_OUTPUT=false (stopped/absent for shell).
-	# To simulate: drydock-foo running but drydock-foo-shell not running,
-	# we set MOCK_DOCKER_INSPECT_OUTPUT=false so the shell name query returns false.
+	# Verifies is_container_running passes the exact name argument through to docker inspect.
 	export MOCK_DOCKER_INSPECT_OUTPUT=false
 	export MOCK_DOCKER_EXIT=0
 	run is_container_running "drydock-foo-shell"
 	[ "$status" -ne 0 ]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"drydock-foo-shell"* ]]
+}
+
+# ── mock-docker helper extension (REQ-10, S10.1–S10.2) ───────────────────────
+# These tests invoke mock-docker directly (not via is_container_running) to
+# prove the per-subcommand stdout extension is correct in isolation.
+
+@test "mock-docker: S10.1 — MOCK_DOCKER_INSPECT_OUTPUT unset → logs to DOCKER_CALL_LOG, no stdout, exits MOCK_DOCKER_EXIT" {
+	local log="$BATS_TEST_TMPDIR/mock-s101-$$.log"
+	touch "$log"
+	unset MOCK_DOCKER_INSPECT_OUTPUT
+	DOCKER_CALL_LOG="$log" MOCK_DOCKER_EXIT=0 \
+		run "$DRYDOCK_HOME/test/helpers/mock-docker" inspect --format '{{.State.Running}}' drydock-foo
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+	grep -q "inspect --format" "$log"
+}
+
+@test "mock-docker: S10.2 — MOCK_DOCKER_INSPECT_OUTPUT=true → prints 'true' on stdout" {
+	local log="$BATS_TEST_TMPDIR/mock-s102-$$.log"
+	touch "$log"
+	DOCKER_CALL_LOG="$log" MOCK_DOCKER_EXIT=0 MOCK_DOCKER_INSPECT_OUTPUT=true \
+		run "$DRYDOCK_HOME/test/helpers/mock-docker" inspect --format '{{.State.Running}}' drydock-foo
+	[ "$status" -eq 0 ]
+	[ "$output" = "true" ]
 }
 
 # ── cmd_run running-container pre-check (REQ-6, S6.1–S6.2) ──────────────────
