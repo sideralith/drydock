@@ -236,8 +236,8 @@ See [docs/security.md](docs/security.md) for the cap list rationale.
   protect against; when to layer a socket proxy.
 - **[docs/troubleshooting.md](docs/troubleshooting.md)** — common failures
   and fixes.
-- **[docs/v0.1.0-release-plan.md](docs/v0.1.0-release-plan.md)** — current
-  pre-release polish plan (for contributors / future sessions).
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** — the canonical backlog: what is
+  planned, why, and in which release.
 
 ## Roadmap
 
