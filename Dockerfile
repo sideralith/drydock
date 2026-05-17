@@ -99,6 +99,18 @@ RUN set -eux; \
         usermod -aG docker-host ${USER_NAME}; \
     fi
 
+# ── Playwright / Chromium runtime libraries ─────────────────────────────────
+# System libs the Playwright MCP's bundled Chromium dynamically links against
+# (libglib-2.0.so.0, libnss3, libgbm1, …). debian:12-slim omits them. They must
+# land at build time: the container runs non-root with no-new-privileges:true
+# (INV-8), so `playwright install-deps` — which needs root — cannot run inside.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libglib2.0-0 libnss3 libnspr4 libdbus-1-3 libatk1.0-0 \
+        libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libatspi2.0-0 \
+        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+        libxcb1 libxext6 libx11-6 libpango-1.0-0 libcairo2 libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
 USER ${USER_NAME}
 
 # PATH order:
