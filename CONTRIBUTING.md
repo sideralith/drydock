@@ -164,9 +164,7 @@ GitHub Issues is the only intake channel for v0.1.0 — there is no Discord, mai
 
 5. **CI must pass.** The three gates are documented in [§ Code style](#code-style); a red CI blocks merge.
 
-6. A maintainer will review. For now, write a clear PR description (what changed, why, how tested) — a PR template may land post-v0.1.0.
-
-> Note: no GitHub remote exists yet (v0.1.0 ships it). These instructions describe the canonical GitHub OSS flow and will be end-to-end verifiable once the remote is live.
+6. A maintainer will review. For now, write a clear PR description (what changed, why, how tested).
 
 ## Code style
 
