@@ -7,7 +7,6 @@ Thanks for contributing to drydock. Use the table of contents below to jump to w
 - [Code style](#code-style)
 - [Testing](#testing)
 - [Where to discuss](#where-to-discuss)
-- [Sharing project memory with engram (optional)](#sharing-project-memory-with-engram-optional)
 - [Giving the sandbox GitHub credentials (optional)](#giving-the-sandbox-github-credentials-optional)
 
 ## Testing
@@ -183,30 +182,3 @@ Every script MUST start with `set -euo pipefail` — see [CLAUDE.md §3: Code / 
 Use **GitHub Issues** for bugs, feature requests, and design questions. Issues are public and searchable — filing an issue helps future contributors with the same question.
 
 GitHub Discussions may open post-v0.1.0 if the community asks for a less-formal forum. There is no Discord, Slack, or mailing list for v0.1.0.
-
-## Sharing project memory with engram (optional)
-
-engram is optional per drydock's design ([CLAUDE.md INV-4: Engram is Optional](CLAUDE.md#inv-4-engram-is-optional)): drydock works fully without it. This section applies only if you already use engram and want to share architectural memories with other drydock contributors.
-
-**Maintainer side** — after closing an architectural decision relevant to drydock:
-
-```bash
-cd ~/git/drydock
-engram sync --project drydock   # creates a chunk in .engram/
-git add .engram/
-git commit -m "sync engram memories: <topic>"
-git push
-```
-
-**Contributor side** (engram users only):
-
-```bash
-git pull
-engram sync --import            # absorbs new chunks into your local DB
-```
-
-After `engram sync --import`, `engram search` returns the maintainer's drydock memories in your tool.
-
-**Not using engram?** The `.engram/` directory is committed to the repo (`.gitignore` deliberately does not exclude it — chunks are text-based and meant to be versioned). You can ignore `.engram/` entirely; drydock works fine without it.
-
-This is NOT "engram cloud sync" — no central server is involved. It is a git-based sharing pattern.

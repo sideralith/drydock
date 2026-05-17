@@ -257,9 +257,8 @@ agent. On the table:
 
 ## Contributing
 
-Issues and PRs welcome. Code style: `shellcheck` must pass on `bin/drydock`.
-Contribution guide coming in `CONTRIBUTING.md` (it'll also document the
-optional `.engram/` git-committed memory-chunk pattern for sharing context).
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the testing
+and lint contract, the PR flow, and how to file a bug.
 
 ## License
 

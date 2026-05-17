@@ -25,5 +25,9 @@ Thumbs.db
 # only a path-discoverable mirror for the next session and must not be versioned.
 /.handoff/
 
+# Engram memory chunks — per-developer working memory, not a publication
+# format; never versioned (chunks can embed private project context).
+/.engram/
+
 # Social media post drafts — local-only working notes, not part of the project
 /.social/

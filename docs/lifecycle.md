@@ -74,10 +74,6 @@ engram export ~/engram-snapshot.json
 engram import ~/engram-snapshot.json
 ```
 
-For team sharing in a repo, engram also supports git-committed chunks
-(`engram sync` creates a chunk in `.engram/`, `engram sync --import` absorbs
-chunks) — see CONTRIBUTING.md once it lands.
-
 ## Mental model
 
 - **`~/.local/`** = **shared toolchain**. Source of truth = host. Update on
