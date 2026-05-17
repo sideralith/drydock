@@ -146,7 +146,7 @@ Include in the body:
 4. **Expected behavior** — what you thought would happen.
 5. **Actual behavior** — what happened instead (terminal output, error messages, exit code).
 
-GitHub Issues is the only intake channel for v0.1.0 — there is no Discord, mailing list, or external tracker. Issue templates may land post-v0.1.0; for now, use this structure.
+GitHub Issues is the only intake channel — there is no Discord, mailing list, or external tracker. A bug-report form lives in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/bug_report.yml); the structure below is what it asks for.
 
 ## How to submit a PR
 
