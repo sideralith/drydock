@@ -146,8 +146,9 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   cost they impose on contributors.
 - **Why**: Scope creep into adversarial sandboxing turns drydock into a sandbox-platform
   meta-project, competing with mature sandboxing tools (gVisor, sysbox, firecracker) on their turf
-  rather than solving the developer-ergonomics problem it was built for. v0.2.0 may revisit if
-  there is documented real demand.
+  rather than solving the developer-ergonomics problem it was built for. This boundary is
+  reopened only by documented real demand — a concrete use case from a real user — never by
+  release cadence or speculative interest.
 - **Consequence of violating**: drydock drifts from its niche — a minimal, ergonomic containerized
   dev workspace — into a maintenance-heavy sandbox platform. The resulting complexity drives away
   contributors and the tool is abandoned in favor of simpler alternatives.
@@ -224,7 +225,8 @@ a motivated attacker who controls the agent's input and is trying to escape the 
   against the actual use case AND show the maintenance cost they impose.
 - **Why**: Scope creep destroys minimal tools. Every adversarial defense compounds the testing
   matrix (new kernel features, OS compatibility), onboarding friction, and maintenance surface.
-  v0.2.0 may revisit if real documented demand emerges — not speculative demand.
+  This boundary is reopened only by documented real demand — a concrete use case from a real
+  user — never by release cadence or speculative interest.
 - **Consequence of violating**: drydock becomes a sandbox-platform meta-project, drifts from its
   ergonomic-dev-workspace niche, and fails to ship because it is competing on sandboxing with
   gVisor and firecracker rather than solving the problem it was built for.
