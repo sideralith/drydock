@@ -211,8 +211,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: `make shell-api` and all compose-targeting commands stop working;
   the container becomes an isolated bubble disconnected from the host dev stack drydock augments.
 
-See `→ CONTRIBUTING.md` for the testing and lint contract (full content lands when issue #4
-merges).
+See `→ CONTRIBUTING.md` for the testing and lint contract.
 
 ## 4. Threat Model Boundary
 
@@ -254,7 +253,7 @@ enforces `--no-verify`/`--force` inside sandboxed sessions. Conventional-commit 
 trailer rules are soft norms — not CI-enforced yet. They live here because the agent is the
 primary commit author.
 
-See `→ CONTRIBUTING.md` (full testing/lint contract when issue #4 lands).
+See `→ CONTRIBUTING.md` for the full testing/lint contract.
 
 ## 6. Personality / Tone
 

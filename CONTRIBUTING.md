@@ -146,7 +146,7 @@ Include in the body:
 4. **Expected behavior** — what you thought would happen.
 5. **Actual behavior** — what happened instead (terminal output, error messages, exit code).
 
-GitHub Issues is the only intake channel for v0.1.0 — there is no Discord, mailing list, or external tracker. Issue templates may land post-v0.1.0; for now, use this structure.
+GitHub Issues is the only intake channel — there is no Discord, mailing list, or external tracker. A bug-report form lives in [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/bug_report.yml); the structure below is what it asks for.
 
 ## How to submit a PR
 
@@ -164,9 +164,7 @@ GitHub Issues is the only intake channel for v0.1.0 — there is no Discord, mai
 
 5. **CI must pass.** The three gates are documented in [§ Code style](#code-style); a red CI blocks merge.
 
-6. A maintainer will review. For now, write a clear PR description (what changed, why, how tested) — a PR template may land post-v0.1.0.
-
-> Note: no GitHub remote exists yet (v0.1.0 ships it). These instructions describe the canonical GitHub OSS flow and will be end-to-end verifiable once the remote is live.
+6. A maintainer will review. For now, write a clear PR description (what changed, why, how tested).
 
 ## Code style
 

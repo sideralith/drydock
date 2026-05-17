@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a wrong, broken, or surprising drydock behavior.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        drydock's threat model is **accidents, not adversaries**. The bind-mounted Docker
+        socket is root-equivalent on the host *by design* (`CLAUDE.md` INV-6) — that is not
+        a vulnerability. For anything else, thanks for filing.
+  - type: input
+    id: command
+    attributes:
+      label: Command you ran
+      description: The full invocation, including every flag.
+      placeholder: drydock init --update
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: What you did before the command. Include a minimal directory layout if it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you thought would happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened — terminal output, error messages, exit code.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Run each command and paste its output.
+      value: |
+        drydock version (run inside the project):
+        docker --version:
+        OS and version:
+      render: text
+    validations:
+      required: true
