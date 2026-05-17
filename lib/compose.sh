@@ -291,8 +291,8 @@ export_compose_env() {
 	# key file exists at the old location, warn the user to rename it. Non-fatal.
 	local _raw_basename
 	_raw_basename="$(basename "$project_dir")"
-	if [ "$_raw_basename" != "$PROJECT_NAME" ] \
-			&& [ -f "$HOME/.config/drydock/keys/${_raw_basename}_deploy" ]; then
+	if [ "$_raw_basename" != "$PROJECT_NAME" ] &&
+		[ -f "$HOME/.config/drydock/keys/${_raw_basename}_deploy" ]; then
 		warn "project name normalized to '$PROJECT_NAME'; deploy key '${_raw_basename}_deploy' will not be found — rename it to '${PROJECT_NAME}_deploy'"
 	fi
 
