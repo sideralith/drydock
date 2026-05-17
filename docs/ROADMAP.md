@@ -17,6 +17,9 @@ file.
   subset, not the raw intake. An item may link the issue it came from.
 - Release scopes (`v0.2.0`, `v0.2.1`, …) are planning targets, not promises. An
   item moves between releases only by an explicit decision, recorded here.
+- **GitHub milestones mirror this file** — a milestone is a derived grouping for
+  the GitHub UI, not an authority. If a milestone and this file disagree, this
+  file is right and the milestone is fixed.
 - A discarded item stays listed, with its reason, so it is not silently
   re-proposed.
 
