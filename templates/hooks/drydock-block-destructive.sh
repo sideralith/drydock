@@ -142,8 +142,11 @@ fi
 # Two-part check (ordering-independent):
 #   (a) rm is present AND any -r/-R flag is present anywhere in the segment;
 #   (b) a space-preceded dot or .git target at word boundary is present.
-# The two checks are ordering-independent: the flag regex [[:space:]]-[^[:space:]]*[rR]
-# matches "-r" regardless of whether it appears before or after the target argument.
+# The two checks are ordering-independent: the flag regex
+# [[:space:]](-[A-Za-z]*[rR][A-Za-z]*|--recursive)([[:space:]]|$) matches a recursive
+# flag regardless of whether it appears before or after the target argument. The
+# inner class is letters-only so it cannot consume a long flag's hyphens — e.g.
+# --verbose is never mistaken for a recursive flag.
 for _seg in "${_segments[@]}"; do
 	if [[ "$_seg" =~ (^|[[:space:]])rm[[:space:]] ]] &&
 		[[ "$_seg" =~ [[:space:]](-[A-Za-z]*[rR][A-Za-z]*|--recursive)([[:space:]]|$) ]]; then
