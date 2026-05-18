@@ -512,6 +512,34 @@ setup() {
 	[[ "$log" != *"--exclude=mcp/engram.json"* ]]
 }
 
+@test "cmd_sync: does NOT inject hooks.SessionStart into container settings.json" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	# Start with settings.json that has no hooks block.
+	printf '{"permissions":{"deny":[]}}\n' >"$CONTAINER_CLAUDE/settings.json"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	# After sync, hooks.SessionStart MUST still be absent — it is now the
+	# managed layer's responsibility, not cmd_sync's.
+	local result
+	result="$(jq '.hooks.SessionStart' "$CONTAINER_CLAUDE/settings.json")"
+	[ "$result" = "null" ]
+}
+
 # ── ensure_runtime_dirs: shared mode ─────────────────────────────────────────
 
 @test "ensure_runtime_dirs: shared mode (sentinel present + usable) — missing CONTAINER_ENGRAM does NOT trigger cmd_setup" {

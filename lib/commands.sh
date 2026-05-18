@@ -21,9 +21,9 @@ Commands:
   run [DIR] [-- ARGS] Launch Claude in DIR (or cwd); ARGS after -- go to claude
                         (e.g. drydock run -- --resume "my-session")
   shell [DIR] [-- CMD] Bash shell in container at DIR; with -- CMD, run CMD instead
-  init [DIR] [--update] Initialize a project — creates .claude/settings.json baseline
-                        (per-project, like \`git init\`); --update merges new template
-                        deny entries into an existing file
+  init [DIR]            Initialize a project — creates .claude/settings.json stub
+                        (per-project, like \`git init\`); drydock policy lives in the
+                        managed-settings layer baked into the image
   build               Build/rebuild the drydock image
   sync                Sync host ~/.claude/ → ~/.claude-container/
   status              Short health snapshot
@@ -37,8 +37,7 @@ Examples:
   cd ~/git/myproject && drydock                # launch claude there
   drydock run ~/git/otherproject               # explicit dir
   drydock run -- --resume "my-session"         # resume a session
-  drydock init ~/git/newproject                # baseline for a new project
-  drydock init --update                        # merge new template denies
+  drydock init ~/git/newproject                # create settings.json stub
   drydock build                                # rebuild image
 
 DRYDOCK_HOME=$DRYDOCK_HOME
@@ -128,16 +127,16 @@ cmd_setup() {
 	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
 }
 
-# Per-project setup. Creates `.claude/settings.json` baseline in the target
+# Per-project setup. Creates `.claude/settings.json` stub in the target
 # directory. Same mental model as `git init` — once per project.
-# With --update: merges new template deny entries into an existing file.
+# drydock policy (deny rules + SessionStart hook) lives in the managed-settings
+# layer baked into the image; this stub is for per-project dev customization.
 cmd_init() {
-	# drydock init [DIR] [--update]
-	local project_dir_arg="" do_update=0
+	# drydock init [DIR]
+	local project_dir_arg=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		--update | -u) do_update=1 ;;
-		-*) err "drydock init: opción desconocida: $1 (usá --update)" ;;
+		-*) err "drydock init: opción desconocida: $1" ;;
 		*) project_dir_arg="$1" ;;
 		esac
 		shift
@@ -151,27 +150,10 @@ cmd_init() {
 	local settings="$project_dir/.claude/settings.json"
 
 	if [ ! -f "$settings" ]; then
-		sed "s|__HOME__|$HOME|g" "$DEFAULT_SETTINGS_TEMPLATE" >"$settings"
-		ok "$settings creado con baseline de denies"
-	elif [ "$do_update" -eq 1 ]; then
-		command -v jq >/dev/null || err "drydock init --update necesita jq"
-		jq empty "$settings" 2>/dev/null || err "$settings no es JSON válido — arreglalo a mano o borralo y re-corré drydock init"
-		local rendered merged
-		rendered="$(sed "s|__HOME__|$HOME|g" "$DEFAULT_SETTINGS_TEMPLATE")"
-		merged="$(jq -n --argjson existing "$(cat "$settings")" --argjson template "$rendered" '
-			($existing.permissions.deny // []) as $ed
-			| ($template.permissions.deny // []) as $td
-			| $existing
-			| .permissions.deny = ($ed + ($td | map(select(. as $x | ($ed | index($x)) == null))))
-		')"
-		if [ "$(printf '%s' "$merged" | jq -c '.permissions.deny')" = "$(jq -c '.permissions.deny' "$settings")" ]; then
-			ok "$settings ya tiene todas las deny entries del template — sin cambios"
-		else
-			printf '%s\n' "$merged" >"$settings.tmp.$$" && mv "$settings.tmp.$$" "$settings"
-			ok "$settings actualizado — deny entries del template fusionadas (customizaciones preservadas)"
-		fi
+		cp "$DEFAULT_SETTINGS_TEMPLATE" "$settings"
+		ok "$settings creado"
 	else
-		warn "$settings ya existe — no lo sobrescribo (usá 'drydock init --update' para fusionar las deny entries nuevas del template)"
+		warn "$settings ya existe — no lo sobrescribo"
 		note "Template baseline en: $DEFAULT_SETTINGS_TEMPLATE"
 	fi
 
