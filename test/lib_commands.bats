@@ -957,3 +957,64 @@ _setup_cmd_conflict() {
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"already running"* ]]
 }
+
+# ── cmd_sync: hooks.SessionStart re-injection (scenario 6a, 6b) ──────────────
+
+@test "cmd_sync: settings.json without hooks.SessionStart → re-injection adds it" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Pre-create container dirs with a settings.json that lacks hooks.SessionStart.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	printf '{"permissions":{"deny":[]}}\n' >"$CONTAINER_CLAUDE/settings.json"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	local cmd
+	cmd="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$CONTAINER_CLAUDE/settings.json")"
+	[[ "$cmd" == *"drydock-session-start.sh"* ]]
+}
+
+@test "cmd_sync: settings.json with different hooks.SessionStart → overwritten from canonical" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Pre-create container dirs with a settings.json that has a stale hook value.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"old-value","timeout":5}]}]}}\n' \
+		>"$CONTAINER_CLAUDE/settings.json"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	local cmd
+	cmd="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$CONTAINER_CLAUDE/settings.json")"
+	# Must have been overwritten to canonical — not "old-value"
+	[[ "$cmd" != "old-value" ]]
+	[[ "$cmd" == *"drydock-session-start.sh"* ]]
+	# No duplication — exactly one entry in the array
+	local count
+	count="$(jq '.hooks.SessionStart | length' "$CONTAINER_CLAUDE/settings.json")"
+	[ "$count" -eq 1 ]
+}
