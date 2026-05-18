@@ -389,7 +389,7 @@ ask_add_path_to_rc() {
 			_choice="${_choice:-1}"
 			# Validate: must be a positive integer within 1.._count
 			case "$_choice" in
-			''|*[!0-9]*) _choice=1 ;;
+			'' | *[!0-9]*) _choice=1 ;;
 			esac
 			[ "$_choice" -ge 1 ] && [ "$_choice" -le "$_count" ] || _choice=1
 			_rc="$(printf '%s\n' "$_candidates" | sed -n "${_choice}p")"

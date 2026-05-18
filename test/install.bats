@@ -18,7 +18,7 @@ make_fifo() {
 # Write a uname stub into <dir> that echoes <os> when called with -s.
 make_uname_stub() {
 	local _dir="$1" _os="$2"
-	printf '#!/usr/bin/env bash\nprintf '"'"'%s\n'"'"' "%s"\n' "$_os" >"$_dir/uname"
+	printf '#!/usr/bin/env bash\nprintf '"'"'%%s\n'"'"' "%s"\n' "$_os" >"$_dir/uname"
 	chmod +x "$_dir/uname"
 }
 
@@ -187,7 +187,7 @@ setup() {
 	# Fails RED: ask_engram_mode() / ask() don't exist yet
 	local _home="$BATS_TEST_TMPDIR/home-ask-y"
 	local _tty="$BATS_TEST_TMPDIR/ask-tty-y"
-	printf 'y\n' >"$_tty"  # regular file: ask() opens it via exec 3<
+	printf 'y\n' >"$_tty" # regular file: ask() opens it via exec 3<
 
 	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
@@ -208,7 +208,7 @@ setup() {
 	# (Once implemented: sentinel absent is the correct conservative default)
 	local _home="$BATS_TEST_TMPDIR/home-ask-empty"
 	local _tty="$BATS_TEST_TMPDIR/ask-tty-empty"
-	printf '\n' >"$_tty"  # only a newline → empty answer → default
+	printf '\n' >"$_tty" # only a newline → empty answer → default
 
 	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
@@ -255,7 +255,7 @@ setup() {
 	# → ask_engram_mode silently skips; sentinel never written
 	local _home="$BATS_TEST_TMPDIR/home-wsl2"
 	local _tty="$BATS_TEST_TMPDIR/tty-wsl2"
-	printf 'y\n' >"$_tty"  # would say yes if prompt appeared
+	printf 'y\n' >"$_tty" # would say yes if prompt appeared
 
 	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
@@ -275,7 +275,7 @@ setup() {
 	# → ask_engram_mode silently skips; sentinel never written
 	local _home="$BATS_TEST_TMPDIR/home-macos"
 	local _tty="$BATS_TEST_TMPDIR/tty-macos"
-	printf 'y\n' >"$_tty"  # would say yes if prompt appeared
+	printf 'y\n' >"$_tty" # would say yes if prompt appeared
 
 	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
@@ -447,7 +447,7 @@ _setup_build_stub() {
 		>"$_install/bin/drydock"
 	chmod +x "$_install/bin/drydock"
 	local _tty="$BATS_TEST_TMPDIR/tty-build-decline"
-	printf 'n\nn\n' >"$_tty"  # engram: n, build: n
+	printf 'n\nn\n' >"$_tty" # engram: n, build: n
 
 	run env DRYDOCK_INSTALL_DIR="$_install" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
@@ -494,7 +494,7 @@ _setup_build_stub() {
 	local _home="$BATS_TEST_TMPDIR/home-path-in-path"
 	mkdir -p "$_home"
 	local _tty="$BATS_TEST_TMPDIR/tty-path-in-path"
-	printf 'n\nn\n' >"$_tty"  # engram: n, build: n; no 3rd prompt expected
+	printf 'n\nn\n' >"$_tty" # engram: n, build: n; no 3rd prompt expected
 
 	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
@@ -631,7 +631,7 @@ _setup_build_stub() {
 	mkdir -p "$_home"
 	touch "$_home/.bashrc"
 	local _tty="$BATS_TEST_TMPDIR/tty-path-unamb"
-	printf 'n\nn\ny\n' >"$_tty"  # only 3 prompts, no rc-select
+	printf 'n\nn\ny\n' >"$_tty" # only 3 prompts, no rc-select
 
 	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
