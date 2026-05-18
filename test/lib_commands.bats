@@ -986,3 +986,41 @@ _setup_cmd_conflict() {
 	[[ "$output" != *"already running"* ]]
 }
 
+# ── cmd_doctor: managed-settings policy line ─────────────────────────────────
+# G-1: doctor output must report the drydock managed-settings policy deny count.
+# G-2: the project settings.json line must NOT present its deny count as the
+#      security indicator — it is project customization, not the protection.
+
+@test "cmd_doctor: reports managed-settings policy deny count from templates/managed-settings.d/" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Run doctor from a tmpdir with no .claude/ so we get the "missing" branch.
+	local tmpdir
+	tmpdir="$(mktemp -d)"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+
+	# G-1: output must mention the managed-settings layer and a non-zero policy count.
+	[[ "$output" == *"managed-settings"* ]]
+	[[ "$output" =~ [1-9][0-9]*[[:space:]]*deny ]] || [[ "$output" =~ deny[[:space:]]*rule ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+

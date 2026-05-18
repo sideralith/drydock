@@ -400,13 +400,21 @@ cmd_doctor() {
 		printf '  drydock image:    %s\n' "$(docker image inspect "$IMAGE" --format '{{.Created}}')"
 	fi
 	echo
+	printf '── drydock policy ──\n'
+	local _policy_count=0
+	for _f in "$DRYDOCK_HOME/templates/managed-settings.d/"*.json; do
+		[ -f "$_f" ] || continue
+		local _n
+		_n="$(jq '(.permissions.deny // []) | length' "$_f" 2>/dev/null || echo 0)"
+		_policy_count=$((_policy_count + _n))
+	done
+	printf '  managed-settings:  \033[32m%s deny rules\033[0m (image-baked policy layer — always active)\n' "$_policy_count"
+	echo
 	printf '── current dir context ──\n'
 	printf '  pwd:              %s\n' "$PWD"
 	if [ -d "$PWD/.claude" ]; then
 		if [ -f "$PWD/.claude/settings.json" ]; then
-			local deny_count
-			deny_count="$(jq -r '.permissions.deny // [] | length' "$PWD/.claude/settings.json" 2>/dev/null || echo '?')"
-			printf '  .claude/settings.json: \033[32mfound\033[0m (%s deny entries)\n' "$deny_count"
+			printf '  .claude/settings.json: \033[32mfound\033[0m (project customization)\n'
 		else
 			printf '  .claude/settings.json: \033[33mmissing\033[0m → drydock init\n'
 		fi
