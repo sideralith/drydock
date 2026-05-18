@@ -234,27 +234,6 @@ cmd_sync() {
 		--exclude='*.bak.pre-dockerized/' \
 		${_engram_exclude:+"$_engram_exclude"} \
 		/src/ /dst/
-	# Re-inject hooks.SessionStart into the container's settings.json for config
-	# freshness (D1): rsync --delete above syncs from host, which lacks the hook
-	# entry since the hook file only exists in-container at /opt/drydock/hooks/.
-	# This is ergonomics/freshness, NOT tamper-resistance.
-	local _container_settings="$CONTAINER_CLAUDE/settings.json"
-	# INTENTIONAL silent skip (verify S-2): if the container's settings.json does
-	# not exist, re-injection is a deliberate no-op — not an error. `drydock init`
-	# always precedes `sync` and creates the baseline settings.json, so a missing
-	# file means there is nothing to re-inject into yet. Creating the file here
-	# would risk a malformed/partial settings.json; the guard keeps it a clean
-	# no-op instead.
-	if [ -f "$_container_settings" ]; then
-		local _hook_cmd
-		_hook_cmd="sh -c '[ -x /opt/drydock/hooks/drydock-session-start.sh ] && exec /opt/drydock/hooks/drydock-session-start.sh || exit 0'"
-		local _hook_entry
-		_hook_entry="$(printf '[{"hooks":[{"type":"command","command":"%s","timeout":5}]}]' "$_hook_cmd")"
-		jq --argjson hook "$_hook_entry" \
-			'.hooks.SessionStart = $hook' \
-			"$_container_settings" >"$_container_settings.tmp.$$" &&
-			mv "$_container_settings.tmp.$$" "$_container_settings"
-	fi
 	# Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
 	# MCP filter: when engram is not usable, strip the engram MCP server entry
 	# so Claude Code in the container sees no startup error.
