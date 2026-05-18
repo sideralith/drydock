@@ -23,6 +23,16 @@ DRYDOCK_REPO_URL="${DRYDOCK_REPO_URL:-https://github.com/sideralith/drydock.git}
 IS_TTY=0
 [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ] && IS_TTY=1
 
+# ── Interactivity seams ───────────────────────────────────────────────────────
+# DRYDOCK_INTERACTIVE: 1 when stdin+stdout are both TTYs; 0 otherwise.
+# Distinct from IS_TTY (color-only, stdout-only). Set to 0 in tests or
+# pipe installs (curl | bash) to suppress all prompts.
+: "${DRYDOCK_INTERACTIVE:=$([ -t 0 ] && [ -t 1 ] && printf 1 || printf 0)}"
+# UNAME / OSRELEASE_FILE: OS-detection seams (same pattern as lib/paths.sh:20-21)
+: "${UNAME:=uname}"
+: "${OSRELEASE_FILE:=/proc/sys/kernel/osrelease}"
+# _DRYDOCK_TTY: input source seam; default /dev/tty
+
 # ── ANSI palette (mirrors lib/common.sh:12-18) ────────────────────────────────
 
 _RED='\033[31m'
