@@ -87,7 +87,8 @@ sentinel must still be present; `=force` alone is a no-op). You accept the risk
 of SQLite WAL corruption if host and container Claude write concurrently.
 
 For the architectural rationale (SQLite WAL `fcntl` lock semantics, WSL2 9P
-layer, Docker Desktop VM boundary): see [architecture.md](architecture.md) § "engram (optional)".
+layer, Docker Desktop VM boundary): see
+[architecture.md § "engram (optional)"](architecture.md#engram-optional).
 
 ## Migrating between modes
 
@@ -128,7 +129,8 @@ container. drydock v0.1.0 treats macOS as engram-effectively-absent for the
 container; future releases may ship a Linux engram in the image or bridge via
 its HTTP API.
 
-For the two concrete future paths, see [architecture.md](architecture.md) § "macOS limitation and future paths".
+For the two concrete future paths, see
+[architecture.md § "macOS limitation and future paths"](architecture.md#macos-limitation-and-future-paths).
 
 ## Memories diverge (isolated mode)
 
@@ -157,9 +159,7 @@ drydock sync                   # sync metadata host → container
 
 ## Consolidating memories
 
-Memories saved in host Claude stay on host. Memories saved in container Claude
-stay in the container's DB. They do **not** auto-sync. Consolidate manually when
-you want:
+To merge memories from one side into the other, use a full snapshot:
 
 ```bash
 # from whichever side has the memories you want to move:
@@ -170,7 +170,6 @@ engram import ~/engram-snapshot.json
 
 ## Troubleshooting
 
-See [troubleshooting.md](troubleshooting.md) — the "Engram returns 'no memories'
-inside container" section covers common failure modes. For shared vs isolated mode
-and the migration recipe, see [§ Migrating between modes](#migrating-between-modes)
-above.
+See [troubleshooting.md § "Engram returns 'no memories' inside container"](troubleshooting.md#engram-returns-no-memories-inside-container)
+for common failure modes. For shared vs isolated mode and the migration recipe,
+see [§ Migrating between modes](#migrating-between-modes) above.
