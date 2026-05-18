@@ -377,3 +377,106 @@ teardown() {
     run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"ls /etc && rm -f foo"}}'
     [ "$status" -eq 0 ]
 }
+
+# ── F5: Non-recursive long flags MUST NOT be blocked (Judgment Day Round 3) ───
+# The bug: [^[:space:]]* in the flag regex consumed hyphens, causing any long flag
+# containing 'r'/'R' in its name to falsely match (--verbose, --force, --interactive,
+# --preserve-root). These were wrongly blocked; the fix narrows to [A-Za-z] only.
+#
+# BLOCK assertions — recursive forms still caught:
+@test "block_destructive: blocks 'rm -rf /etc' (C1-residue, lowercase -rf)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf /etc"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -Rf /' (C1-residue, uppercase -Rf)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -Rf /"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -fr /usr' (C1-residue, flag-reversed -fr)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -fr /usr"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm --recursive /etc' (C1-residue, long --recursive)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --recursive /etc"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -rf .' (C17, recursive dot target)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf ."}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -rf .git' (C17, recursive .git target)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf .git"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -rf ..' (C18, parent dir)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf .."}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -rf ../foo' (C18, traversal)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf ../foo"}}'
+    [ "$status" -eq 2 ]
+}
+
+# ALLOW assertions — non-recursive long flags MUST NOT be blocked:
+@test "block_destructive: allows 'rm --verbose /etc' (non-recursive long flag — F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --verbose /etc"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm --force /var' (non-recursive long flag — F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --force /var"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm --interactive /etc' (non-recursive long flag — F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --interactive /etc"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm --preserve-root /etc' (non-recursive long flag — F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --preserve-root /etc"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm --verbose ../config.bak' (non-recursive, C18 F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --verbose ../config.bak"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm --interactive ../foo' (non-recursive, C18 F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --interactive ../foo"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm --verbose .git' (non-recursive, C17 F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --verbose .git"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm --interactive .git' (non-recursive, C17 F5 fix)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm --interactive .git"}}'
+    [ "$status" -eq 0 ]
+}
+
+# ALLOW: confirmed unchanged (project-relative paths always safe):
+@test "block_destructive: allows 'rm -rf node_modules' (relative path — F5 unchanged allow)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf node_modules"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm -rf ./build' (relative path — F5 unchanged allow)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf ./build"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm -i .git' (non-recursive -i flag — F5 unchanged allow)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -i .git"}}'
+    [ "$status" -eq 0 ]
+}

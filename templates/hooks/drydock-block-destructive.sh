@@ -91,7 +91,7 @@ IFS=$'\x01' read -ra _segments <<<"$norm"
 # for flag-order-reversed forms like -fr and -fR that the glob *-r* cannot match.
 for _seg in "${_segments[@]}"; do
 	if [[ "$_seg" =~ (^|[[:space:]])rm[[:space:]] ]] &&
-		[[ "$_seg" =~ [[:space:]]-[^[:space:]]*[rR] ]] &&
+		[[ "$_seg" =~ [[:space:]](-[A-Za-z]*[rR][A-Za-z]*|--recursive)([[:space:]]|$) ]] &&
 		[[ "$_seg" =~ [[:space:]](/|/etc|/usr|/var|/boot|/opt|/lib|/lib32|/lib64|/sbin|/bin|/sys|/proc|/dev|/root|/home)($|[[:space:]]) ]]; then
 		echo "drydock guardrail: rm with recursive flag targeting a system path root is blocked (C1-residue)." >&2
 		echo "Specify a project-relative path or a path under your project directory." >&2
@@ -146,7 +146,7 @@ fi
 # matches "-r" regardless of whether it appears before or after the target argument.
 for _seg in "${_segments[@]}"; do
 	if [[ "$_seg" =~ (^|[[:space:]])rm[[:space:]] ]] &&
-		[[ "$_seg" =~ [[:space:]]-[^[:space:]]*[rR] ]]; then
+		[[ "$_seg" =~ [[:space:]](-[A-Za-z]*[rR][A-Za-z]*|--recursive)([[:space:]]|$) ]]; then
 		# Check for dot-only target: the argument is exactly "." (end or space after)
 		if [[ "$_seg" =~ [[:space:]]\.($|[[:space:]]) ]]; then
 			echo "drydock guardrail: rm of the current directory (.) is blocked (C17)." >&2
@@ -177,7 +177,7 @@ done
 # rm invocation. Flags in an unrelated segment (e.g. grep -r) do not trigger.
 for _seg in "${_segments[@]}"; do
 	if [[ "$_seg" =~ (^|[[:space:]])rm[[:space:]] ]] &&
-		[[ "$_seg" =~ [[:space:]]-[^[:space:]]*[rR] ]]; then
+		[[ "$_seg" =~ [[:space:]](-[A-Za-z]*[rR][A-Za-z]*|--recursive)([[:space:]]|$) ]]; then
 		# Match ../ prefix (traversal into parent) OR bare .. (parent dir, no slash)
 		if [[ "$_seg" =~ [[:space:]]\.\.(/|[[:space:]]|$) ]]; then
 			echo "drydock guardrail: rm with parent-directory traversal is blocked (C18)." >&2
