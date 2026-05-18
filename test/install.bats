@@ -176,6 +176,158 @@ setup() {
 	assert_output --partial '[OK]'
 }
 
+# ── T-04: ask() helper RED tests ─────────────────────────────────────────────
+# These tests verify ask() behavior indirectly through ask_engram_mode(),
+# which is the first prompt that calls ask(). Tests assert POSITIVE outcomes
+# that require the production code to exist → proper RED before implementation.
+
+@test "ask(): interactive + y answer → sentinel created (ask() reads TTY)" {
+	# DRYDOCK_INTERACTIVE=1, native Linux, _DRYDOCK_TTY provides 'y'
+	# → ask() must read the FIFO and return 'y' → sentinel IS created
+	# Fails RED: ask_engram_mode() / ask() don't exist yet
+	local _home="$BATS_TEST_TMPDIR/home-ask-y"
+	local _tty="$BATS_TEST_TMPDIR/ask-tty-y"
+	printf 'y\n' >"$_tty"  # regular file: ask() opens it via exec 3<
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	assert [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
+@test "ask(): empty input (newline only) applies default n — sentinel not created" {
+	# ask() reads FIFO containing only a newline → empty → default n → sentinel absent
+	# Fails RED: ask_engram_mode() / ask() don't exist yet
+	# (Once implemented: sentinel absent is the correct conservative default)
+	local _home="$BATS_TEST_TMPDIR/home-ask-empty"
+	local _tty="$BATS_TEST_TMPDIR/ask-tty-empty"
+	printf '\n' >"$_tty"  # only a newline → empty answer → default
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	# After implementation: ask() returns default 'n', so sentinel is absent
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
+@test "ask(): TTY open failure falls back to default n — installer exits 0" {
+	# _DRYDOCK_TTY points at non-existent path → ask() must use default, not abort
+	# Fails RED: ask_engram_mode() / ask() don't exist yet
+	# (Once implemented: sentinel absent + exit 0 is the correct behavior)
+	local _home="$BATS_TEST_TMPDIR/home-ask-notty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$BATS_TEST_TMPDIR/no-such-tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	# After implementation: ask() falls back to default 'n', sentinel absent
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
+# ── T-06/T-07: _host_shared_safe() + ask_engram_mode INV-5 trichotomy ────────
+# Tests verify _host_shared_safe OS-detection via ask_engram_mode behavior.
+# Implementation note: _host_shared_safe was implemented alongside ask() in T-05
+# (needed by ask_engram_mode). These are approval tests validating the
+# already-implemented trichotomy.
+
+@test "_host_shared_safe: WSL2 — no prompt, sentinel NOT created" {
+	# OSRELEASE_FILE contains 'microsoft' → _host_shared_safe returns 1
+	# → ask_engram_mode silently skips; sentinel never written
+	local _home="$BATS_TEST_TMPDIR/home-wsl2"
+	local _tty="$BATS_TEST_TMPDIR/tty-wsl2"
+	printf 'y\n' >"$_tty"  # would say yes if prompt appeared
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/wsl2/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
+@test "_host_shared_safe: macOS (UNAME=Darwin) — no prompt, sentinel NOT created" {
+	# UNAME stub returns Darwin → _host_shared_safe returns 1
+	# → ask_engram_mode silently skips; sentinel never written
+	local _home="$BATS_TEST_TMPDIR/home-macos"
+	local _tty="$BATS_TEST_TMPDIR/tty-macos"
+	printf 'y\n' >"$_tty"  # would say yes if prompt appeared
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME="$FAKE_BIN/uname" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
+@test "_host_shared_safe: native Linux + accept — sentinel created" {
+	# Clean OSRELEASE_FILE, UNAME=uname (Linux) → _host_shared_safe returns 0
+	# → ask_engram_mode fires; 'y' → sentinel IS created
+	local _home="$BATS_TEST_TMPDIR/home-native"
+	local _tty="$BATS_TEST_TMPDIR/tty-native-y"
+	printf 'y\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	assert [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
+@test "_host_shared_safe: native Linux + decline — sentinel NOT created" {
+	# Clean OSRELEASE_FILE, UNAME=uname (Linux) → ask fires; 'n' → no sentinel
+	local _home="$BATS_TEST_TMPDIR/home-native-n"
+	local _tty="$BATS_TEST_TMPDIR/tty-native-n"
+	printf 'n\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
 # Case 6: env_overrides
 @test "env overrides: all 4 vars respected" {
 	local _custom_install="$BATS_TEST_TMPDIR/custom-install"
