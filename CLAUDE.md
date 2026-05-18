@@ -54,7 +54,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   token. When a host session and a container session refresh concurrently, each re-mints and writes
   a token, invalidating the other's — both sessions get logged out.
   (3) **When engram is in use — divergent MCP config.** The container's Claude config has the engram
-  MCP entry filtered out via `jq 'del(.mcpServers.engram, ...)'` (`commands.sh:110,244`). If the
+  MCP entry filtered out via `jq 'del(.mcpServers.engram, ...)'` (`commands.sh:109,226`). If the
   container shared the host's live `~/.claude.json`, that filter would destructively mutate it —
   stripping the engram MCP entry from the host's own config.
   (4) **When engram is in use — `~/.engram/engram.db` SQLite WAL corruption.** The hazard is NOT
@@ -72,7 +72,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   silently corrupt `~/.engram/engram.db` via a WAL page clash. Every failure mode is silent: data
   loss or auth loss with no obvious cause.
 - **Where this lives in code**: `lib/paths.sh:23-33` (container path constants);
-  `docker-compose.yml:61-62` (mounts).
+  `docker-compose.yml:63-64` (mounts).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-3: Hooks Read-Only Overlay
@@ -93,7 +93,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: A buggy or prompt-injected agent disables its own guardrails
   mid-session. Hook-based protections are silently bypassed for the remainder of the session
   with no indication to the operator.
-- **Where this lives in code**: `docker-compose.yml:65` (the `:ro` override line);
+- **Where this lives in code**: `docker-compose.yml:67` (the `:ro` override line);
   `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
   `templates/managed-settings.d/` (the policy drop-in files).
 - **Deep dive**: [docs/security.md](docs/security.md)
@@ -110,8 +110,8 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: drydock loses portability and becomes a wrapper around one specific
   MCP memory stack rather than general-purpose containerized Claude infrastructure — exactly the
   "niche tool instead of portable infrastructure" failure mode the project is designed to avoid.
-- **Where this lives in code**: `lib/compose.sh:30-32` (`engram_usable` gate);
-  `lib/commands.sh:107-126` (MCP filter).
+- **Where this lives in code**: `lib/compose.sh:32-34` (`engram_usable` gate);
+  `lib/commands.sh:107-124` (MCP filter).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-5: Engram Shared-Mode Opt-In, Force-Isolated on Unreliable Locks
@@ -127,14 +127,14 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: A user on WSL2 who enables shared mode without force-downgrade
   protection loses engram data silently — conversation memory, project decisions, accumulated
   observations — with no error message, only degraded or wrong recall.
-- **Where this lives in code**: `lib/compose.sh:105-122` (shared-mode resolution);
+- **Where this lives in code**: `lib/compose.sh:337-357` (shared-mode resolution);
   `lib/paths.sh:74-79` (`host_fs_locks_unreliable`).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-6: Docker Socket = Root-Equivalent on Host
 
 - **Rule**: Documentation, error messages, and proposals MUST NOT describe the container as
-  adversarially isolated. The bind-mounted Docker socket (`docker-compose.yml:51`) gives any
+  adversarially isolated. The bind-mounted Docker socket (`docker-compose.yml:53`) gives any
   process inside the container with socket access the ability to run
   `docker run -v /:/host --privileged` and read the entire host filesystem.
 - **Why**: This is THE foundational reason the threat model is A (accidents), not B (adversarial).
@@ -144,7 +144,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: Contributors onboarded with the wrong threat model run untrusted
   workloads or allow prompt-injection attempts inside the container. The eventual outcome is host
   compromise via the Docker socket — a high-severity trust-loss incident against the project.
-- **Where this lives in code**: `docker-compose.yml:51` (the socket mount line).
+- **Where this lives in code**: `docker-compose.yml:53` (the socket mount line).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-7: Threat Model A — Defense Against Accidents, Not Adversaries
