@@ -648,6 +648,67 @@ _setup_build_stub() {
 	refute_output --partial "1)"
 }
 
+# ── T-13: CRITICAL bug regression tests ──────────────────────────────────────
+
+@test "path-rc: CRITICAL-1 — empty _candidates does not abort installer (grep -c . exit-1)" {
+	# SHELL="" + NO rc files in HOME → _rc_candidates returns empty string.
+	# Bug: grep -c . on empty input exits 1 → set -e aborts installer before
+	# the fallback _rc="$HOME/.bashrc" can run.
+	# RED: installer exits non-zero. GREEN: exits 0 and .bashrc is created+written.
+	local _home="$BATS_TEST_TMPDIR/home-crit1"
+	mkdir -p "$_home"
+	# No .bashrc, .zshrc, or .profile — empty candidates
+
+	local _tty="$BATS_TEST_TMPDIR/tty-crit1"
+	# Prompts: engram:n, build:n, path:y
+	printf 'n\nn\ny\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL="" \
+		bash "$INSTALL_SH"
+	# Bug: exits non-zero. Fix: exits 0 and creates .bashrc with export line.
+	assert_success
+	assert [ -f "$_home/.bashrc" ]
+	run grep -Fc "export PATH=" "$_home/.bashrc"
+	assert_output 1
+}
+
+@test "path-rc: CRITICAL-2 — choice '0' does not abort installer (sed -n 0p invalid address)" {
+	# SHELL="" + both .bashrc and .zshrc exist → numbered prompt fires.
+	# Bug: user types '0' → sed -n "0p" is an invalid line address → sed exits
+	# non-zero → set -e aborts installer.
+	# RED: installer exits non-zero. GREEN: exits 0 and defaults to candidate 1.
+	local _home="$BATS_TEST_TMPDIR/home-crit2"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc" "$_home/.zshrc"
+
+	local _tty="$BATS_TEST_TMPDIR/tty-crit2"
+	# Prompts: engram:n, build:n, path:y, rc-select:0 (invalid → default to 1)
+	printf 'n\nn\ny\n0\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL="" \
+		bash "$INSTALL_SH"
+	# Bug: exits non-zero. Fix: exits 0 and falls back to candidate 1 (.bashrc).
+	assert_success
+	run grep -Fc "export PATH=" "$_home/.bashrc"
+	assert_output 1
+}
+
 # ── T-14/T-15: Non-interactive parity regression guards ──────────────────────
 # Explicit parity assertions: DRYDOCK_INTERACTIVE=0 (pipe-install / curl|bash)
 # MUST produce byte-identical non-interactive behavior — no sentinel, no build,

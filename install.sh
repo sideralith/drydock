@@ -371,7 +371,8 @@ ask_add_path_to_rc() {
 		local _candidates
 		_candidates="$(_rc_candidates)"
 		local _count
-		_count="$(printf '%s\n' "$_candidates" | grep -c .)"
+		_count="$(printf '%s\n' "$_candidates" | grep -c . || true)"
+		_count="${_count:-0}"
 		if [ "$_count" -gt 1 ]; then
 			# Numbered rc-file selection prompt
 			printf 'Which rc file should drydock update?\n' >&2
@@ -386,6 +387,11 @@ ask_add_path_to_rc() {
 				read -r _choice <&3 || true
 			fi
 			_choice="${_choice:-1}"
+			# Validate: must be a positive integer within 1.._count
+			case "$_choice" in
+			''|*[!0-9]*) _choice=1 ;;
+			esac
+			[ "$_choice" -ge 1 ] && [ "$_choice" -le "$_count" ] || _choice=1
 			_rc="$(printf '%s\n' "$_candidates" | sed -n "${_choice}p")"
 		else
 			_rc="$(printf '%s\n' "$_candidates" | head -1)"
