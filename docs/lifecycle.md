@@ -35,16 +35,9 @@ paths NOT mounted from host. Update from container = partial update, container
 
 ### Engram update gets a specific recipe
 
-Engram's binary at `~/.local/bin/engram` is shared (mount RW), but its plugin
-metadata in `~/.claude/plugins/cache/engram/` is separate between host and
-container. Update from container leaves the new binary in host with stale
-plugin metadata in host → skew. Correct recipe:
-
-```bash
-# on host:
-gentle-ai update engram        # or canonical upgrade path
-drydock sync                   # sync metadata host → container
-```
+See [engram.md](engram.md#updating-engram) for the correct update recipe
+(binary is shared, plugin metadata is not — updating from inside the container
+causes skew).
 
 ### Plugins from Claude (`/plugin install foo`)
 
@@ -64,16 +57,8 @@ additive to global ones).
 
 ### Engram memories
 
-Memories saved in host Claude (any project) stay on host. Memories saved in
-container Claude (any project) stay in the container's DB. They do **not**
-auto-sync. Consolidate manually when you want:
-
-```bash
-# from whichever side has the memories you want to move:
-engram export ~/engram-snapshot.json
-# on the destination side:
-engram import ~/engram-snapshot.json
-```
+See [engram.md](engram.md#consolidating-memories) for the manual
+export/import recipe (host and container DBs do not auto-sync).
 
 ## Mental model
 

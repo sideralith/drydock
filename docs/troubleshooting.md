@@ -73,6 +73,8 @@ rm -f ~/.engram-container/engram.db-wal ~/.engram-container/engram.db-shm
 cp -a ~/.engram/engram.db ~/.engram-container/engram.db
 ```
 
+For shared vs isolated mode and the migration recipe, see [engram.md](engram.md).
+
 ## Files created from container appear as `root` on host
 
 UID/GID mismatch. Check on host:

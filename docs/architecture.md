@@ -69,6 +69,9 @@ both from host.
 
 ## engram (optional)
 
+> For the user-facing setup guide — installation, shared vs isolated mode,
+> migration — see [engram.md](engram.md). This section covers the architecture.
+
 engram is **not required**. drydock detects it and activates the overlay only
 when both conditions are true: the `engram` binary is on the host's `$PATH`
 AND the host OS is Linux. On a macOS host the binary is a native Mach-O
