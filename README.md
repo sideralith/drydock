@@ -24,7 +24,7 @@ Debian 12 slim container that:
 
 - **Mounts only your project** — `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
   and every other unrelated project under `~/` aren't visible from inside.
-- **RO-overlays the agent's hooks** — it can't self-edit its own guardrails.
+- **RO-overlays the agent's hooks, image-bakes its deny policy** — it can't self-edit either its hook scripts or its git/OS destructive-command guardrails.
 - **Splits memory and config** — the container has its own
   [engram](https://github.com/Gentleman-Programming/engram) DB (optional —
   see [Using drydock without engram](#using-drydock-without-engram)) and its own

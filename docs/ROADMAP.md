@@ -20,6 +20,7 @@ file.
 - **GitHub milestones mirror this file** — a milestone is a derived grouping for
   the GitHub UI, not an authority. If a milestone and this file disagree, this
   file is right and the milestone is fixed.
+- **Status flips in the shipping PR.** When a roadmap item ships, its Status in the Summary table flips to `Done` and the linked GitHub issue is closed **in the same PR that delivers the change** — never deferred to a later commit or cleanup pass. A merged item still marked `Planned` is a bug in this file.
 - A rejected idea is closed as a `wontfix` issue, with the reason in the issue —
   not kept as a tombstone here.
 
@@ -30,9 +31,9 @@ file.
 | [link-sibling-projects](#link-sibling-projects) | v0.2.0 | [#13][i13] | Planned |
 | [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Planned |
 | [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Planned |
-| [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Planned |
-| [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Planned |
-| [destructive-command-guardrails](#destructive-command-guardrails) | v0.2.0 | [#30][i30] | Planned |
+| [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Done |
+| [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Done |
+| [destructive-command-guardrails](#destructive-command-guardrails) | v0.2.0 | [#30][i30] | Done |
 | [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Planned |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
@@ -43,8 +44,7 @@ Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene
 **v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
 agent-agnostic infrastructure.
 
-Resolution order — **v0.2.0**: self-awareness → managed-settings-layer →
-destructive-command-guardrails → install-interactive → auto-sync →
+Resolution order — **v0.2.0**: install-interactive → auto-sync →
 concurrent-sessions → link-sibling-projects.
 Order for later releases is not yet decided.
 
@@ -58,6 +58,7 @@ Order for later releases is not yet decided.
 [i17]: https://github.com/sideralith/drydock/issues/17
 [i18]: https://github.com/sideralith/drydock/issues/18
 [i30]: https://github.com/sideralith/drydock/issues/30
+[i31]: https://github.com/sideralith/drydock/issues/31
 
 ---
 
@@ -134,6 +135,8 @@ to that file.
 
 ### self-awareness
 
+**Status.** Done — shipped in v0.2.0 (issue #8 closed).
+
 **Problem.** A Claude session inside a drydock container has nothing telling it
 it is containerized — only the generic `/.dockerenv`. It assumes an ordinary host
 and hits drydock-specific behavior blind: noexec `/tmp`, root-owned `~/.cache`,
@@ -156,6 +159,8 @@ security sandbox).
 **Provenance.** This session; issue [#8][i8].
 
 ### managed-settings-layer
+
+**Status.** Done — shipped in v0.2.0.
 
 **Problem.** drydock's `permissions.deny` block and `hooks.SessionStart` entry were
 seeded by `drydock init` into a per-project `settings.json` — a writable file. An
@@ -192,6 +197,8 @@ nice-to-have if demand surfaces.
 **Provenance.** engram exploration #1159 + proposal #1160.
 
 ### destructive-command-guardrails
+
+**Status.** Done — shipped in v0.2.0 via PR #32 (issue #30 closed). Follow-up: issue #31 (quoted-target bypass).
 
 **Problem.** drydock's shipped guardrails cover a narrow slice of the accident
 class its threat model targets. `managed-settings.d/10-git-safety.json` holds 11

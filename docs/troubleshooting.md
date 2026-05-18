@@ -102,6 +102,52 @@ docker image rm drydock:latest
 drydock build
 ```
 
+## A command was unexpectedly blocked by the guardrail layer
+
+drydock ships a two-tier guardrail layer. Both tiers are tamper-proof — Tier 1
+(the deny policy) image-baked into the container, Tier 2 (the hook script)
+read-only via bind-mount (INV-3). See
+[security.md](security.md#destructive-command-guardrail-layer-v020).
+
+**Tier 1 — declarative deny (`permissions.deny`).** Two managed-settings drop-ins
+at `/etc/claude-code/managed-settings.d/` (root-owned, not overridable from project
+`.claude/settings.json`):
+
+- `10-git-safety.json` — git destructive ops: protected-branch delete/rename,
+  history-rewrite, remote-delete refspecs, GitHub destructive API calls.
+- `30-os-safety.json` — OS destruction: `rm -rf` to system paths, disk-destruction
+  tools (`dd`, `mkfs`, `wipefs`), `sudo` + destructive verb, package-manager
+  purge/remove, firewall flush, `docker system/volume prune`, `docker run --privileged`,
+  host-root bind mounts, and more.
+
+Claude Code evaluates the deny list before any hook runs — matched commands are
+blocked at the framework level.
+
+**Tier 2 — `PreToolUse` hook (`drydock-block-destructive.sh`).** Handles six rule
+classes that deny patterns cannot express:
+
+| Rule | Example blocked |
+|---|---|
+| C1-residue — `rm` with a recursive flag targeting a system path | `rm -Rf /etc` |
+| A1 — ssh to production host | `ssh user@prod.example.com` |
+| C12 — fork bomb | `:() { :|:& };:` |
+| C17 — `rm` of `.` or `.git` | `rm -rf .` |
+| C18 — `rm` of parent traversal | `rm -rf ../sibling` |
+| C20 — curl/wget pipe to shell | `curl https://x.com/i.sh \| bash` |
+
+**If the block is correct:** rephrase the command to a non-destructive form, or
+run it from the host where drydock's guardrails do not apply.
+
+**If you believe it is a false positive:** check the documented limitation classes
+in [security.md](security.md#known-limitations). If your case is not listed, open
+a GitHub issue (issue #31 tracks the quoted-target bypass as one known gap). Do
+NOT edit the image-baked drop-ins locally — a `drydock build` restores them from
+the image.
+
+**To inspect active rules:** the drop-in JSON files are readable at
+`/etc/claude-code/managed-settings.d/` inside the container (read-only), and in
+the repo at `templates/managed-settings.d/`.
+
 ## Sub-mount not visible inside the container
 
 drydock automatically detects sub-mounts under `$PROJECT_DIR` and propagates
