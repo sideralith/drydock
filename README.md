@@ -11,8 +11,8 @@
 > Containerized workspace, host Docker socket access for project tooling,
 > isolated memory and config from the host. Multi-project, single-image.
 >
-> Currently supports **Claude Code** (engram-aware). Adapters for other agents
-> are on the [roadmap](#roadmap).
+> Currently supports **Claude Code**. Adapters for other agents are on the
+> [roadmap](#roadmap).
 
 <!-- badges placeholder: CI · license · version -->
 
@@ -25,11 +25,10 @@ Debian 12 slim container that:
 - **Mounts only your project** — `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`,
   and every other unrelated project under `~/` aren't visible from inside.
 - **RO-overlays the agent's hooks, image-bakes its deny policy** — it can't self-edit either its hook scripts or its git/OS destructive-command guardrails.
-- **Splits memory and config** — the container has its own
-  [engram](https://github.com/Gentleman-Programming/engram) DB (optional —
-  see [Using drydock without engram](#using-drydock-without-engram)) and its own
-  `~/.claude/` + `~/.claude.json` siblings, so concurrent host sessions on
-  other projects don't race.
+- **Splits memory and config** — the container gets its own `~/.claude/` +
+  `~/.claude.json` siblings, so concurrent host sessions on other projects don't
+  race. If you use the optional [engram](docs/engram.md) memory server, it gets
+  an isolated container DB too.
 - **Bind-mounts the Docker socket (DooD)** — the containerized agent talks to
   your host Docker daemon, so it can bring your project's stack up, `docker exec`
   into a running service, and run its tests or migrations against the host
@@ -169,93 +168,32 @@ Three classes of sub-mount:
 If a sub-mount does not appear inside the container, see
 [docs/troubleshooting.md](docs/troubleshooting.md#sub-mount-not-visible-inside-the-container).
 
-## Using drydock without engram
+> **Optional — engram memory:** drydock integrates the [engram](docs/engram.md)
+> persistent-memory MCP server if it is already installed on your host. Entirely
+> optional — see [docs/engram.md](docs/engram.md).
 
-**Engram is optional.** drydock works cleanly without it:
+## Two rules to know
 
-- `drydock setup`, `drydock run`, `drydock build`, and `drydock sync` all
-  work without engram installed.
-- When engram is absent (or when the host is macOS), the engram volume overlay
-  is not activated and the engram MCP server entry is removed from the
-  container's `~/.claude-container.json` — Claude Code sees no startup errors.
-- `drydock status` reports `engram: not detected (opt-in)` — not an error.
-
-If you later install engram, re-run `drydock setup` and the overlay activates
-automatically on the next `drydock run`.
-
-### Shared vs isolated engram
-
-By default, drydock gives the container its own engram DB (`~/.engram-container`,
-isolated mode). This prevents SQLite lock contention between a host session and
-a container session.
-
-**Opt-in to shared mode** (host and container share one DB):
-
-On a native Linux host, the interactive installer (`install.sh` run in a terminal)
-will ask whether to enable shared mode and create the sentinel automatically.
-On WSL2 and macOS the installer does not show this prompt — shared mode is
-force-downgraded to isolated there because `fcntl` locks are unreliable (INV-5);
-those users use the manual `touch` + `DRYDOCK_ENGRAM_SHARED=force` route below.
-
-To enable it manually:
-```bash
-mkdir -p ~/.config/drydock
-touch ~/.config/drydock/engram-shared
-```
-
-Remove the file to return to isolated mode.
-
-**Warning**: switching isolated → shared is **lossy** without preparation. Any
-memories accumulated in `~/.engram-container` won't automatically appear in the
-shared `~/.engram`. Before switching, export the container memories first:
-1. Inside the container: `engram sync` (exports new memories as chunks)
-2. On the host: `engram sync --import` (absorbs them)
-
-drydock does **not** provide a migration tool. If you skip this step, isolated
-container memories are inaccessible in shared mode (the `~/.engram-container`
-directory is orphaned but not deleted — you can import from it later).
-
-**Safety gate**: on WSL2 and macOS hosts, POSIX file locks over the
-host↔container bind-mount layer are unreliable. drydock automatically downgrades
-shared mode to isolated on these hosts and emits a warning. To override:
-`DRYDOCK_ENGRAM_SHARED=force drydock run` (bypasses the safety check — you
-accept the risk of SQLite WAL corruption if host and container Claude write
-concurrently).
-
-**macOS note**: engram ships native macOS Mach-O builds
-(`brew install gentleman-programming/tap/engram`) and the DB directory can be
-bind-mounted. However, the macOS binary cannot run inside the Debian Linux
-container. drydock v0.1.0 treats macOS as engram-effectively-absent for the
-container; future releases may ship a Linux engram in the image or bridge via
-its HTTP API.
-
-## Three rules to know
-
-1. **Engram memories diverge between host and container (isolated mode).** The
-   container has its own engram DB (`~/.engram-container/`). Memories don't
-   auto-sync between host and container. Consolidate with `engram sync --import`
-   / `engram sync --export`. This is intentional — it prevents SQLite
-   contention when running host Claude concurrently.
-
-2. **Skills/plugins/hooks installed on host need an explicit `drydock sync`.**
+1. **Skills/plugins/hooks installed on host need an explicit `drydock sync`.**
    Until you sync, the container has its snapshot. Plugins installed *from
    inside* the container stay container-only — handy as a reversible
    playground. (Details: [docs/lifecycle.md](docs/lifecycle.md).)
 
-3. **Don't edit the same file in host and container concurrently.** The
+2. **Don't edit the same file in host and container concurrently.** The
    project tree is mounted RW both ways; concurrent writes to the same file
    can tear, especially over 9P drvfs (WSL2 docs case). Close the host-side
    editor before letting the agent edit, or wait for an idle moment.
 
 ## Architecture
 
-The container runs the Claude CLI + engram MCP + your plugins/skills, with the
-Docker socket bind-mounted (Docker-out-of-Docker — talks to the host's daemon,
-no nested daemon). Host config lives in two places (`~/.claude/` directory and
-`~/.claude.json` file); drydock mounts container-specific siblings of both, an
-engram DB sibling, the project tree, and the docker socket. Hooks are RO. The
-image is universal — only env vars (`PROJECT_DIR` etc.) change per project; a
-dynamically-generated overlay propagates sub-mounts under `$PROJECT_DIR`.
+The container runs the Claude CLI, your plugins/skills, and — optionally — the
+engram MCP server (see [docs/engram.md](docs/engram.md)), with the Docker socket
+bind-mounted (Docker-out-of-Docker — talks to the host's daemon, no nested
+daemon). Host config lives in two places (`~/.claude/` directory and
+`~/.claude.json` file); drydock mounts container-specific siblings of both, the
+project tree, and the docker socket. Hooks are RO. The image is universal — only
+env vars (`PROJECT_DIR` etc.) change per project; a dynamically-generated overlay
+propagates sub-mounts under `$PROJECT_DIR`.
 
 Full mount map, the two-config-location detail, the split rationale, and the
 sub-mount propagation design: **[docs/architecture.md](docs/architecture.md)**.
@@ -291,7 +229,9 @@ plus docker-wrapped variants. See [docs/security.md](docs/security.md#if-you-hav
 - **[docs/architecture.md](docs/architecture.md)** — mount map, storage split
   rationale, hooks RO overlay, DooD, UID/GID matching, conditional overlays.
 - **[docs/lifecycle.md](docs/lifecycle.md)** — where to update what (binaries
-  vs. plugins vs. skills vs. config), the engram-update recipe, mental model.
+  vs. plugins vs. skills vs. config), mental model.
+- **[docs/engram.md](docs/engram.md)** — the optional engram persistent-memory
+  integration: detection, shared vs isolated mode, setup, migration.
 - **[docs/security.md](docs/security.md)** — what drydock does and does NOT
   protect against; when to layer a socket proxy.
 - **[docs/troubleshooting.md](docs/troubleshooting.md)** — common failures

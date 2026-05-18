@@ -69,6 +69,9 @@ both from host.
 
 ## engram (optional)
 
+> For the user-facing setup guide — installation, shared vs isolated mode,
+> migration — see [engram.md](engram.md). This section covers the architecture.
+
 engram is **not required**. drydock detects it and activates the overlay only
 when both conditions are true: the `engram` binary is on the host's `$PATH`
 AND the host OS is Linux. On a macOS host the binary is a native Mach-O
@@ -111,9 +114,9 @@ touch ~/.config/drydock/engram-shared
 
 Remove it to return to isolated mode. Switching isolated → shared is **lossy**
 if you accumulated memories in the isolated DB: they won't appear in the shared
-DB until you run `engram sync --import` from inside the container FIRST (to
-export container memories) and then `engram sync --import` on the host (to
-absorb them). drydock provides no migration tool — this is your responsibility.
+DB until you export them from the container DB (`engram export <file>`) and
+import the snapshot on the host (`engram import <file>`). drydock provides no
+migration tool — this is your responsibility.
 
 Switching shared → isolated is safe: `drydock setup` re-seeds
 `~/.engram-container` from the current `~/.engram` (a fresh point-in-time
