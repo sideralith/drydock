@@ -41,7 +41,7 @@ Debian 12 slim container that:
 
 ### Claude Code's sandbox mode vs. drydock
 
-> They are not alternatives — they are different layers, and they stack. Claude Code's sandbox mode contains individual **commands**; drydock containerizes the whole **session** and gives it an environment.
+> They work at different scopes and are not interchangeable. Claude Code's sandbox mode contains individual **commands**; drydock containerizes the whole **session** and gives it an environment.
 
 | | Claude Code sandbox mode | drydock |
 |---|---|---|
@@ -55,7 +55,7 @@ Debian 12 slim container that:
 | **Mechanism** | OS sandbox — Seatbelt (macOS), bubblewrap (Linux) | Docker container |
 | **Threat model** | A real OS boundary for a command's writes/network (the network proxy does not inspect TLS) | Accidents, not adversaries — the bind-mounted Docker socket is root-equivalent on the host by design (INV-6) |
 
-**Use them together.** Claude Code's sandbox can run inside a drydock container — drydock is *where* the session runs, the sandbox is *how* each command is contained. Neither replaces the other.
+**Which one applies.** In practice you use one, by context. Running Claude Code directly on the host — its sandbox mode contains each Bash command. Running it through drydock — the container is the containment. Claude Code's sandbox does **not** run inside a drydock container as drydock ships today: the image includes no bubblewrap, and the container does not permit the unprivileged user namespaces the Linux sandbox is built on.
 
 **drydock's security layers:**
 
