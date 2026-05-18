@@ -58,18 +58,18 @@ cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty')"
 # ── Rule A1: ssh to production host ──────────────────────────────────────────
 # Block: ssh token AND a prod/production hostname token.
 # Allow: ssh to dev, staging, or any non-production host.
-if [[ "$cmd" =~ (^|[[:space:]])ssh[[:space:]] ]] && \
-   [[ "$cmd" =~ (^|[[:space:]@./-])prod(uction)?([[:space:]@./-]|$) ]]; then
-    echo "drydock guardrail: ssh to a production host is blocked (A1)." >&2
-    echo "Use a deploy key or a jump host approved for production access." >&2
-    exit 2
+if [[ "$cmd" =~ (^|[[:space:]])ssh[[:space:]] ]] &&
+	[[ "$cmd" =~ (^|[[:space:]@./-])prod(uction)?([[:space:]@./-]|$) ]]; then
+	echo "drydock guardrail: ssh to a production host is blocked (A1)." >&2
+	echo "Use a deploy key or a jump host approved for production access." >&2
+	exit 2
 fi
 
 # ── Rule C12: fork bomb ────────────────────────────────────────────────────────
 # Block: the classic :() { :|: & };: shape (colon-function recursion).
 if [[ "$cmd" =~ :\(\)[[:space:]]*\{ ]] && [[ "$cmd" =~ :\|: ]]; then
-    echo "drydock guardrail: fork bomb pattern detected and blocked (C12)." >&2
-    exit 2
+	echo "drydock guardrail: fork bomb pattern detected and blocked (C12)." >&2
+	exit 2
 fi
 
 # ── Rule C17: rm of . or .git (anchored at word boundary) ────────────────────
@@ -79,35 +79,39 @@ fi
 #   - .git/    (git directory with trailing slash)
 # Allow: rm -rf ./subdir, rm -rf .gitignore, rm -rf .github/workflows
 #
-# Two-part check: (a) rm is present AND any -r/-R flag is present;
-# (b) a space-preceded dot or .git target at word boundary is present.
-# The two-part split is necessary because "rm .+ -r pattern" would need
-# a complex join that is fragile; the two separate checks are robust.
-if [[ "$cmd" =~ (^|[[:space:]])rm[[:space:]] ]] && \
-   [[ "$cmd" =~ [[:space:]]-[^[:space:]]*[rR] ]]; then
-    # Check for dot-only target: the argument is exactly "." (end or space after)
-    if [[ "$cmd" =~ [[:space:]]\.($|[[:space:]]) ]]; then
-        echo "drydock guardrail: rm of the current directory (.) is blocked (C17)." >&2
-        echo "Specify the target explicitly (e.g. rm -rf ./build/)." >&2
-        exit 2
-    fi
-    # Check for .git target: ".git" followed by optional "/" then end-of-string or space
-    if [[ "$cmd" =~ [[:space:]]\.git(/)?($|[[:space:]]) ]]; then
-        echo "drydock guardrail: rm of .git is blocked (C17)." >&2
-        echo "Deleting .git destroys the repository history." >&2
-        exit 2
-    fi
+# Two-part check (ordering-independent):
+#   (a) rm is present AND any -r/-R flag is present anywhere in the string;
+#   (b) a space-preceded dot or .git target at word boundary is present.
+# The two checks are ordering-independent: the flag regex [[:space:]]-[^[:space:]]*[rR]
+# matches "-r" regardless of whether it appears before or after the target argument
+# (e.g. "rm . -r" and "rm -r ." are both caught). The two-step split is necessary
+# because joining them into a single regex would require a complex join that is
+# fragile and shellcheck-unfriendly.
+if [[ "$cmd" =~ (^|[[:space:]])rm[[:space:]] ]] &&
+	[[ "$cmd" =~ [[:space:]]-[^[:space:]]*[rR] ]]; then
+	# Check for dot-only target: the argument is exactly "." (end or space after)
+	if [[ "$cmd" =~ [[:space:]]\.($|[[:space:]]) ]]; then
+		echo "drydock guardrail: rm of the current directory (.) is blocked (C17)." >&2
+		echo "Specify the target explicitly (e.g. rm -rf ./build/)." >&2
+		exit 2
+	fi
+	# Check for .git target: ".git" followed by optional "/" then end-of-string or space
+	if [[ "$cmd" =~ [[:space:]]\.git(/)?($|[[:space:]]) ]]; then
+		echo "drydock guardrail: rm of .git is blocked (C17)." >&2
+		echo "Deleting .git destroys the repository history." >&2
+		exit 2
+	fi
 fi
 
 # ── Rule C18: rm with ../ traversal ──────────────────────────────────────────
 # Block: rm with a recursive flag and a target containing ../
 # Allow: rm -rf ./dist, rm -rf /absolute/path
-if [[ "$cmd" =~ (^|[[:space:]])rm[[:space:]] ]] && \
-   [[ "$cmd" =~ [[:space:]]-[^[:space:]]*[rR] ]] && \
-   [[ "$cmd" =~ [[:space:]]\.\./ ]]; then
-    echo "drydock guardrail: rm with parent-directory traversal (../) is blocked (C18)." >&2
-    echo "Specify the target with an absolute path or relative to the project root." >&2
-    exit 2
+if [[ "$cmd" =~ (^|[[:space:]])rm[[:space:]] ]] &&
+	[[ "$cmd" =~ [[:space:]]-[^[:space:]]*[rR] ]] &&
+	[[ "$cmd" =~ [[:space:]]\.\./ ]]; then
+	echo "drydock guardrail: rm with parent-directory traversal (../) is blocked (C18)." >&2
+	echo "Specify the target with an absolute path or relative to the project root." >&2
+	exit 2
 fi
 
 # ── Rule C20: curl/wget piped to shell ───────────────────────────────────────
@@ -119,11 +123,11 @@ fi
 # also caught — the inner "curl" follows a '"' character, not a space.
 # Similarly the trailing condition for bash/sh uses a non-alphabetic boundary so
 # 'bash"' (quoted in a sh -c string) is still recognised as a shell invocation.
-if [[ "$cmd" =~ (^|[^a-zA-Z])(curl|wget)([^a-zA-Z]|$) ]] && \
-   [[ "$cmd" =~ \|[[:space:]]*(bash|sh)([^a-zA-Z]|$) ]]; then
-    echo "drydock guardrail: piping curl/wget output directly into a shell is blocked (C20)." >&2
-    echo "Download the script first (curl -o script.sh ...), inspect it, then run it." >&2
-    exit 2
+if [[ "$cmd" =~ (^|[^a-zA-Z])(curl|wget)([^a-zA-Z]|$) ]] &&
+	[[ "$cmd" =~ \|[[:space:]]*(bash|sh)([^a-zA-Z]|$) ]]; then
+	echo "drydock guardrail: piping curl/wget output directly into a shell is blocked (C20)." >&2
+	echo "Download the script first (curl -o script.sh ...), inspect it, then run it." >&2
+	exit 2
 fi
 
 exit 0

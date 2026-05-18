@@ -142,6 +142,8 @@ GIT_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/10-git-safety.json"
 # "maintainer" or "main-bug". B10 (gh api *refs/heads/main*) is exempt: the
 # trailing * after the ref path is intentional and does not create FP risk
 # because no protected branch name appears as a path prefix of another.
+# Also checks dev* — "dev" is a protected branch; a hypothetical
+# "Bash(git branch *-D* dev*)" would false-block "develop" ops.
 @test "10-git-safety: no B9/B4 git branch/push pattern uses raw name* substring form (R4)" {
     local found
     found="$(jq '[.permissions.deny[] |
@@ -150,11 +152,30 @@ GIT_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/10-git-safety.json"
             (. | test("main\\*")) or
             (. | test("master\\*")) or
             (. | test("develop\\*")) or
+            (. | test("dev\\*")) or
             (. | test("staging\\*")) or
             (. | test("production\\*")) or
             (. | test("prod\\*")) or
             (. | test("release\\*"))
         )
+    ] | length' "$GIT_SAFETY_FILE")"
+    [ "$found" -eq 0 ]
+}
+
+# ── A-T9b (R4 — FP regression): fix/main-bug is NOT blocked by main substring ─
+# Spec R4 scenario: a branch operation targeting "fix/main-bug" must not be
+# blocked because the protected name "main" appears as a substring of the branch.
+# This is structural: all B9/B4 entries use "space + name + (space|EOL)" form,
+# never a raw "name*" trailing wildcard. The structural A-T9 test above guarantees
+# no such pattern exists; this test documents the behavioral consequence explicitly.
+@test "10-git-safety: fix/main-bug branch name does not match any deny entry as a substring (R4-scenario)" {
+    # No deny entry in git-safety should use a form that would catch "fix/main-bug"
+    # when Claude Code evaluates a branch command targeting that name.
+    # Structural check: no entry contains "main" followed immediately by "*" (no space).
+    local found
+    found="$(jq '[.permissions.deny[] |
+        select(startswith("Bash(git branch") or startswith("Bash(git push")) |
+        select(test("main\\*"))
     ] | length' "$GIT_SAFETY_FILE")"
     [ "$found" -eq 0 ]
 }
@@ -294,13 +315,18 @@ OS_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/30-os-safety.json"
 }
 
 # ── B-T2 (R1): C1 rm system paths ───────────────────────────────────────────
-@test "30-os-safety: C1 rm root and 9 system paths present (B-T2)" {
+# Path set is the UNION of spec §R1 and design ADR-4 — superset of both.
+# Original source hook coverage: / /etc /usr /var /boot /opt /lib /lib32 /lib64
+#   /sbin /bin /sys /proc /dev /root /home  (plus design additions /var /root /home).
+@test "30-os-safety: C1 rm root and system paths present — full union set (B-T2)" {
     local failures=0
     # The one root entry
     jq -e '.permissions.deny | map(select(. == "Bash(rm *-r* /)")) | length >= 1' \
         "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: Bash(rm *-r* /)"; failures=$((failures+1)); }
-    # 9 paths × 3 forms each (exact dir, subpath /path/*, trailing arg /path *)
-    local paths=("/etc" "/usr" "/bin" "/sbin" "/lib" "/var" "/boot" "/root" "/home")
+    # 15 paths × 3 forms each (exact dir, subpath /path/*, trailing arg /path *)
+    # Union of spec §R1 and design ADR-4: /etc /usr /bin /sbin /lib /lib32 /lib64
+    # /var /boot /opt /sys /proc /dev /root /home
+    local paths=("/etc" "/usr" "/bin" "/sbin" "/lib" "/lib32" "/lib64" "/var" "/boot" "/opt" "/sys" "/proc" "/dev" "/root" "/home")
     for path in "${paths[@]}"; do
         local exact="Bash(rm *-r* ${path})"
         local subpath="Bash(rm *-r* ${path}/*)"
@@ -475,12 +501,13 @@ OS_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/30-os-safety.json"
 }
 
 # ── B-T10 (R1): total deny count floor ──────────────────────────────────────
-# C1(28) + C2(1) + C3(6) + C4(4) + C5(5) + C6(2) + C7(7) + C8(8) + C9(2) +
-# C10(6) + C11(1) + C13(4) + C15(6) + C16(2) + C21(8) + docker-escape(3) = 93
-@test "30-os-safety: deny array total count is at least 90 (B-T10)" {
+# Original: C1(28) + C2(1) + C3(6) + C4(4) + C5(5) + C6(2) + C7(7) + C8(8) + C9(2) +
+#   C10(6) + C11(1) + C13(4) + C15(6) + C16(2) + C21(8) + docker-escape(3) = 93
+# W1 remediation adds 6 paths × 3 forms = 18 new C1 entries → total ≥ 111
+@test "30-os-safety: deny array total count is at least 108 (B-T10)" {
     local count
     count="$(jq '.permissions.deny | length' "$OS_SAFETY_FILE")"
-    [ "$count" -ge 90 ]
+    [ "$count" -ge 108 ]
 }
 
 # ── slice C: hook wiring and PreToolUse drop-in (40-guardrails-hook.json) ────
