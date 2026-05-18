@@ -234,6 +234,48 @@ do_symlink() {
 	fi
 }
 
+# ── Interactive helpers ───────────────────────────────────────────────────────
+
+# ask(prompt, default) — prompt → stderr; read from ${_DRYDOCK_TTY:-/dev/tty}.
+# Returns resolved 'y' or 'n'. Empty input → default. Missing TTY → default.
+# Safe under set -e: exec 3< failure is guarded; never aborts.
+ask() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || { printf '%s' "$2"; return 0; }
+	if ! exec 3<"${_DRYDOCK_TTY:-/dev/tty}" 2>/dev/null; then
+		printf '%s' "$2"; return 0
+	fi
+	local _ans=""
+	printf '%s [%s] ' "$1" "$2" >&2
+	read -r _ans <&3 || true
+	exec 3<&-
+	case "${_ans:-$2}" in [Yy]*) printf y ;; [Nn]*) printf n ;; *) printf '%s' "$2" ;; esac
+}
+
+# _host_shared_safe — returns 0 (true) when native Linux with reliable fcntl locks;
+# returns 1 (false) on macOS or WSL2 where engram shared mode is unsafe.
+# Mirrors lib/paths.sh:host_fs_locks_unreliable (lines 78-83).
+# install.sh ships standalone (curl|bash) and cannot source lib/paths.sh —
+# this block is an INTENTIONAL duplicate. Keep in sync; grep "paths.sh".
+_host_shared_safe() {
+	[ "$("$UNAME" -s)" = "Darwin" ] && return 1
+	[ -r "$OSRELEASE_FILE" ] && grep -qi microsoft "$OSRELEASE_FILE" && return 1
+	return 0
+}
+
+# ask_engram_mode — on native Linux: prompt to enable shared engram mode (INV-5).
+# WSL2 and macOS: silently skip (unsafe fcntl locks). Non-interactive: skip.
+ask_engram_mode() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+	_host_shared_safe || return 0
+
+	local _ans
+	_ans="$(ask "Share engram DB with host session (native Linux only)? (INV-5)" n)"
+	if [ "$_ans" = "y" ]; then
+		mkdir -p "$HOME/.config/drydock"
+		touch "$HOME/.config/drydock/engram-shared"
+	fi
+}
+
 # ── PATH check + hint ─────────────────────────────────────────────────────────
 
 check_path() {
@@ -252,6 +294,7 @@ check_path() {
 print_header
 check_prereqs
 check_docker_sock
+ask_engram_mode
 do_clone
 do_symlink
 step_ok "Ready"
