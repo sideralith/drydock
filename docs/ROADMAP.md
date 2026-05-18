@@ -29,7 +29,7 @@ file.
 | Item | Scope | Issue | Status |
 |------|-------|-------|--------|
 | [link-sibling-projects](#link-sibling-projects) | v0.2.0 | [#13][i13] | Planned |
-| [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Planned |
+| [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Done |
 | [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Planned |
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Done |
 | [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Done |
@@ -107,9 +107,12 @@ mapped at medium/low priority.
 **Invariants touched.** INV-5 — the engram-mode prompt must respect the
 force-isolated downgrade on WSL2/macOS (do not offer shared mode there).
 
-**Open questions.** Which of the medium-priority items make the first cut.
+**Shipped.** Three prompts implemented: engram shared-mode (native Linux only,
+INV-5 trichotomy), build-image (non-fatal, default N), and PATH rc-append
+(idempotent, rc-file selection when SHELL is ambiguous). Non-interactive path
+(`curl | bash`, `DRYDOCK_INTERACTIVE=0`) is byte-identical.
 
-**Provenance.** engram #1053.
+**Status.** Done — shipped in v0.2.0 (issue #14 closed).
 
 ### auto-sync
 

@@ -179,6 +179,11 @@ isolated mode). This prevents SQLite lock contention between a host session and
 a container session.
 
 **Opt-in to shared mode** (host and container share one DB):
+
+On a native Linux host, the interactive installer (`install.sh` run in a terminal)
+will ask whether to enable shared mode and create the sentinel automatically.
+
+To enable it manually:
 ```bash
 mkdir -p ~/.config/drydock
 touch ~/.config/drydock/engram-shared

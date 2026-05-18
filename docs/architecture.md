@@ -95,7 +95,12 @@ container bind-mount layers are unreliable.
 
 ### Enabling shared mode
 
-Create the sentinel file:
+On a native Linux host, `install.sh` (run interactively in a terminal) will ask
+whether to enable shared mode and create the sentinel automatically. Shared mode
+is suppressed without prompting on WSL2 and macOS, where file locks are
+unreliable (INV-5).
+
+To enable it manually:
 ```bash
 mkdir -p ~/.config/drydock
 touch ~/.config/drydock/engram-shared
