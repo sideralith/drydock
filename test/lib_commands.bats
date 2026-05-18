@@ -1018,3 +1018,32 @@ _setup_cmd_conflict() {
 	count="$(jq '.hooks.SessionStart | length' "$CONTAINER_CLAUDE/settings.json")"
 	[ "$count" -eq 1 ]
 }
+
+@test "cmd_sync: settings.json absent → re-injection is a clean no-op (verify S-2)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Pre-create container dirs WITHOUT a settings.json. drydock init normally
+	# precedes sync, so the file should exist — this asserts the documented
+	# intentional skip: re-injection is a no-op, not an error.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	# The skip must not create a settings.json (no malformed/empty file).
+	[ ! -e "$CONTAINER_CLAUDE/settings.json" ]
+	# And it must not leave a stray jq temp file behind.
+	run sh -c "ls $CONTAINER_CLAUDE/settings.json.tmp.* 2>/dev/null"
+	[ "$status" -ne 0 ]
+}

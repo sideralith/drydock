@@ -239,6 +239,12 @@ cmd_sync() {
 	# entry since the hook file only exists in-container at /opt/drydock/hooks/.
 	# This is ergonomics/freshness, NOT tamper-resistance.
 	local _container_settings="$CONTAINER_CLAUDE/settings.json"
+	# INTENTIONAL silent skip (verify S-2): if the container's settings.json does
+	# not exist, re-injection is a deliberate no-op — not an error. `drydock init`
+	# always precedes `sync` and creates the baseline settings.json, so a missing
+	# file means there is nothing to re-inject into yet. Creating the file here
+	# would risk a malformed/partial settings.json; the guard keeps it a clean
+	# no-op instead.
 	if [ -f "$_container_settings" ]; then
 		local _hook_cmd
 		_hook_cmd="sh -c '[ -x /opt/drydock/hooks/drydock-session-start.sh ] && exec /opt/drydock/hooks/drydock-session-start.sh || exit 0'"
