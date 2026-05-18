@@ -32,6 +32,7 @@ file.
 | [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Planned |
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Planned |
 | [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Planned |
+| [destructive-command-guardrails](#destructive-command-guardrails) | v0.2.0 | [#30][i30] | Planned |
 | [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Planned |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
@@ -43,7 +44,8 @@ Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene
 agent-agnostic infrastructure.
 
 Resolution order — **v0.2.0**: self-awareness → managed-settings-layer →
-install-interactive → auto-sync → concurrent-sessions → link-sibling-projects.
+destructive-command-guardrails → install-interactive → auto-sync →
+concurrent-sessions → link-sibling-projects.
 Order for later releases is not yet decided.
 
 [i8]: https://github.com/sideralith/drydock/issues/8
@@ -55,6 +57,7 @@ Order for later releases is not yet decided.
 [i16]: https://github.com/sideralith/drydock/issues/16
 [i17]: https://github.com/sideralith/drydock/issues/17
 [i18]: https://github.com/sideralith/drydock/issues/18
+[i30]: https://github.com/sideralith/drydock/issues/30
 
 ---
 
@@ -187,6 +190,51 @@ deny+hook blocks from existing project `settings.json` files is a post-v0.2.0
 nice-to-have if demand surfaces.
 
 **Provenance.** engram exploration #1159 + proposal #1160.
+
+### destructive-command-guardrails
+
+**Problem.** drydock's shipped guardrails cover a narrow slice of the accident
+class its threat model targets. `managed-settings.d/10-git-safety.json` holds 11
+declarative `permissions.deny` patterns — all git — and `00-secrets.json` covers
+secret reads. Nothing ships for the broader accident class: `rm -rf` against
+system paths, disk destruction (`dd`, `mkfs`, `wipefs`), fork bombs, firewall
+flush, package-manager purges, `curl | sh` pipes. Users who want that coverage
+hand-roll a personal `PreToolUse` hook; drydock protects such a hook read-only
+(INV-3) but does not provide one.
+
+**Proposed solution.** A shipped guardrail layer, deny-first. Every command class
+expressible as an exact pattern becomes a `permissions.deny` entry — the
+mechanism `10-git-safety.json` already uses — because declarative patterns are
+precedence-correct and carry no regex false-positive surface. A `PreToolUse`
+regex hook is added only for the residue that deny patterns genuinely cannot
+express (multi-token / contextual matches), wired via the managed-settings layer
+to a script in drydock's read-only hooks overlay (INV-3), never via the
+user's `~/.claude/hooks/`. Source
+material is triaged from an existing hand-rolled `block-destructive.sh`: keep
+universal threat-model-A rules, drop stack-specific ones, translate messages to
+English (§6). Known regex false positives are fixed in the shipped version — the
+`git branch` rule mismatching long flags (`--merged`, `--no-merged`) as
+deletions, and the force-push rule matching protected names as substrings
+(`fix/main-bug`). Overlap with `10-git-safety.json` is resolved to one mechanism
+per command class.
+
+**Why this scope.** Security / correctness, squarely threat model A (INV-7) —
+`rm -rf /`, a filled disk, a flushed firewall are the footgun class drydock
+exists to catch. Pairs with `managed-settings-layer`, whose deny mechanism this
+extends. Exit criterion: a drydock user can delete their personal
+`block-destructive.sh` and rely on what drydock ships.
+
+**Invariants touched.** INV-3 — a hook, if one is needed, lives in the
+managed-settings layer / RO overlay, tamper-proof rather than advisory. INV-7 —
+the scope boundary: accident-class coverage only, no adversarial protections.
+INV-2 untouched.
+
+**Open questions.** The deny-vs-hook split — exactly which command classes can be
+expressed as deny patterns and which genuinely need the hook. Whether the git
+section of the source hook is dropped entirely in favour of the existing
+`10-git-safety.json`. The test-suite shape for ~30 rules.
+
+**Provenance.** This session; issue [#30][i30].
 
 ### concurrent-sessions
 
