@@ -420,5 +420,5 @@ do_symlink
 step_ok "Ready"
 ask_build_image
 ask_add_path_to_rc
-[ "$_ASK_FD_OK" = "1" ] && exec 3<&- || true
+if [ "$_ASK_FD_OK" = "1" ]; then exec 3<&- || true; fi
 print_next_steps
