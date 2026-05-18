@@ -188,9 +188,8 @@ host's authoritative hooks.
 
 ## The managed-settings layer (v0.2.0+)
 
-Complementing the hooks RO overlay, drydock delivers its agent policy — the
-`permissions.deny` block (secret-protection and git-safety entries) and the
-`hooks.SessionStart` entry — via Claude Code's managed-settings mechanism.
+Complementing the hooks RO overlay, drydock delivers its agent policy via Claude
+Code's managed-settings mechanism.
 
 **What it is.** Claude Code on Linux auto-loads `/etc/claude-code/managed-settings.d/`
 at startup with no flags required. Files in that directory are merged at highest
@@ -205,6 +204,20 @@ image at `/etc/claude-code/managed-settings.d/` (root-owned) and resolves the
 container user cannot write to `/etc/` — the policy is tamper-proof by image-layer
 ownership, not merely by a bind-mount flag.
 
+**Drop-in files and what each covers:**
+
+| File | Layer | Contents |
+|------|-------|----------|
+| `00-secrets.json` | Tier 1 — deny | Secret-file read deny (`Read(~/.ssh/**)` etc.) |
+| `10-git-safety.json` | Tier 1 — deny | Git destructive-ops deny (force-push, protected-branch delete/rename, history-rewrite, GitHub API destructive ops) |
+| `20-hooks.json` | Tier 2 — hook wiring | `hooks.SessionStart` entry — wires `drydock-session-start.sh` |
+| `30-os-safety.json` | Tier 1 — deny | OS destructive-ops deny (rm system paths, disk destruction, package purge, firewall flush, docker host-escape) |
+| `40-guardrails-hook.json` | Tier 2 — hook wiring | `hooks.PreToolUse` entry — wires `drydock-block-destructive.sh` with matcher `"Bash"` |
+
+The deny layers (Tier 1) are evaluated by Claude Code **before** any hook runs.
+The hook wiring drop-ins (Tier 2) register the shell scripts that handle cases
+the declarative deny cannot express.
+
 **INV-2 compliance.** The managed-settings directory lives at `/etc/claude-code/` —
 outside `$HOME`. It is drydock-owned policy config, not host `~/.claude/` state. The
 host/container state-split boundary (INV-2) is never crossed.
@@ -213,12 +226,57 @@ host/container state-split boundary (INV-2) is never crossed.
 per-project `settings.json` seeded by `drydock init` — a writable file the agent
 could overwrite. The managed-settings layer closes this gap: the same policy is now
 structural (image-layer immutable) rather than advisory. The hooks RO overlay (hook
-*scripts*) and the managed-settings layer (policy *rules* + hook *entry*) together
+*scripts*) and the managed-settings layer (policy *rules* + hook *wiring*) together
 make drydock's full tier-1 defense structural.
 
 **Refresh cadence.** Policy updates (new deny entries, hook changes) take effect after
 `drydock build`. Users already rebuild after pulling drydock when Dockerfile or MCP
 binary changes land — the marginal cost is zero.
+
+## The destructive-command guardrail layer (v0.2.0+)
+
+drydock ships a two-tier defense against accident-class destructive commands,
+both tiers image-baked and tamper-proof. Full coverage details and known
+limitations are in [security.md](security.md#destructive-command-guardrail-layer-v020).
+
+**Tier 1 — declarative deny.** `10-git-safety.json` and `30-os-safety.json`
+cover the deny-expressible classes: protected-branch operations, history-rewrite,
+GitHub destructive API calls, `rm -rf` to system paths, disk/partition tools,
+package purge, firewall flush, and docker host-escape (`--privileged` /
+`-v /:` mount). Deny patterns use strict word-boundary shapes; the B9/B10 matrix
+loops 8 protected branches × up to 6 flag forms to eliminate false positives.
+
+**Tier 2 — PreToolUse hook.** `templates/hooks/drydock-block-destructive.sh`
+covers the five residue classes the deny mechanism cannot express (ssh to
+production host, fork bomb, `rm` of `.` or `.git`, parent-traversal `rm`,
+curl/wget pipe to shell). It is wired by `40-guardrails-hook.json` as a
+`hooks.PreToolUse` handler with matcher `"Bash"`. The hook applies regex checks
+to the full command string — no tokenization, no `eval`. For docker-wrapped
+commands (`docker exec <ctr> <cmd>` / `docker run [opts] <image> <cmd>`), the
+dangerous substrings are present in the full string regardless of the wrapper,
+so no special docker branch is needed.
+
+**Data flow:**
+```
+Claude Code: Bash tool call
+    │
+    ▼
+[Tier 1] permissions.deny  (10-git-safety.json + 30-os-safety.json)
+    │  match → DENIED, hook never runs
+    ▼  no match
+[Tier 2] PreToolUse hook  (40-guardrails-hook.json wires it)
+    │  → sh -c guard → /opt/drydock/hooks/drydock-block-destructive.sh (RO bind-mount)
+    │  → reads {tool_name, tool_input.command} JSON on stdin
+    │  → 5 residue regexes, full-string match
+    │  match → exit 2 (blocked) │ no match → exit 0 (allowed)
+    ▼
+Command executes
+```
+
+**Accident-class boundary.** This layer inspects command strings. Raw Docker
+socket calls, the Docker SDK, or base64-obfuscated payloads bypass it. This is
+a documented non-goal per INV-6 and INV-7 — drydock defends against accidents,
+not adversaries.
 
 ## How drydock decides what to mount
 

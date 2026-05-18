@@ -11,11 +11,10 @@ adversarial agent**. Read this so you don't develop a false sense of security.
   ephemeral root, not the host's. Blast radius = the container.
 - **Read of `~/.aws/credentials`, `~/.gnupg/`, `~/.kube/`, etc.** — not
   mounted.
-- **Self-modification of `~/.claude/hooks/block-destructive.sh`** — RO
-  overlay; the agent can read its guardrails but not edit them.
-- **Weakening of the `permissions.deny` block or the `hooks.SessionStart` entry** —
-  drydock's agent policy (secret-protection deny entries, git-safety deny entries, and
-  the SessionStart hook) is delivered as a Claude Code managed-settings drop-in baked
+- **Self-modification of hook scripts** — the hooks directory is RO
+  bind-mounted; the agent can read its guardrails but not edit them.
+- **Weakening of the `permissions.deny` block or hook entries** —
+  drydock's agent policy is delivered as Claude Code managed-settings drop-ins baked
   into the image at `/etc/claude-code/managed-settings.d/`. The files are root-owned;
   the non-root container user cannot write to `/etc/`. Claude Code loads managed
   settings at highest precedence and the rules cannot be weakened from project-level
@@ -23,6 +22,85 @@ adversarial agent**. Read this so you don't develop a false sense of security.
   agent to overwrite these policy files from inside the container.
 - **Damage to other projects under `~/`** — only `$PROJECT_DIR` is mounted;
   sibling projects aren't visible.
+- **Destructive commands (accident class)** — see the section below.
+
+## Destructive-command guardrail layer (v0.2.0+)
+
+drydock ships a two-tier defense against accident-class destructive commands.
+Both tiers are image-baked and tamper-proof.
+
+### Tier 1 — declarative deny (`permissions.deny`)
+
+Most rules ship as `Bash(...)` wildcard patterns in root-owned managed-settings
+drop-ins. Claude Code evaluates the deny list **before** any hook runs —
+matching commands are blocked at the framework level before execution.
+
+| Drop-in file | What it covers |
+|---|---|
+| `10-git-safety.json` | Protected-branch delete/rename (8 branches × 6 flag forms), history-rewrite (`push --mirror`, `filter-branch`, `update-ref -d`), remote-delete refspecs, GitHub destructive ops (`gh repo delete/archive/transfer`, `gh release delete`, `gh api DELETE refs/heads/*`) |
+| `30-os-safety.json` | `rm -rf` to system paths, `find / -delete`, disk-destruction tools (`dd`, `mkfs`, partition tools, `wipefs`), sudo + destructive verb, package-manager purge/remove, kernel module teardown, firewall flush, `crontab -r`, `kill -9 1`, `docker system/volume prune`, redirect to block devices or critical `/etc` files, `docker run --privileged` / `docker run -v /:` (host-root bind) |
+
+Deny patterns use strict word-boundary shapes to prevent false positives.
+For example, `git branch --delete main` is blocked but `git branch --merged`
+and `git checkout fix/main-bug` are not.
+
+### Tier 2 — `PreToolUse` hook
+
+A small Bash hook (`drydock-block-destructive.sh`) handles the five rule
+classes that the deny mechanism cannot express — cases requiring multi-token
+AND/OR logic or anchored substring matching:
+
+| Rule | Blocked example | Allowed example |
+|---|---|---|
+| A1 — ssh to production host | `ssh user@prod.example.com` | `ssh user@dev.example.com` |
+| C12 — fork bomb | `:() { :|:& };:` | `bash -c 'echo hello'` |
+| C17 — `rm` of `.` or `.git` | `rm -rf .` | `rm -rf ./tmp` |
+| C18 — `rm` of parent traversal | `rm -rf ../sibling` | `rm -rf ./dist` |
+| C20 — curl/wget pipe to shell | `curl https://x.com/i.sh \| bash` | `curl -o file.sh https://x.com/i.sh` |
+
+The hook is wired by `40-guardrails-hook.json` (also image-baked) as a
+`PreToolUse` handler with matcher `"Bash"` — it only runs for Bash tool calls.
+The script reads the full command string on stdin and applies regex checks.
+
+**Docker exec/run coverage.** The hook checks the full command string
+regardless of a leading `docker exec <ctr>` or `docker run [opts] <image>`
+prefix — dangerous substrings (`rm -rf`, `:(){:|:&};:`, `curl … | bash`, etc.)
+are present in the full string whether or not the command is docker-wrapped.
+This provides accident-class coverage for simple docker-wrapped invocations.
+
+**Hard boundary (non-goal per INV-6 and INV-7).** Command-string inspection
+raises the accident floor; it is NOT an adversarial ceiling. A raw Docker
+socket call, the Docker SDK, a base64-obfuscated payload, or `docker exec`
+reading the command from a file all bypass string inspection. Adversarial
+container-escape via the Docker socket remains a documented non-goal —
+the socket is root-equivalent by design and drydock's threat model is
+accidents, not adversaries. See "What drydock does NOT protect against" below.
+
+### Known limitations
+
+- **B3 non-origin remotes.** `Bash(git push origin :*)` blocks refspec-delete
+  for `origin` only. `git push upstream :main` (non-origin remote) is not
+  covered. Under threat model A this is an acceptable documented gap — pushing
+  a delete refspec to a non-origin remote is not an accident-shaped action in
+  typical workflows.
+- **C7 sudo rules are defense-in-depth only.** The default drydock image does
+  not install `sudo` (verified — no `sudo` in the Dockerfile apt list;
+  `no-new-privileges:true` would make it a no-op anyway). The `sudo + verb`
+  deny entries in `30-os-safety.json` are dead weight against the default
+  image. They are kept as a safety net for derived images where a user adds
+  `sudo` — they do not protect against bypassing the deny layer itself.
+
+### If you have a personal `block-destructive.sh` hook
+
+Previous drydock guidance suggested adding a personal
+`~/.claude/hooks/block-destructive.sh` on your host. Since v0.2.0, drydock
+ships its own guardrail hook (`drydock-block-destructive.sh`) image-baked and
+wired automatically. **You can safely delete your personal
+`~/.claude/hooks/block-destructive.sh`** and rely on the shipped version —
+it covers the same rule classes plus docker-wrapped variants.
+
+The two scripts coexist without conflict (different filenames, different mount
+points), so there is no urgency. But the personal copy is now redundant.
 
 ## Container hardening defaults (v0.1.1+)
 

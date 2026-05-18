@@ -226,12 +226,20 @@ env-var knobs:
 
 See [docs/security.md](docs/security.md) for the cap list rationale.
 
-**Managed-settings layer (v0.2.0+):** drydock's tier-1 agent policy — the `permissions.deny`
-secret/git-safety block and the `hooks.SessionStart` entry — ships image-baked as a Claude Code
-managed-settings drop-in (`/etc/claude-code/managed-settings.d/`, root-owned). It applies
+**Managed-settings layer (v0.2.0+):** drydock's tier-1 agent policy ships image-baked as Claude Code
+managed-settings drop-ins (`/etc/claude-code/managed-settings.d/`, root-owned). It applies
 automatically with zero per-project setup and cannot be weakened from a project's
 `.claude/settings.json`. `drydock init` seeds a minimal per-project stub for your own
 customization; the policy itself lives in the image.
+
+The policy includes a **destructive-command guardrail layer**: a declarative deny set
+(`10-git-safety.json`, `30-os-safety.json`) covering protected-branch ops, history-rewrite,
+OS-level destruction, and docker host-escape, plus a `PreToolUse` hook
+(`drydock-block-destructive.sh`) for the five residue classes the deny mechanism cannot express
+(ssh-to-prod, fork bomb, `rm .`/`.git`, parent-traversal `rm`, pipe-to-shell). Both tiers are
+tamper-proof by image-layer ownership. If you have a personal `~/.claude/hooks/block-destructive.sh`
+from previous drydock guidance, **you can delete it** — the shipped version covers the same rules
+plus docker-wrapped variants. See [docs/security.md](docs/security.md#if-you-have-a-personal-block-destructivesh-hook).
 
 ## Documentation
 
