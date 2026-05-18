@@ -39,6 +39,32 @@ Debian 12 slim container that:
 > adversarial agent — Docker socket access ≈ root-equivalent on the host.
 > Read [docs/security.md](docs/security.md) before relying on it.
 
+### Claude Code's sandbox mode vs. drydock
+
+> They are not alternatives — they are different layers, and they stack. Claude Code's sandbox mode contains individual **commands**; drydock containerizes the whole **session** and gives it an environment.
+
+| | Claude Code sandbox mode | drydock |
+|---|---|---|
+| **What it is** | A feature *inside* Claude Code (off by default; enable with `/sandbox`) | The workspace Claude Code runs *inside* (you launch it with the `drydock` CLI) |
+| **Scope** | Each Bash command and its subprocesses | The whole session and its environment |
+| **What it's for** | Contain a command's blast radius; cut permission prompts | A reproducible, credential-isolated dev environment |
+| **Filesystem** | Writes limited to the working directory; reads allowed everywhere by default | Host `~/.ssh`, `~/.gnupg`, `~/.aws`… are not mounted at all — invisible, not merely write-protected |
+| **Network** | Per-command domain allowlist | Inherits the container's network — not per-command |
+| **Reproducible environment** | No — it restricts the host you already have | Yes — pinned Debian image + defined toolchain |
+| **State** | Uses the host's Claude state as-is — no separation | Separate container state — host and container sessions don't race |
+| **Mechanism** | OS sandbox — Seatbelt (macOS), bubblewrap (Linux) | Docker container |
+| **Threat model** | A real OS boundary for a command's writes/network (the network proxy does not inspect TLS) | Accidents, not adversaries — the bind-mounted Docker socket is root-equivalent on the host by design (INV-6) |
+
+**Use them together.** Claude Code's sandbox can run inside a drydock container — drydock is *where* the session runs, the sandbox is *how* each command is contained. Neither replaces the other.
+
+**drydock's security layers:**
+
+- **Credential isolation** — the host's SSH and GPG keys are never mounted into the container (INV-1).
+- **Tamper-proof guardrails** — an image-baked `permissions.deny` policy plus a read-only `PreToolUse` hook; the agent cannot edit its own guardrails (INV-3).
+- **Container hardening** — dropped Linux capabilities, `no-new-privileges`, and a size-bounded `/tmp` (INV-8).
+
+These defend against agent *accidents*, not a motivated attacker — the bind-mounted Docker socket is root-equivalent on the host by design (INV-6). Full detail in [docs/security.md](docs/security.md).
+
 ## Quick start
 
 drydock is a per-user, host-side tool — no system-wide install.
