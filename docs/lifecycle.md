@@ -14,7 +14,7 @@ right place for each action.
 | Edit `~/.claude/CLAUDE.md` or `settings.json` (global) | `~/.claude/` | **NO** — separate |
 | Onboarding flags, "seen hints", project registry, MCP servers, OAuth | `~/.claude.json` | **NO** — separate (`~/.claude-container.json`) |
 | Edit `~/.claude/hooks/` | blocked from container (RO overlay) | host-only |
-| drydock deny policy (`permissions.deny` + `hooks.SessionStart`) | image-baked managed-settings (`/etc/claude-code/managed-settings.d/`) — update via `drydock build` | N/A — applied at highest precedence, not overridable from project `settings.json` |
+| drydock guardrail policy (`permissions.deny` git + OS safety, `hooks.SessionStart`, `hooks.PreToolUse` destructive-command hook) | image-baked managed-settings (`/etc/claude-code/managed-settings.d/`) — update via `drydock build` | N/A — applied at highest precedence, not overridable from project `settings.json` |
 | Edits to `.claude/settings.json` of a project | repo at `$PROJECT_DIR` | **YES** — same mount |
 | engram memories (`mem_save`) | `~/.engram/engram.db` | **NO** — separate DBs |
 
