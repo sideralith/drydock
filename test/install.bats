@@ -347,6 +347,121 @@ setup() {
 	refute [ -f "$_home/.config/drydock/engram-shared" ]
 }
 
+# ── T-10: build-image prompt RED tests ───────────────────────────────────────
+# HARD CONSTRAINT: every test path MUST use the bin/drydock stub from the
+# seeded INSTALL_DIR. The real drydock binary MUST NEVER be invoked.
+# ask_build_image() calls "$DRYDOCK_INSTALL_DIR/bin/drydock" build (absolute
+# path) — DRYDOCK_INSTALL_DIR seam ensures the stub is always used.
+#
+# Setup helper for build tests: pre-seed INSTALL_DIR with a .git marker and
+# a custom bin/drydock stub so do_clone() skips (existing clone path).
+
+_setup_build_stub() {
+	local _dir="$1" _exit="$2"
+	mkdir -p "$_dir/.git" "$_dir/bin" "$_dir/lib"
+	touch "$_dir/lib/common.sh"
+	printf '#!/usr/bin/env bash\nexit %s\n' "$_exit" >"$_dir/bin/drydock"
+	chmod +x "$_dir/bin/drydock"
+}
+
+@test "build-image: non-interactive — drydock build NOT invoked" {
+	# DRYDOCK_INTERACTIVE=0 → ask_build_image() must be a no-op
+	# Verify: stub would exit 1 if called; overall exit must still be 0
+	local _install="$BATS_TEST_TMPDIR/build-ni-install"
+	local _log="$BATS_TEST_TMPDIR/build-ni.log"
+	mkdir -p "$_install/.git" "$_install/bin" "$_install/lib"
+	touch "$_install/lib/common.sh"
+	# Write a stub that logs its call and exits 1 — if called, test must fail
+	printf '#!/usr/bin/env bash\nprintf "STUB_CALLED\n" >%s\nexit 1\n' "$_log" \
+		>"$_install/bin/drydock"
+	chmod +x "$_install/bin/drydock"
+
+	run env DRYDOCK_INSTALL_DIR="$_install" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=0 \
+		HOME="$BATS_TEST_TMPDIR/home-build-ni" \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -f "$_log" ]
+}
+
+@test "build-image: interactive + accept + build succeeds — stub invoked, exit 0" {
+	# ask_build_image() fires, user says 'y', stub exits 0 → install exits 0
+	# stub records its invocation in a log file; assert log exists (RED: stub not called yet)
+	local _install="$BATS_TEST_TMPDIR/build-ok-install"
+	local _log="$BATS_TEST_TMPDIR/build-ok.log"
+	mkdir -p "$_install/.git" "$_install/bin" "$_install/lib"
+	touch "$_install/lib/common.sh"
+	printf '#!/usr/bin/env bash\nprintf "DRYDOCK_BUILD_CALLED %%s\n" "$@" >%s\nexit 0\n' "$_log" \
+		>"$_install/bin/drydock"
+	chmod +x "$_install/bin/drydock"
+	local _tty="$BATS_TEST_TMPDIR/tty-build-ok"
+	# Two prompts: engram-mode ('n') then build-image ('y')
+	printf 'n\ny\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$_install" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$BATS_TEST_TMPDIR/home-build-ok" \
+		bash "$INSTALL_SH"
+	assert_success
+	# Fails RED: ask_build_image() doesn't call the stub yet
+	assert [ -f "$_log" ]
+}
+
+@test "build-image: interactive + accept + build fails — warn + exit 0" {
+	# ask_build_image() fires, user says 'y', stub exits 1 → build-specific warn + exit 0
+	# Fails RED: ask_build_image() does not exist yet
+	local _install="$BATS_TEST_TMPDIR/build-fail-install"
+	_setup_build_stub "$_install" 1
+	local _tty="$BATS_TEST_TMPDIR/tty-build-fail"
+	printf 'n\ny\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$_install" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$BATS_TEST_TMPDIR/home-build-fail" \
+		bash "$INSTALL_SH"
+	assert_success
+	# Fails RED: ask_build_image() doesn't produce this specific warning yet
+	assert_output --partial "build failed"
+}
+
+@test "build-image: interactive + decline — drydock build NOT invoked" {
+	# ask_build_image() fires, user says 'n' → stub must NOT be invoked
+	# Fails RED: ask_build_image() does not exist yet
+	local _install="$BATS_TEST_TMPDIR/build-decline-install"
+	local _log="$BATS_TEST_TMPDIR/build-decline.log"
+	mkdir -p "$_install/.git" "$_install/bin" "$_install/lib"
+	touch "$_install/lib/common.sh"
+	printf '#!/usr/bin/env bash\nprintf "STUB_CALLED\n" >%s\nexit 0\n' "$_log" \
+		>"$_install/bin/drydock"
+	chmod +x "$_install/bin/drydock"
+	local _tty="$BATS_TEST_TMPDIR/tty-build-decline"
+	printf 'n\nn\n' >"$_tty"  # engram: n, build: n
+
+	run env DRYDOCK_INSTALL_DIR="$_install" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$BATS_TEST_TMPDIR/home-build-decline" \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -f "$_log" ]
+}
+
 # Case 6: env_overrides
 @test "env overrides: all 4 vars respected" {
 	local _custom_install="$BATS_TEST_TMPDIR/custom-install"

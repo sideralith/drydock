@@ -236,19 +236,39 @@ do_symlink() {
 
 # ── Interactive helpers ───────────────────────────────────────────────────────
 
-# ask(prompt, default) — prompt → stderr; read from ${_DRYDOCK_TTY:-/dev/tty}.
-# Returns resolved 'y' or 'n'. Empty input → default. Missing TTY → default.
-# Safe under set -e: exec 3< failure is guarded; never aborts.
-ask() {
-	[ "$DRYDOCK_INTERACTIVE" = "1" ] || { printf '%s' "$2"; return 0; }
-	if ! exec 3<"${_DRYDOCK_TTY:-/dev/tty}" 2>/dev/null; then
-		printf '%s' "$2"; return 0
+# _ask_fd_open — open the TTY input fd 3 once for all ask() calls.
+# Guarded so a missing TTY never aborts under set -e.
+# Sets _ASK_FD_OK=1 on success, 0 on failure.
+# NOTE: exec N< with 2>/dev/null would permanently silence stderr — test the
+# path first in a subshell; open fd 3 without 2>/dev/null only when safe.
+_ASK_FD_OK=0
+_ask_fd_open() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+	local _tty="${_DRYDOCK_TTY:-/dev/tty}"
+	if ( exec 3<"$_tty" ) 2>/dev/null; then
+		exec 3<"$_tty"
+		_ASK_FD_OK=1
 	fi
+}
+
+# ask(prompt, default) — prompt → stderr; reads one line from the already-open
+# fd 3 (_ask_fd_open must be called first). Sets _ASK_RESULT to 'y' or 'n'.
+# Empty input → default. fd unavailable → default. Never aborts under set -e.
+# NOTE: sets _ASK_RESULT (global) to avoid command-substitution subshell
+# losing the fd 3 position advance back to the parent shell.
+_ASK_RESULT=n
+ask() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || { _ASK_RESULT="$2"; return 0; }
 	local _ans=""
 	printf '%s [%s] ' "$1" "$2" >&2
-	read -r _ans <&3 || true
-	exec 3<&-
-	case "${_ans:-$2}" in [Yy]*) printf y ;; [Nn]*) printf n ;; *) printf '%s' "$2" ;; esac
+	if [ "$_ASK_FD_OK" = "1" ]; then
+		read -r _ans <&3 || true
+	fi
+	case "${_ans:-$2}" in
+	[Yy]*) _ASK_RESULT=y ;;
+	[Nn]*) _ASK_RESULT=n ;;
+	*) _ASK_RESULT="$2" ;;
+	esac
 }
 
 # _host_shared_safe — returns 0 (true) when native Linux with reliable fcntl locks;
@@ -268,11 +288,24 @@ ask_engram_mode() {
 	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
 	_host_shared_safe || return 0
 
-	local _ans
-	_ans="$(ask "Share engram DB with host session (native Linux only)? (INV-5)" n)"
-	if [ "$_ans" = "y" ]; then
+	ask "Share engram DB with host session (native Linux only)? (INV-5)" n
+	if [ "$_ASK_RESULT" = "y" ]; then
 		mkdir -p "$HOME/.config/drydock"
 		touch "$HOME/.config/drydock/engram-shared"
+	fi
+}
+
+# ask_build_image — offer to build the Docker image after symlinking.
+# Default [y/N] (opt-in). Build failure is non-fatal: warn and continue.
+# Non-interactive: skip entirely.
+ask_build_image() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+
+	ask "Build the drydock Docker image now? (~5 min, first time)" n
+	[ "$_ASK_RESULT" = "y" ] || return 0
+
+	if ! "$DRYDOCK_INSTALL_DIR/bin/drydock" build; then
+		step_warn "image build failed — run 'drydock build' manually when Docker is ready"
 	fi
 }
 
@@ -294,9 +327,12 @@ check_path() {
 print_header
 check_prereqs
 check_docker_sock
+_ask_fd_open
 ask_engram_mode
 do_clone
 do_symlink
 step_ok "Ready"
+ask_build_image
+[ "$_ASK_FD_OK" = "1" ] && exec 3<&- || true
 check_path
 print_next_steps
