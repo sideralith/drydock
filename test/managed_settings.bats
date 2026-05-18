@@ -71,6 +71,11 @@ export DRYDOCK_CANONICAL_SESSION_HOOK_CMD
     [ "$found" -eq 1 ]
 }
 
+# ── F-1: ROADMAP entry for managed-settings-layer ────────────────────────────
+@test "ROADMAP: v0.2.0 section references managed-settings-layer" {
+    grep -q 'managed-settings-layer' "$DRYDOCK_HOME/docs/ROADMAP.md"
+}
+
 # ── T5: Dockerfile bakes managed-settings.d (integration, skipped in unit mode)
 @test "managed-settings: Dockerfile bakes managed-settings.d with USER_NAME substituted" {
     skip "requires built drydock image (integration test — set DRYDOCK_INTEGRATION=1 and rebuild to enable)"

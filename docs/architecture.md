@@ -186,6 +186,40 @@ illusory under both adversarial behavior and ordinary bugs.
 This means hook updates must happen on host. The container always sees the
 host's authoritative hooks.
 
+## The managed-settings layer (v0.2.0+)
+
+Complementing the hooks RO overlay, drydock delivers its agent policy — the
+`permissions.deny` block (secret-protection and git-safety entries) and the
+`hooks.SessionStart` entry — via Claude Code's managed-settings mechanism.
+
+**What it is.** Claude Code on Linux auto-loads `/etc/claude-code/managed-settings.d/`
+at startup with no flags required. Files in that directory are merged at highest
+precedence: deny arrays are concatenated and deduplicated; hook entries are
+deduplicated by command string. Managed settings cannot be weakened or overridden
+from project-level `settings.json` files.
+
+**How drydock delivers it.** The drop-in files live in `templates/managed-settings.d/`
+in the drydock repository. During `drydock build`, the Dockerfile COPYs them into the
+image at `/etc/claude-code/managed-settings.d/` (root-owned) and resolves the
+`__HOME__` placeholder to `/home/${USER_NAME}` via a `RUN sed`. The non-root
+container user cannot write to `/etc/` — the policy is tamper-proof by image-layer
+ownership, not merely by a bind-mount flag.
+
+**INV-2 compliance.** The managed-settings directory lives at `/etc/claude-code/` —
+outside `$HOME`. It is drydock-owned policy config, not host `~/.claude/` state. The
+host/container state-split boundary (INV-2) is never crossed.
+
+**INV-3 strengthening.** Before v0.2.0, the deny block and hook entry lived in the
+per-project `settings.json` seeded by `drydock init` — a writable file the agent
+could overwrite. The managed-settings layer closes this gap: the same policy is now
+structural (image-layer immutable) rather than advisory. The hooks RO overlay (hook
+*scripts*) and the managed-settings layer (policy *rules* + hook *entry*) together
+make drydock's full tier-1 defense structural.
+
+**Refresh cadence.** Policy updates (new deny entries, hook changes) take effect after
+`drydock build`. Users already rebuild after pulling drydock when Dockerfile or MCP
+binary changes land — the marginal cost is zero.
+
 ## How drydock decides what to mount
 
 Each `drydock run` invocation reads the **current project directory** (cwd or

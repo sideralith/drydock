@@ -31,6 +31,7 @@ file.
 | [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Planned |
 | [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Planned |
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Planned |
+| [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Planned |
 | [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Planned |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
@@ -41,9 +42,9 @@ Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene
 **v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
 agent-agnostic infrastructure.
 
-Resolution order — **v0.2.0**: self-awareness → install-interactive → auto-sync →
-concurrent-sessions → link-sibling-projects. Order for later releases is not yet
-decided.
+Resolution order — **v0.2.0**: self-awareness → managed-settings-layer →
+install-interactive → auto-sync → concurrent-sessions → link-sibling-projects.
+Order for later releases is not yet decided.
 
 [i8]: https://github.com/sideralith/drydock/issues/8
 [i9]: https://github.com/sideralith/drydock/issues/9
@@ -150,6 +151,42 @@ security sandbox).
 **Open questions.** Exact hook output format; static marker text vs. a live probe.
 
 **Provenance.** This session; issue [#8][i8].
+
+### managed-settings-layer
+
+**Problem.** drydock's `permissions.deny` block and `hooks.SessionStart` entry were
+seeded by `drydock init` into a per-project `settings.json` — a writable file. An
+instruction-following agent could overwrite that file mid-session, silently removing
+the deny guardrails for the remainder of the session. The hook *scripts* were already
+structural (RO bind-mount, INV-3), but the *policy rules* were only advisory.
+
+**Proposed solution.** Deliver drydock's agent policy — the deny entries (secret
+protection, git safety) and the `hooks.SessionStart` entry — as a Claude Code
+managed-settings drop-in baked into the image. The files are COPYied into the
+Dockerfile at `/etc/claude-code/managed-settings.d/` (root-owned) and `__HOME__`
+is resolved via a `RUN sed` at build time. The non-root container user cannot write
+to `/etc/`, so the policy is tamper-proof by image-layer ownership. Claude Code loads
+managed settings at highest precedence; the rules cannot be weakened from project
+settings. `drydock init` is reshaped to a lightweight stub-seeder (no deny entries,
+no hook wiring — the stub is for project-specific customization only); the
+`--update` flag (whose deny-merge logic is now obsolete) is removed.
+
+**Why this scope.** Security / correctness. Closes an existing INV-3-spirit gap:
+today the hook *script* is RO but the deny *list* and hook *entry* sit in a RW
+project file. Pairs naturally with the `self-awareness` item (which added the
+`SessionStart` hook this change relocates). Small, bounded change; no new external
+dependencies.
+
+**Invariants touched.** INV-3 strengthened — the deny block and hook entry become
+structurally tamper-proof rather than advisory. INV-2 untouched — the
+managed-settings dir lives at `/etc/claude-code/`, outside `$HOME`, never crossing
+the host/container state-split boundary.
+
+**Open questions.** None for v0.2.0. A `--migrate` subcommand to strip redundant
+deny+hook blocks from existing project `settings.json` files is a post-v0.2.0
+nice-to-have if demand surfaces.
+
+**Provenance.** engram exploration #1159 + proposal #1160.
 
 ### concurrent-sessions
 

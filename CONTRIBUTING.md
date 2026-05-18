@@ -126,11 +126,11 @@ actually matters.
 - Provide a CLI to generate/register these keys for you (the steps above are
   one-time and explicit on purpose).
 
-After updating drydock, run `drydock init --update` in already-configured projects to pick up new baseline denies.
+After updating drydock, run `drydock build` so the new baseline denies in the managed-settings layer take effect.
 
 ## How to file an issue
 
-Use a clear, specific title: one line describing what is broken and in which command (e.g., `drydock init --update fails on macOS 14 with "no such file" error`).
+Use a clear, specific title: one line describing what is broken and in which command (e.g., `drydock build fails on macOS 14 with "no such file" error`).
 
 Include in the body:
 
@@ -155,7 +155,7 @@ GitHub Issues is the only intake channel — there is no Discord, mailing list, 
    cd drydock
    ```
 
-2. **Create a branch** using the `type/short-description` convention — mirrors the commit-type prefix (e.g., `feat/add-podman-support`, `fix/init-update-macos`).
+2. **Create a branch** using the `type/short-description` convention — mirrors the commit-type prefix (e.g., `feat/add-podman-support`, `fix/submount-detection-macos`).
 
 3. **Commit** using Conventional Commits. See [CLAUDE.md §5: Tracking & Contribution](CLAUDE.md#5-tracking--contribution) for the full conventions table: allowed types, the prohibition on `Co-Authored-By` trailers, and the `--no-verify` / `--force` rules. Do not duplicate the table here.
 
