@@ -309,17 +309,94 @@ ask_build_image() {
 	fi
 }
 
-# ── PATH check + hint ─────────────────────────────────────────────────────────
+# ── PATH rc-append ────────────────────────────────────────────────────────────
 
-check_path() {
-	case ":${PATH}:" in
-	*":${DRYDOCK_BIN_DIR}:"*) ;;
-	*)
-		step_warn "$DRYDOCK_BIN_DIR is not in PATH"
-		hint "Add to ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
-		hint "Add to ~/.zshrc:   export PATH=\"\$HOME/.local/bin:\$PATH\""
-		;;
+# _rc_candidates — emit list of rc files that exist in HOME.
+# Outputs one path per line.
+_rc_candidates() {
+	local _f
+	for _f in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+		if [ -f "$_f" ]; then printf '%s\n' "$_f"; fi
+	done
+}
+
+# _rc_for_shell — resolve rc file from $SHELL; returns "" if ambiguous.
+_rc_for_shell() {
+	case "${SHELL:-}" in
+	*/bash) printf '%s' "$HOME/.bashrc" ;;
+	*/zsh) printf '%s' "$HOME/.zshrc" ;;
+	*/sh) printf '%s' "$HOME/.profile" ;;
+	*) printf '' ;;
 	esac
+}
+
+# ask_add_path_to_rc — offer to append PATH export line to shell rc file.
+# Non-interactive: retain current warn+hint behavior (byte-identical parity).
+# Interactive + BIN_DIR already in PATH: silent skip.
+# Interactive + accept: grep-guarded append (idempotent).
+# rc-file selection: only when SHELL empty/ambiguous AND >1 rc candidate exists.
+ask_add_path_to_rc() {
+	local _export_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
+
+	# Non-interactive: preserve exact current check_path warn+hint behavior
+	if [ "$DRYDOCK_INTERACTIVE" != "1" ]; then
+		case ":${PATH}:" in
+		*":${DRYDOCK_BIN_DIR}:"*) ;;
+		*)
+			step_warn "$DRYDOCK_BIN_DIR is not in PATH"
+			hint "Add to ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+			hint "Add to ~/.zshrc:   export PATH=\"\$HOME/.local/bin:\$PATH\""
+			;;
+		esac
+		return 0
+	fi
+
+	# Interactive: skip if BIN_DIR is already in PATH
+	case ":${PATH}:" in
+	*":${DRYDOCK_BIN_DIR}:"*) return 0 ;;
+	esac
+
+	# Prompt to add to PATH
+	ask "Add $DRYDOCK_BIN_DIR to PATH in your shell rc file?" n
+	[ "$_ASK_RESULT" = "y" ] || return 0
+
+	# Resolve rc file
+	local _rc
+	_rc="$(_rc_for_shell)"
+	if [ -z "$_rc" ]; then
+		# Ambiguous shell: check candidate count
+		local _candidates
+		_candidates="$(_rc_candidates)"
+		local _count
+		_count="$(printf '%s\n' "$_candidates" | grep -c .)"
+		if [ "$_count" -gt 1 ]; then
+			# Numbered rc-file selection prompt
+			printf 'Which rc file should drydock update?\n' >&2
+			local _i=1
+			printf '%s\n' "$_candidates" | while IFS= read -r _cf; do
+				printf '  %d) %s\n' "$_i" "$_cf" >&2
+				_i=$((_i + 1))
+			done
+			printf 'Choice [1]: ' >&2
+			local _choice=""
+			if [ "$_ASK_FD_OK" = "1" ]; then
+				read -r _choice <&3 || true
+			fi
+			_choice="${_choice:-1}"
+			_rc="$(printf '%s\n' "$_candidates" | sed -n "${_choice}p")"
+		else
+			_rc="$(printf '%s\n' "$_candidates" | head -1)"
+		fi
+	fi
+
+	# Fallback: no rc file found; create .bashrc
+	[ -n "$_rc" ] || _rc="$HOME/.bashrc"
+
+	# Idempotent append: only add if exact export line is absent
+	if ! grep -Fxq "$_export_line" "$_rc" 2>/dev/null; then
+		printf '\n%s\n' "$_export_line" >>"$_rc"
+		step_ok "Added export PATH to $_rc"
+	fi
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -333,6 +410,6 @@ do_clone
 do_symlink
 step_ok "Ready"
 ask_build_image
+ask_add_path_to_rc
 [ "$_ASK_FD_OK" = "1" ] && exec 3<&- || true
-check_path
 print_next_steps

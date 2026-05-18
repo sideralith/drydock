@@ -462,6 +462,192 @@ _setup_build_stub() {
 	refute [ -f "$_log" ]
 }
 
+# ── T-12: PATH rc-append + rc-select RED tests ────────────────────────────────
+# Helper: run install.sh with custom HOME and PATH that does NOT include BIN_DIR,
+# plus a pre-configured tty file for sequential prompt answers.
+# Returns nothing; callers use $output and the rc file state.
+#
+# ask_add_path_to_rc replaces check_path.
+# Prompts in order on native Linux: engram-mode, build-image, add-to-PATH.
+
+@test "path-rc: non-interactive warns only, rc NOT modified" {
+	# DRYDOCK_INTERACTIVE=0 → warn+hint behavior preserved (check_path byte-identical)
+	local _home="$BATS_TEST_TMPDIR/home-path-ni"
+	mkdir -p "$_home"
+	printf '' >"$_home/.bashrc"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=0 \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	assert_output --partial "not in PATH"
+	# rc file must be unchanged (empty)
+	assert [ ! -s "$_home/.bashrc" ]
+}
+
+@test "path-rc: interactive + PATH already includes BIN_DIR — no prompt" {
+	# When BIN_DIR is already in PATH, ask_add_path_to_rc must not prompt
+	# Passes trivially (no prompt assertion) but validates parity
+	local _home="$BATS_TEST_TMPDIR/home-path-in-path"
+	mkdir -p "$_home"
+	local _tty="$BATS_TEST_TMPDIR/tty-path-in-path"
+	printf 'n\nn\n' >"$_tty"  # engram: n, build: n; no 3rd prompt expected
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		PATH="$BIN_DIR:$PATH" \
+		bash "$INSTALL_SH"
+	assert_success
+}
+
+@test "path-rc: interactive + accept — export line appended to rc" {
+	# ask_add_path_to_rc fires, user says 'y' → export line appended
+	# Fails RED: ask_add_path_to_rc doesn't exist yet
+	local _home="$BATS_TEST_TMPDIR/home-path-append"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc"
+	local _tty="$BATS_TEST_TMPDIR/tty-path-append"
+	# Prompts: engram:n, build:n, path:y
+	printf 'n\nn\ny\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL=/bin/bash \
+		bash "$INSTALL_SH"
+	assert_success
+	# Fails RED: export line not appended yet
+	assert_output --partial 'export PATH'
+	run grep -Fxc "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$_home/.bashrc"
+	assert_output 1
+}
+
+@test "path-rc: idempotent — re-run does not double-append" {
+	# Run twice with same rc fixture; assert export line appears exactly once
+	# Fails RED: idempotent guard not implemented yet
+	local _home="$BATS_TEST_TMPDIR/home-path-idemp"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc"
+	local _tty="$BATS_TEST_TMPDIR/tty-idemp1"
+	printf 'n\nn\ny\n' >"$_tty"
+
+	# First run
+	env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL=/bin/bash \
+		bash "$INSTALL_SH" >/dev/null 2>&1 || true
+
+	local _tty2="$BATS_TEST_TMPDIR/tty-idemp2"
+	printf 'n\nn\ny\n' >"$_tty2"
+
+	# Second run
+	env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty2" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL=/bin/bash \
+		bash "$INSTALL_SH" >/dev/null 2>&1 || true
+
+	# Assert exactly one copy
+	run grep -Fc "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$_home/.bashrc"
+	assert_output 1
+}
+
+@test "path-rc: interactive + decline — rc NOT modified" {
+	# ask_add_path_to_rc fires, user says 'n' → rc unchanged
+	# Passes trivially for now (no modification without implementation either)
+	local _home="$BATS_TEST_TMPDIR/home-path-decline"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc"
+	local _tty="$BATS_TEST_TMPDIR/tty-path-decline"
+	printf 'n\nn\nn\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL=/bin/bash \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -s "$_home/.bashrc" ]
+}
+
+@test "path-rc: ambiguous SHELL + multiple rc candidates — numbered prompt fires" {
+	# SHELL empty, both .bashrc and .zshrc exist → rc-select prompt appears
+	# Fails RED: rc-file selection not implemented yet
+	local _home="$BATS_TEST_TMPDIR/home-path-ambig"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc" "$_home/.zshrc"
+	local _tty="$BATS_TEST_TMPDIR/tty-path-ambig"
+	# Prompts: engram:n, build:n, path:y, rc-select:1
+	printf 'n\nn\ny\n1\n' >"$_tty"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL="" \
+		bash "$INSTALL_SH"
+	assert_success
+	# Fails RED: numbered rc-select prompt not shown yet
+	assert_output --partial "1)"
+}
+
+@test "path-rc: unambiguous SHELL=/bin/bash + only .bashrc — no rc-select prompt" {
+	# SHELL=/bin/bash, only .bashrc exists → auto-detect, no numbered prompt
+	local _home="$BATS_TEST_TMPDIR/home-path-unamb"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc"
+	local _tty="$BATS_TEST_TMPDIR/tty-path-unamb"
+	printf 'n\nn\ny\n' >"$_tty"  # only 3 prompts, no rc-select
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL=/bin/bash \
+		bash "$INSTALL_SH"
+	assert_success
+	# No numbered prompt: assert no "1)" or "2)" in output
+	refute_output --partial "1)"
+}
+
 # Case 6: env_overrides
 @test "env overrides: all 4 vars respected" {
 	local _custom_install="$BATS_TEST_TMPDIR/custom-install"
