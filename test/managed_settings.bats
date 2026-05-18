@@ -263,3 +263,246 @@ GIT_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/10-git-safety.json"
     [[ "$output" == *"/home/"*"/.ssh"* ]]
     [[ "$output" != *"__HOME__"* ]]
 }
+
+# ── slice B: os-safety deny drop-in (30-os-safety.json) ─────────────────────
+#
+# ── B-VERIFY-1: redirect operator does NOT split commands ────────────────────
+# Verified 2026-05-18 from primary source:
+#   https://docs.anthropic.com/en/docs/claude-code/permissions
+#
+# Key quote from the "Compound commands" section (section heading:
+# "Compound commands", level 4, slug "compound-commands"):
+#
+#   "Claude Code is aware of shell operators, so a rule like Bash(safe-cmd *)
+#    won't give it permission to run the command safe-cmd && other-cmd. The
+#    recognized command separators are &&, ||, ;, |, |&, &, and newlines. A rule
+#    must match each subcommand independently."
+#
+# CONCLUSION (ADR-4 C15/C21 CONFIRMED):
+#   The redirect operator > is NOT in the recognized command separator list.
+#   Therefore > does NOT split a command for deny matching purposes.
+#   Bash(* > /dev/sd*) and Bash(* > /etc/passwd) are matched as single strings.
+#   C15 (redirect to block device) and C21 (redirect to system files) entries
+#   are VALID as designed in ADR-4. Implementation proceeds.
+
+OS_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/30-os-safety.json"
+
+# ── B-T1 (R1, R6): 30-os-safety.json exists and is valid JSON ───────────────
+@test "30-os-safety: file exists and is valid JSON (B-T1)" {
+    [ -f "$OS_SAFETY_FILE" ]
+    jq . "$OS_SAFETY_FILE" >/dev/null
+}
+
+# ── B-T2 (R1): C1 rm system paths ───────────────────────────────────────────
+@test "30-os-safety: C1 rm root and 9 system paths present (B-T2)" {
+    local failures=0
+    # The one root entry
+    jq -e '.permissions.deny | map(select(. == "Bash(rm *-r* /)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: Bash(rm *-r* /)"; failures=$((failures+1)); }
+    # 9 paths × 3 forms each (exact dir, subpath /path/*, trailing arg /path *)
+    local paths=("/etc" "/usr" "/bin" "/sbin" "/lib" "/var" "/boot" "/root" "/home")
+    for path in "${paths[@]}"; do
+        local exact="Bash(rm *-r* ${path})"
+        local subpath="Bash(rm *-r* ${path}/*)"
+        local trailing="Bash(rm *-r* ${path} *)"
+        jq -e --arg p "$exact" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $exact"; failures=$((failures+1)); }
+        jq -e --arg p "$subpath" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $subpath"; failures=$((failures+1)); }
+        jq -e --arg p "$trailing" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $trailing"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── B-T3 (R1): C2 find / -delete, C6 wipefs, C11 crontab -r ─────────────────
+@test "30-os-safety: C2 find -delete, C6 wipefs, C11 crontab -r present (B-T3)" {
+    jq -e '.permissions.deny | map(select(. == "Bash(find / *-delete*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null
+    jq -e '.permissions.deny | map(select(. == "Bash(wipefs -a*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null
+    jq -e '.permissions.deny | map(select(. == "Bash(wipefs --all*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null
+    jq -e '.permissions.deny | map(select(. == "Bash(crontab -r*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null
+}
+
+# ── B-T4 (R1): C3 dd × 6 devices, C4 mkfs × 4, C5 partition tools × 5 ──────
+@test "30-os-safety: C3 dd block device, C4 mkfs, C5 partition tools present (B-T4)" {
+    local failures=0
+    # C3: dd of=/dev/<prefix>
+    local dd_devs=("sd" "nvme" "hd" "vd" "mmcblk" "loop")
+    for dev in "${dd_devs[@]}"; do
+        local p="Bash(dd *of=/dev/${dev}*)"
+        jq -e --arg p "$p" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+    done
+    # C4: mkfs × 4 block device prefixes (sd, nvme, hd, vd)
+    local mkfs_devs=("sd" "nvme" "hd" "vd")
+    for dev in "${mkfs_devs[@]}"; do
+        local p="Bash(mkfs*/dev/${dev}*)"
+        jq -e --arg p "$p" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+    done
+    # C5: partition tools × 5
+    local part_tools=("fdisk" "parted" "sfdisk" "cfdisk" "gdisk")
+    for tool in "${part_tools[@]}"; do
+        local p="Bash(${tool} /dev/*)"
+        jq -e --arg p "$p" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── B-T5 (R1): C7 minimal sudo set ──────────────────────────────────────────
+@test "30-os-safety: C7 minimal sudo deny set present (B-T5)" {
+    local failures=0
+    local sudo_cmds=("rm" "dd" "mkfs*" "shutdown*" "reboot*" "halt*" "poweroff*")
+    for cmd in "${sudo_cmds[@]}"; do
+        local p="Bash(sudo ${cmd} *)"
+        jq -e --arg p "$p" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── B-T6 (R1): C8 package managers, C9 kernel modules, C10 firewall flush ───
+@test "30-os-safety: C8 package manager purges, C9 rmmod, C10 firewall flush present (B-T6)" {
+    local failures=0
+    # C8: 8 package manager entries
+    local pkg_entries=(
+        "Bash(apt purge*)"
+        "Bash(apt-get purge*)"
+        "Bash(apt autoremove*)"
+        "Bash(apt-get autoremove*)"
+        "Bash(dnf remove*)"
+        "Bash(yum remove*)"
+        "Bash(pacman -R*)"
+        "Bash(brew uninstall --force*)"
+    )
+    for entry in "${pkg_entries[@]}"; do
+        jq -e --arg p "$entry" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $entry"; failures=$((failures+1)); }
+    done
+    # C9: kernel module unload
+    jq -e '.permissions.deny | map(select(. == "Bash(rmmod*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: Bash(rmmod*)"; failures=$((failures+1)); }
+    jq -e '.permissions.deny | map(select(. == "Bash(modprobe -r*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: Bash(modprobe -r*)"; failures=$((failures+1)); }
+    # C10: firewall flush (6 entries)
+    local fw_entries=(
+        "Bash(iptables -F*)"
+        "Bash(ip6tables -F*)"
+        "Bash(ufw disable*)"
+        "Bash(ufw reset*)"
+        "Bash(nft flush ruleset*)"
+        "Bash(firewall-cmd --remove-all*)"
+    )
+    for entry in "${fw_entries[@]}"; do
+        jq -e --arg p "$entry" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $entry"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── B-T7 (R1): C13 docker prune, C16 PID-1, C15 redirect to block device ────
+@test "30-os-safety: C13 docker prune, C16 kill -9 1, C15 redirect to block device present (B-T7)" {
+    local failures=0
+    # C13: docker prune (4 entries)
+    local prune_entries=(
+        "Bash(docker system prune -a*)"
+        "Bash(docker system prune --all*)"
+        "Bash(docker volume prune*)"
+        "Bash(docker volume rm *)"
+    )
+    for entry in "${prune_entries[@]}"; do
+        jq -e --arg p "$entry" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $entry"; failures=$((failures+1)); }
+    done
+    # C16: PID-1 word-boundary pair (kill -9 1 and kill -9 1 * — not kill -9 100)
+    jq -e '.permissions.deny | map(select(. == "Bash(kill -9 1)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: Bash(kill -9 1)"; failures=$((failures+1)); }
+    jq -e '.permissions.deny | map(select(. == "Bash(kill -9 1 *)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: Bash(kill -9 1 *)"; failures=$((failures+1)); }
+    # C15: redirect to block device (6 device prefixes) — B-VERIFY-1 confirmed > does not split
+    local block_devs=("sd" "nvme" "hd" "vd" "mmcblk" "loop")
+    for dev in "${block_devs[@]}"; do
+        local p="Bash(* > /dev/${dev}*)"
+        jq -e --arg p "$p" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── B-T8 (R1): C21 redirect/tee to critical /etc files ──────────────────────
+@test "30-os-safety: C21 redirect and tee to critical /etc files present (B-T8)" {
+    local failures=0
+    local sys_files=("passwd" "shadow" "sudoers" "fstab")
+    for f in "${sys_files[@]}"; do
+        # redirect form
+        local redirect="Bash(* > /etc/${f})"
+        jq -e --arg p "$redirect" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $redirect"; failures=$((failures+1)); }
+        # tee form
+        local tee_p="Bash(tee */etc/${f}*)"
+        jq -e --arg p "$tee_p" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $tee_p"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── B-T9 (R1): docker host-escape deny ───────────────────────────────────────
+@test "30-os-safety: docker host-escape deny patterns present (B-T9)" {
+    jq -e '.permissions.deny | map(select(. == "Bash(docker run *--privileged*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null
+    jq -e '.permissions.deny | map(select(. == "Bash(docker run *-v /:*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null
+    jq -e '.permissions.deny | map(select(. == "Bash(docker run *--volume /:*)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null
+}
+
+# ── B-T10 (R1): total deny count floor ──────────────────────────────────────
+# C1(28) + C2(1) + C3(6) + C4(4) + C5(5) + C6(2) + C7(7) + C8(8) + C9(2) +
+# C10(6) + C11(1) + C13(4) + C15(6) + C16(2) + C21(8) + docker-escape(3) = 93
+@test "30-os-safety: deny array total count is at least 90 (B-T10)" {
+    local count
+    count="$(jq '.permissions.deny | length' "$OS_SAFETY_FILE")"
+    [ "$count" -ge 90 ]
+}
+
+# ── B-T11 (R5 — allowlist regression): no scope-creep patterns ───────────────
+# Assert no entry would false-block common legitimate operations.
+# Strategy: assert no deny entry contains these specific safe operation strings
+# as literal substrings (guards against accidentally broad patterns).
+@test "30-os-safety: no pattern false-blocks rm node_modules, rm dist, or docker compose down (R5, B-T11)" {
+    # Safe patterns that MUST NOT appear literally in any deny entry:
+    # These are structural checks — we assert none of the deny entries contain
+    # substrings that would represent overly-broad patterns catching these safe ops.
+    local dangerous_patterns=(
+        "rm *-r* node"
+        "rm *-r* dist"
+        "compose down"
+    )
+    local failures=0
+    for pat in "${dangerous_patterns[@]}"; do
+        local found
+        found="$(jq --arg p "$pat" \
+            '[.permissions.deny[] | select(. | contains($p))] | length' \
+            "$OS_SAFETY_FILE")"
+        [ "$found" -eq 0 ] || { echo "SCOPE CREEP: deny entry contains '$pat'"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
