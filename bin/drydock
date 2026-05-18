@@ -9,7 +9,7 @@
 #   drydock run [DIR] [-- ARGS]    # explicit run; ARGS after -- go to claude
 #   drydock shell [DIR] [-- CMD]   # bash in container at DIR; -- CMD runs CMD instead
 #   drydock -- [ARGS]              # shorthand: run claude in cwd with ARGS
-#   drydock init [DIR] [--update]  # set up .claude/settings.json baseline for DIR
+#   drydock init [DIR]             # seed .claude/settings.json stub for DIR
 #   drydock build                  # (re)build the image
 #   drydock sync                   # ~/.claude/ → ~/.claude-container/
 #   drydock status                 # short health
