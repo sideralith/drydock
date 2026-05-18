@@ -95,7 +95,9 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   with no indication to the operator.
 - **Where this lives in code**: `docker-compose.yml:67` (the `:ro` override line);
   `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
-  `templates/managed-settings.d/` (the policy drop-in files).
+  `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`, `10-git-safety.json`,
+  `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`);
+  `templates/hooks/drydock-block-destructive.sh` (PreToolUse guardrail hook, RO bind-mount).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-4: Engram is Optional
