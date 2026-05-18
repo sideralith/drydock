@@ -11,7 +11,7 @@ Thanks for contributing to drydock. Use the table of contents below to jump to w
 
 ## Testing
 
-New to drydock? Run `./install.sh` from the repo root (or `curl -fsSL <URL>/install.sh | bash` for a fresh machine) to create the `drydock` symlink and verify your prereqs before contributing. See `install.sh` header for env-var overrides.
+New to drydock? Run `./install.sh` from the repo root (or `curl -fsSL <URL>/install.sh | bash` for a fresh machine) to create the `drydock` symlink and verify your prereqs before contributing. Running it in a terminal also offers to build the image and add `~/.local/bin` to PATH (all prompts default to no); the `curl | bash` form stays non-interactive. See `install.sh` header for env-var overrides.
 
 ### Install the test runner
 

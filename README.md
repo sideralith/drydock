@@ -69,21 +69,32 @@ These raise the floor against agent *accidents* — not an adversarial sandbox. 
 
 drydock is a per-user, host-side tool — no system-wide install.
 
+**Recommended — interactive install (real terminal):**
+
 ```bash
-# 1. Get the repo into ~/drydock/ (or anywhere; the CLI follows the symlink)
-git clone <repo-url> ~/drydock
+git clone https://github.com/sideralith/drydock.git ~/drydock
+cd ~/drydock && ./install.sh
+```
 
-# 2. Symlink the CLI into your PATH
-mkdir -p ~/.local/bin
-ln -s ~/drydock/bin/drydock ~/.local/bin/drydock
-drydock version          # verify
+When run in a terminal, the installer prompts to: (a) enable shared engram
+mode (native Linux only — INV-5), (b) build the Docker image now (~5 min),
+and (c) add `~/.local/bin` to your shell rc file. Every prompt defaults to
+"no" — pressing Enter keeps the safe defaults.
 
-# 3. Build the image (~5-10 min first time)
-drydock build
+**One-line / fresh-machine install:**
 
-# 4. Run it on a project
-cd ~/git/myproject
-drydock                  # launches Claude Code in this project, sandboxed
+```bash
+curl -fsSL https://raw.githubusercontent.com/sideralith/drydock/main/install.sh | bash
+```
+
+The piped install is fully non-interactive — no prompts. It clones the repo
+and creates the symlink, then stops. Run `drydock build` and add
+`~/.local/bin` to PATH yourself (the installer prints the exact export line).
+
+**After either install:**
+
+```bash
+cd <project> && drydock   # launches Claude Code in this project, sandboxed
 ```
 
 Host-side runtime state (`~/.engram-container/`, `~/.claude-container/`,
@@ -182,6 +193,9 @@ a container session.
 
 On a native Linux host, the interactive installer (`install.sh` run in a terminal)
 will ask whether to enable shared mode and create the sentinel automatically.
+On WSL2 and macOS the installer does not show this prompt — shared mode is
+force-downgraded to isolated there because `fcntl` locks are unreliable (INV-5);
+those users use the manual `touch` + `DRYDOCK_ENGRAM_SHARED=force` route below.
 
 To enable it manually:
 ```bash

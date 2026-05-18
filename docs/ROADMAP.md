@@ -107,10 +107,12 @@ mapped at medium/low priority.
 **Invariants touched.** INV-5 — the engram-mode prompt must respect the
 force-isolated downgrade on WSL2/macOS (do not offer shared mode there).
 
-**Shipped.** Three prompts implemented: engram shared-mode (native Linux only,
-INV-5 trichotomy), build-image (non-fatal, default N), and PATH rc-append
-(idempotent, rc-file selection when SHELL is ambiguous). Non-interactive path
-(`curl | bash`, `DRYDOCK_INTERACTIVE=0`) is byte-identical.
+**Shipped.** Three prompts implemented (plus a conditional rc-file sub-prompt):
+engram shared-mode (native Linux only, INV-5 trichotomy), build-image
+(non-fatal, default N), and PATH rc-append (idempotent; when `$SHELL` is
+ambiguous and multiple rc files exist, a numbered rc-file sub-prompt picks the
+target). Non-interactive path (`curl | bash`, `DRYDOCK_INTERACTIVE=0`) is
+byte-identical.
 
 **Status.** Done — shipped in v0.2.0 (issue #14 closed).
 
