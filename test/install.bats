@@ -2,6 +2,44 @@
 # test/install.bats — tests for install.sh (drydock installer)
 # Run: bats test/install.bats
 
+# ── Fixture helpers ───────────────────────────────────────────────────────────
+
+# make_fifo <path> <answer>
+# Create a FIFO at <path> seeded with <answer>\n in the background.
+# The background printf exits after writing; the FIFO blocks until install.sh
+# reads it. Cleans up automatically via teardown (BATS_TEST_TMPDIR is wiped).
+make_fifo() {
+	local _path="$1" _answer="$2"
+	mkfifo "$_path"
+	printf '%s\n' "$_answer" >"$_path" &
+}
+
+# make_uname_stub <dir> <os>
+# Write a uname stub into <dir> that echoes <os> when called with -s.
+make_uname_stub() {
+	local _dir="$1" _os="$2"
+	printf '#!/usr/bin/env bash\nprintf '"'"'%s\n'"'"' "%s"\n' "$_os" >"$_dir/uname"
+	chmod +x "$_dir/uname"
+}
+
+# make_osrelease_fixture <dir> <content>
+# Write a fake /proc/sys/kernel/osrelease file with the given content.
+make_osrelease_fixture() {
+	local _dir="$1" _content="$2"
+	mkdir -p "$_dir"
+	printf '%s\n' "$_content" >"$_dir/osrelease"
+}
+
+# make_drydock_stub <dir> <exit_code>
+# Write a bin/drydock stub into <dir> that exits with <exit_code>.
+# Used by build-image prompt tests to avoid triggering a real drydock build.
+make_drydock_stub() {
+	local _dir="$1" _exit="$2"
+	mkdir -p "$_dir"
+	printf '#!/usr/bin/env bash\nexit %s\n' "$_exit" >"$_dir/drydock"
+	chmod +x "$_dir/drydock"
+}
+
 setup() {
 	load 'test_helper/bats-support/load'
 	load 'test_helper/bats-assert/load'
@@ -28,12 +66,28 @@ setup() {
 	# of host's init.defaultBranch (cloning an empty bare may not propagate).
 	git -C "$_work" symbolic-ref HEAD refs/heads/main
 	mkdir -p "$_work/bin" "$_work/lib"
-	printf '#!/usr/bin/env bash\necho drydock\n' >"$_work/bin/drydock"
+	# bin/drydock stub in the bare repo: exits 0, records its call log.
+	# The build-image prompt uses DRYDOCK_INSTALL_DIR/bin/drydock directly
+	# (absolute path), so DRYDOCK_INSTALL_DIR must point at an install tree
+	# whose bin/drydock is this stub — never the real binary.
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$_work/bin/drydock"
 	chmod +x "$_work/bin/drydock"
 	touch "$_work/lib/common.sh"
 	git -C "$_work" add . >/dev/null 2>&1
 	git -C "$_work" -c user.email=t@t.com -c user.name=T commit -m init >/dev/null 2>&1
 	git -C "$_work" push >/dev/null 2>&1
+
+	# OS-detection fixture directories
+	OSRELEASE_DIR="$BATS_TEST_TMPDIR/osrelease-fixtures"
+	FAKE_BIN="$BATS_TEST_TMPDIR/fake-bin"
+	mkdir -p "$OSRELEASE_DIR" "$FAKE_BIN"
+
+	# Native Linux fixture: clean osrelease (no "microsoft")
+	make_osrelease_fixture "$OSRELEASE_DIR/native" "6.1.0-generic"
+	# WSL2 fixture: contains "microsoft"
+	make_osrelease_fixture "$OSRELEASE_DIR/wsl2" "5.15.167.4-microsoft-standard-WSL2"
+	# macOS is simulated via UNAME stub (no osrelease on macOS)
+	make_uname_stub "$FAKE_BIN" "Darwin"
 }
 
 # Case 1: happy_path_fresh
