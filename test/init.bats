@@ -142,3 +142,20 @@ JSON
   [ "$status" -ne 0 ]
   [[ "$output" == *"opción desconocida"* ]]
 }
+
+# ── SessionStart hook entry (scenario 5a, design D-3) ────────────────────────
+
+@test "drydock init: settings.json has hooks.SessionStart with guard-wrapper shape" {
+  run "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"
+  [ "$status" -eq 0 ]
+  # SessionStart must be a non-null array
+  local hook_value
+  hook_value="$(jq '.hooks.SessionStart' "$SETTINGS_FILE")"
+  [ "$hook_value" != "null" ]
+  # The command must contain the guard-wrapper components (D-3 host-safe form)
+  local cmd
+  cmd="$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$SETTINGS_FILE")"
+  [[ "$cmd" == *"[ -x /opt/drydock/hooks/drydock-session-start.sh ]"* ]]
+  [[ "$cmd" == *"exec /opt/drydock/hooks/drydock-session-start.sh"* ]]
+  [[ "$cmd" == *"|| exit 0"* ]]
+}
