@@ -483,6 +483,62 @@ OS_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/30-os-safety.json"
     [ "$count" -ge 90 ]
 }
 
+# ── slice C: hook wiring and PreToolUse drop-in (40-guardrails-hook.json) ────
+#
+# ── C-VERIFY-1 result documented here ────────────────────────────────────────
+# See test/block_destructive.bats header for full verification record.
+# Short form: matcher "Bash" is confirmed correct for PreToolUse entries.
+#
+GUARDRAILS_HOOK_FILE="$DRYDOCK_HOME/templates/managed-settings.d/40-guardrails-hook.json"
+GUARDRAILS_SCRIPT="$DRYDOCK_HOME/templates/hooks/drydock-block-destructive.sh"
+
+# ── C-T1 (R6): 40-guardrails-hook.json exists and is valid JSON ──────────────
+@test "40-guardrails-hook: file exists and is valid JSON (C-T1)" {
+    [ -f "$GUARDRAILS_HOOK_FILE" ]
+    jq . "$GUARDRAILS_HOOK_FILE" >/dev/null
+}
+
+# ── C-T2 (R6, ADR-8): declares hooks.PreToolUse with matcher "Bash" ──────────
+@test "40-guardrails-hook: PreToolUse entry with matcher Bash is present (C-T2)" {
+    local matcher
+    matcher="$(jq -r '(.hooks.PreToolUse // [])[] | select(.matcher == "Bash") | .matcher' \
+        "$GUARDRAILS_HOOK_FILE" 2>/dev/null | head -1)"
+    [ "$matcher" = "Bash" ]
+}
+
+# ── C-T3 (R6, ADR-8): command references drydock-block-destructive.sh ────────
+@test "40-guardrails-hook: command references drydock-block-destructive.sh (C-T3)" {
+    local cmd
+    cmd="$(jq -r '(.hooks.PreToolUse // [])[] | select(.matcher == "Bash") | .hooks[]? | select(.type=="command") | .command' \
+        "$GUARDRAILS_HOOK_FILE" 2>/dev/null)"
+    [[ "$cmd" == *"drydock-block-destructive.sh"* ]]
+}
+
+# ── C-T4 (R6, ADR-8): command uses guard wrapper (not bare path) ─────────────
+@test "40-guardrails-hook: command uses sh -c guard wrapper (C-T4)" {
+    local cmd
+    cmd="$(jq -r '(.hooks.PreToolUse // [])[] | select(.matcher == "Bash") | .hooks[]? | select(.type=="command") | .command' \
+        "$GUARDRAILS_HOOK_FILE" 2>/dev/null)"
+    [[ "$cmd" == "sh -c"* ]]
+}
+
+# ── C-T5 (R6): hook script exists at templates/hooks/ ────────────────────────
+@test "drydock-block-destructive.sh: hook script exists at templates/hooks/ (C-T5)" {
+    [ -f "$GUARDRAILS_SCRIPT" ]
+}
+
+# ── C-T6 (R6): hook script is executable ─────────────────────────────────────
+@test "drydock-block-destructive.sh: hook script is executable (C-T6)" {
+    [ -x "$GUARDRAILS_SCRIPT" ]
+}
+
+# ── C-T7 (R6): 40-guardrails-hook.json passes A-3 (all JSON valid) ───────────
+# This is covered by the existing A-3 test which loops all JSON files.
+# Separate explicit assertion for the specific file:
+@test "40-guardrails-hook: file is valid JSON (covered by A-3, explicit here) (C-T7)" {
+    jq . "$GUARDRAILS_HOOK_FILE" >/dev/null
+}
+
 # ── B-T11 (R5 — allowlist regression): no scope-creep patterns ───────────────
 # Assert no entry would false-block common legitimate operations.
 # Strategy: assert no deny entry contains these specific safe operation strings
