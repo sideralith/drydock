@@ -504,10 +504,56 @@ OS_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/30-os-safety.json"
 # Original: C1(28) + C2(1) + C3(6) + C4(4) + C5(5) + C6(2) + C7(7) + C8(8) + C9(2) +
 #   C10(6) + C11(1) + C13(4) + C15(6) + C16(2) + C21(8) + docker-escape(3) = 93
 # W1 remediation adds 6 paths × 3 forms = 18 new C1 entries → total ≥ 111
-@test "30-os-safety: deny array total count is at least 108 (B-T10)" {
+# FIX-R2-1 adds 15 paths × 3 forms + 1 root = 46 new *-R* C1 entries
+# FIX-R2-2 adds 4 bare sudo entries
+# New floor: 111 + 46 + 4 = 161
+@test "30-os-safety: deny array total count is at least 155 (B-T10)" {
     local count
     count="$(jq '.permissions.deny | length' "$OS_SAFETY_FILE")"
-    [ "$count" -ge 108 ]
+    [ "$count" -ge 155 ]
+}
+
+# ── B-T12 (FIX-R2-1): *-R* uppercase-recursive entries are present ───────────
+# Each system path that has *-r* entries must also have *-R* entries.
+@test "30-os-safety: *-R* uppercase-recursive entries present for system paths (B-T12)" {
+    local failures=0
+    jq -e '.permissions.deny | map(select(. == "Bash(rm *-R* /)")) | length >= 1' \
+        "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: Bash(rm *-R* /)"; failures=$((failures+1)); }
+    local paths=("/etc" "/usr" "/bin" "/sbin" "/lib" "/lib32" "/lib64" "/var" "/boot" "/opt" "/sys" "/proc" "/dev" "/root" "/home")
+    for path in "${paths[@]}"; do
+        local exact="Bash(rm *-R* ${path})"
+        local subpath="Bash(rm *-R* ${path}/*)"
+        local trailing="Bash(rm *-R* ${path} *)"
+        jq -e --arg p "$exact" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $exact"; failures=$((failures+1)); }
+        jq -e --arg p "$subpath" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $subpath"; failures=$((failures+1)); }
+        jq -e --arg p "$trailing" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $trailing"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── B-T13 (FIX-R2-2): bare no-arg sudo forms are present ────────────────────
+# sudo reboot, sudo halt, sudo poweroff, sudo shutdown without arguments must
+# also be denied. The existing *-with-args* entries require a trailing space+arg.
+@test "30-os-safety: bare no-arg sudo deny entries present for shutdown commands (B-T13)" {
+    local failures=0
+    local bare_sudo_entries=(
+        "Bash(sudo reboot)"
+        "Bash(sudo halt)"
+        "Bash(sudo poweroff)"
+        "Bash(sudo shutdown)"
+    )
+    for entry in "${bare_sudo_entries[@]}"; do
+        jq -e --arg p "$entry" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $entry"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
 }
 
 # ── slice C: hook wiring and PreToolUse drop-in (40-guardrails-hook.json) ────

@@ -327,3 +327,53 @@ teardown() {
     run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf ./tmp"}}'
     [ "$status" -eq 0 ]
 }
+
+# ── FIX-R2-1: Recursive uppercase-flag variants must be blocked (C1-residue) ──
+# The deny layer uses *-r* which requires a lowercase 'r'. Forms like -Rf, -fR,
+# -fr, -FR escape the deny matrix. The hook backstop (C1-residue rule) catches
+# any rm invocation with a recursive flag form (-r/-R or bundled) targeting a
+# system path (/etc, /usr, /var, /boot, etc.), token-bounded so paths like
+# /home/me/project are NOT blocked.
+@test "block_destructive: blocks 'rm -Rf /etc' (uppercase R — C1-residue)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -Rf /etc"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -fr /usr' (flag-reversed fr — C1-residue)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -fr /usr"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -fR /' (uppercase R, root — C1-residue)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -fR /"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: blocks 'rm -rf /var' (system path — C1-residue/deny layer)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf /var"}}'
+    [ "$status" -eq 2 ]
+}
+
+# ── FIX-R2-1 ALLOW: paths under /home should NOT be blocked by C1-residue ────
+# Token-bounded boundary: /home is a system path root; /home/me/project is not.
+@test "block_destructive: allows 'rm -rf node_modules' (relative path — C1-residue allow)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf node_modules"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm -rf ./build' (relative path — C1-residue allow)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf ./build"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: allows 'rm -Rf /home/me/project/dist' (subpath under /home — C1-residue allow)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -Rf /home/me/project/dist"}}'
+    [ "$status" -eq 0 ]
+}
+
+# ── FIX-R2-1 COMPOUND: C1-residue must remain segment-anchored ───────────────
+# A compound command where /etc appears in an unrelated segment must not block.
+@test "block_destructive: allows 'ls /etc && rm -f foo' (safe rm, /etc in other segment — C1-residue allow)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"ls /etc && rm -f foo"}}'
+    [ "$status" -eq 0 ]
+}

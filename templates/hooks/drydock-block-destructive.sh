@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # drydock-block-destructive.sh — Claude Code PreToolUse hook for drydock containers.
 #
-# Blocks the five residue rule classes that the declarative deny layer cannot
+# Blocks the six residue rule classes that the declarative deny layer cannot
 # express without false-positives. All other rules ship as Bash(...) deny patterns
 # in managed-settings drop-ins (10-git-safety.json, 30-os-safety.json).
 #
 # Rule residue (ADR-7):
-#   A1  — ssh to a production host (ssh token AND prod/production hostname)
-#   C12 — fork bomb (:() { :|: & };: shape)
-#   C17 — rm of . or .git (anchored: no extension, no trailing path component)
-#   C18 — rm with ../ traversal or bare .. target
-#   C20 — curl/wget piped into bash/sh (optionally via sudo)
+#   A1       — ssh to a production host (ssh token AND prod/production hostname)
+#   C1-res   — rm with ANY recursive flag form (-r/-R/-rf/-Rf/-fr/-fR and bundled)
+#              targeting a system path root (/, /etc, /usr, /var, /boot, /opt,
+#              /lib, /lib32, /lib64, /sbin, /bin, /sys, /proc, /dev, /root, /home).
+#              Token-bounded: /home/me/project is NOT blocked. This is the hook
+#              backstop for flag-order-reversed forms (-fR, -fr) and uppercase-R
+#              forms that cannot be expressed as Bash(...) globs because *-r* only
+#              matches a literal lowercase 'r'. The deny layer covers *-r* and *-R*
+#              for the common flag orderings; this rule catches the residue.
+#   C12      — fork bomb (:() { :|: & };: shape)
+#   C17      — rm of . or .git (anchored: no extension, no trailing path component)
+#   C18      — rm with ../ traversal or bare .. target
+#   C20      — curl/wget piped into bash/sh (optionally via sudo)
 #
 # Docker-aware coverage (ADR-6):
 #   The hook applies its regex set to the FULL command string unconditionally.
@@ -67,6 +75,29 @@ norm="${norm//||/$'\x01'}"
 norm="${norm//;/$'\x01'}"
 norm="${norm//$'\n'/$'\x01'}"
 IFS=$'\x01' read -ra _segments <<<"$norm"
+
+# ── Rule C1-residue: rm with any recursive flag targeting a system path root ──
+# Block: rm with -r/-R/-rf/-Rf/-fr/-fR (or any bundled form containing r or R)
+# where the target is a system path root token (/, /etc, /usr, etc.) — not a
+# subpath like /home/me/project. Token boundary: path followed by EOS or space.
+# Allow: rm -Rf /home/me/project/dist (the '/' after /home is not EOS or space).
+#
+# Per-segment: flag and system-path target must belong to the same rm invocation.
+# Paths matched: / /etc /usr /var /boot /opt /lib /lib32 /lib64 /sbin /bin
+#                /sys /proc /dev /root /home
+#
+# Note: the deny layer (*-r* and *-R* entries) handles the common flag orderings
+# at the framework level before this hook runs. This rule is the residue backstop
+# for flag-order-reversed forms like -fr and -fR that the glob *-r* cannot match.
+for _seg in "${_segments[@]}"; do
+	if [[ "$_seg" =~ (^|[[:space:]])rm[[:space:]] ]] &&
+		[[ "$_seg" =~ [[:space:]]-[^[:space:]]*[rR] ]] &&
+		[[ "$_seg" =~ [[:space:]](/|/etc|/usr|/var|/boot|/opt|/lib|/lib32|/lib64|/sbin|/bin|/sys|/proc|/dev|/root|/home)($|[[:space:]]) ]]; then
+		echo "drydock guardrail: rm with recursive flag targeting a system path root is blocked (C1-residue)." >&2
+		echo "Specify a project-relative path or a path under your project directory." >&2
+		exit 2
+	fi
+done
 
 # ── Rule A1: ssh to production host ──────────────────────────────────────────
 # Block: ssh token AND a prod/production hostname token (case-insensitive).

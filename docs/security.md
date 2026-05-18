@@ -89,6 +89,18 @@ accidents, not adversaries. See "What drydock does NOT protect against" below.
   deny entries in `30-os-safety.json` are dead weight against the default
   image. They are kept as a safety net for derived images where a user adds
   `sudo` — they do not protect against bypassing the deny layer itself.
+- **Force-push via `+`-refspec not in deny matrix.** `git push origin +main`
+  (force-push using a `+`-prefixed refspec rather than `--force`) is not
+  currently covered by the deny layer. Under threat model A, using a
+  `+`-refspec is not an accident-shaped action in typical workflows, but it
+  is a documented gap. The protected-branch hooks (B4/B9) cover flag-based
+  force-push forms; `+`-refspecs would require a separate pattern class.
+- **Hook `rm` anchoring does not catch shell-metacharacter-glued targets.**
+  The C1-residue, C17, and C18 hook rules use space as the token boundary
+  before the target argument. A command like `$(rm -rf .)` or `rm${IFS}-rf .`
+  would bypass the space-anchored regex. Accident-class typos do not produce
+  these metacharacter-glued forms; this gap is documented for completeness
+  under threat model A (accidents, not adversaries).
 
 ### If you have a personal `block-destructive.sh` hook
 
