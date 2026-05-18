@@ -328,6 +328,25 @@ setup() {
 	refute [ -f "$_home/.config/drydock/engram-shared" ]
 }
 
+# ── T-08: engram-mode prompt — non-interactive parity ────────────────────────
+# Explicit non-interactive guard: DRYDOCK_INTERACTIVE=0 → sentinel not created.
+# This is the parity contract test referenced in T-14.
+
+@test "engram-mode: non-interactive (DRYDOCK_INTERACTIVE=0) — sentinel NOT created" {
+	local _home="$BATS_TEST_TMPDIR/home-ni-engram"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=0 \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
 # Case 6: env_overrides
 @test "env overrides: all 4 vars respected" {
 	local _custom_install="$BATS_TEST_TMPDIR/custom-install"
