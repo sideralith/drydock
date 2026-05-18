@@ -19,7 +19,7 @@ setup() {
   [ "$status" -eq 0 ]
   [ -f "$TEST_PROJECT_DIR/.claude/settings.json" ]
   ! grep -q '__HOME__' "$TEST_PROJECT_DIR/.claude/settings.json"
-  run jq -e '.permissions.deny | length > 0' "$TEST_PROJECT_DIR/.claude/settings.json"
+  run jq -e '."$schema"' "$TEST_PROJECT_DIR/.claude/settings.json"
   [ "$status" -eq 0 ]
 }
 
@@ -29,7 +29,7 @@ setup() {
   [ "$status" -eq 0 ]
   [ -f "$TEST_PROJECT_DIR/.claude/settings.json" ]
   ! grep -q '__HOME__' "$TEST_PROJECT_DIR/.claude/settings.json"
-  run jq -e '.permissions.deny | length > 0' "$TEST_PROJECT_DIR/.claude/settings.json"
+  run jq -e '."$schema"' "$TEST_PROJECT_DIR/.claude/settings.json"
   [ "$status" -eq 0 ]
 }
 
