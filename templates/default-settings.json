@@ -1,6 +1,19 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "_comment": "Baseline drydock denies — created by `drydock init` (per-project). __HOME__ is substituted with $HOME at init time. Extend per-project as needed; do NOT remove the secret-protection or git-safety blocks. ~/.config/drydock/ holds drydock's optional deploy key + sandbox GPG key — off-limits to the agent's file tools (git/ssh/gpg subprocesses still use them).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -x /opt/drydock/hooks/drydock-session-start.sh ] && exec /opt/drydock/hooks/drydock-session-start.sh || exit 0'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "deny": [
       "Read(__HOME__/.ssh/**)",
