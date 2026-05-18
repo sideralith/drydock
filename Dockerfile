@@ -111,6 +111,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb1 libxext6 libx11-6 libpango-1.0-0 libcairo2 libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Container identity marker (baked as root, read-only to the agent) ────────
+# Referenced by templates/hooks/drydock-session-start.sh to gate in-container
+# behaviour. Content is a minimal fixed string — no version data that could
+# go stale between builds (version stays in DRYDOCK_VERSION env var).
+RUN echo 'drydock' > /etc/drydock-release
+
 USER ${USER_NAME}
 
 # PATH order:
