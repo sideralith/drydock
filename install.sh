@@ -23,6 +23,16 @@ DRYDOCK_REPO_URL="${DRYDOCK_REPO_URL:-https://github.com/sideralith/drydock.git}
 IS_TTY=0
 [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ] && IS_TTY=1
 
+# ── Interactivity seams ───────────────────────────────────────────────────────
+# DRYDOCK_INTERACTIVE: 1 when stdin+stdout are both TTYs; 0 otherwise.
+# Distinct from IS_TTY (color-only, stdout-only). Set to 0 in tests or
+# pipe installs (curl | bash) to suppress all prompts.
+: "${DRYDOCK_INTERACTIVE:=$([ -t 0 ] && [ -t 1 ] && printf 1 || printf 0)}"
+# UNAME / OSRELEASE_FILE: OS-detection seams (same pattern as lib/paths.sh:20-21)
+: "${UNAME:=uname}"
+: "${OSRELEASE_FILE:=/proc/sys/kernel/osrelease}"
+# _DRYDOCK_TTY: input source seam; default /dev/tty
+
 # ── ANSI palette (mirrors lib/common.sh:12-18) ────────────────────────────────
 
 _RED='\033[31m'
@@ -224,17 +234,178 @@ do_symlink() {
 	fi
 }
 
-# ── PATH check + hint ─────────────────────────────────────────────────────────
+# ── Interactive helpers ───────────────────────────────────────────────────────
 
-check_path() {
-	case ":${PATH}:" in
-	*":${DRYDOCK_BIN_DIR}:"*) ;;
-	*)
-		step_warn "$DRYDOCK_BIN_DIR is not in PATH"
-		hint "Add to ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
-		hint "Add to ~/.zshrc:   export PATH=\"\$HOME/.local/bin:\$PATH\""
-		;;
+# _ask_fd_open — open the TTY input fd 3 once for all ask() calls.
+# Guarded so a missing TTY never aborts under set -e.
+# Sets _ASK_FD_OK=1 on success, 0 on failure.
+# NOTE: exec N< with 2>/dev/null would permanently silence stderr — test the
+# path first in a subshell; open fd 3 without 2>/dev/null only when safe.
+_ASK_FD_OK=0
+_ask_fd_open() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+	local _tty="${_DRYDOCK_TTY:-/dev/tty}"
+	if (exec 3<"$_tty") 2>/dev/null; then
+		exec 3<"$_tty"
+		_ASK_FD_OK=1
+	fi
+}
+
+# ask(prompt, default) — prompt → stderr; reads one line from the already-open
+# fd 3 (_ask_fd_open must be called first). Sets _ASK_RESULT to 'y' or 'n'.
+# Empty input → default. fd unavailable → default. Never aborts under set -e.
+# NOTE: sets _ASK_RESULT (global) to avoid command-substitution subshell
+# losing the fd 3 position advance back to the parent shell.
+_ASK_RESULT=n
+ask() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || {
+		_ASK_RESULT="$2"
+		return 0
+	}
+	local _ans=""
+	printf '%s [%s] ' "$1" "$2" >&2
+	if [ "$_ASK_FD_OK" = "1" ]; then
+		read -r _ans <&3 || true
+	fi
+	case "${_ans:-$2}" in
+	[Yy]*) _ASK_RESULT=y ;;
+	[Nn]*) _ASK_RESULT=n ;;
+	*) _ASK_RESULT="$2" ;;
 	esac
+}
+
+# _host_shared_safe — returns 0 (true) when native Linux with reliable fcntl locks;
+# returns 1 (false) on macOS or WSL2 where engram shared mode is unsafe.
+# Mirrors lib/paths.sh:host_fs_locks_unreliable (lines 78-83).
+# install.sh ships standalone (curl|bash) and cannot source lib/paths.sh —
+# this block is an INTENTIONAL duplicate. Keep in sync; grep "paths.sh".
+_host_shared_safe() {
+	[ "$("$UNAME" -s)" = "Darwin" ] && return 1
+	[ -r "$OSRELEASE_FILE" ] && grep -qi microsoft "$OSRELEASE_FILE" && return 1
+	return 0
+}
+
+# ask_engram_mode — on native Linux: prompt to enable shared engram mode (INV-5).
+# WSL2 and macOS: silently skip (unsafe fcntl locks). Non-interactive: skip.
+ask_engram_mode() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+	_host_shared_safe || return 0
+
+	ask "Share engram DB with host session (native Linux only)? (INV-5)" n
+	if [ "$_ASK_RESULT" = "y" ]; then
+		mkdir -p "$HOME/.config/drydock"
+		touch "$HOME/.config/drydock/engram-shared"
+	fi
+}
+
+# ask_build_image — offer to build the Docker image after symlinking.
+# Default [y/N] (opt-in). Build failure is non-fatal: warn and continue.
+# Non-interactive: skip entirely.
+ask_build_image() {
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+
+	ask "Build the drydock Docker image now? (~5 min, first time)" n
+	[ "$_ASK_RESULT" = "y" ] || return 0
+
+	if ! "$DRYDOCK_INSTALL_DIR/bin/drydock" build; then
+		step_warn "image build failed — run 'drydock build' manually when Docker is ready"
+	fi
+}
+
+# ── PATH rc-append ────────────────────────────────────────────────────────────
+
+# _rc_candidates — emit list of rc files that exist in HOME.
+# Outputs one path per line.
+_rc_candidates() {
+	local _f
+	for _f in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+		if [ -f "$_f" ]; then printf '%s\n' "$_f"; fi
+	done
+}
+
+# _rc_for_shell — resolve rc file from $SHELL; returns "" if ambiguous.
+_rc_for_shell() {
+	case "${SHELL:-}" in
+	*/bash) printf '%s' "$HOME/.bashrc" ;;
+	*/zsh) printf '%s' "$HOME/.zshrc" ;;
+	*/sh) printf '%s' "$HOME/.profile" ;;
+	*) printf '' ;;
+	esac
+}
+
+# ask_add_path_to_rc — offer to append PATH export line to shell rc file.
+# Non-interactive: retain current warn+hint behavior (byte-identical parity).
+# Interactive + BIN_DIR already in PATH: silent skip.
+# Interactive + accept: grep-guarded append (idempotent).
+# rc-file selection: only when SHELL empty/ambiguous AND >1 rc candidate exists.
+ask_add_path_to_rc() {
+	local _export_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
+
+	# Non-interactive: preserve exact current check_path warn+hint behavior
+	if [ "$DRYDOCK_INTERACTIVE" != "1" ]; then
+		case ":${PATH}:" in
+		*":${DRYDOCK_BIN_DIR}:"*) ;;
+		*)
+			step_warn "$DRYDOCK_BIN_DIR is not in PATH"
+			hint "Add to ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+			hint "Add to ~/.zshrc:   export PATH=\"\$HOME/.local/bin:\$PATH\""
+			;;
+		esac
+		return 0
+	fi
+
+	# Interactive: skip if BIN_DIR is already in PATH
+	case ":${PATH}:" in
+	*":${DRYDOCK_BIN_DIR}:"*) return 0 ;;
+	esac
+
+	# Prompt to add to PATH
+	ask "Add $DRYDOCK_BIN_DIR to PATH in your shell rc file?" n
+	[ "$_ASK_RESULT" = "y" ] || return 0
+
+	# Resolve rc file
+	local _rc
+	_rc="$(_rc_for_shell)"
+	if [ -z "$_rc" ]; then
+		# Ambiguous shell: check candidate count
+		local _candidates
+		_candidates="$(_rc_candidates)"
+		local _count
+		_count="$(printf '%s\n' "$_candidates" | grep -c . || true)"
+		_count="${_count:-0}"
+		if [ "$_count" -gt 1 ]; then
+			# Numbered rc-file selection prompt
+			printf 'Which rc file should drydock update?\n' >&2
+			local _i=1
+			printf '%s\n' "$_candidates" | while IFS= read -r _cf; do
+				printf '  %d) %s\n' "$_i" "$_cf" >&2
+				_i=$((_i + 1))
+			done
+			printf 'Choice [1]: ' >&2
+			local _choice=""
+			if [ "$_ASK_FD_OK" = "1" ]; then
+				read -r _choice <&3 || true
+			fi
+			_choice="${_choice:-1}"
+			# Validate: must be a positive integer within 1.._count
+			case "$_choice" in
+			'' | *[!0-9]*) _choice=1 ;;
+			esac
+			[ "$_choice" -ge 1 ] && [ "$_choice" -le "$_count" ] || _choice=1
+			_rc="$(printf '%s\n' "$_candidates" | sed -n "${_choice}p")"
+		else
+			_rc="$(printf '%s\n' "$_candidates" | head -1)"
+		fi
+	fi
+
+	# Fallback: no rc file found; create .bashrc
+	[ -n "$_rc" ] || _rc="$HOME/.bashrc"
+
+	# Idempotent append: only add if exact export line is absent
+	if ! grep -Fxq "$_export_line" "$_rc" 2>/dev/null; then
+		printf '\n%s\n' "$_export_line" >>"$_rc"
+		step_ok "Added export PATH to $_rc"
+	fi
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -242,8 +413,12 @@ check_path() {
 print_header
 check_prereqs
 check_docker_sock
+_ask_fd_open
+ask_engram_mode
 do_clone
 do_symlink
 step_ok "Ready"
-check_path
+ask_build_image
+ask_add_path_to_rc
+if [ "$_ASK_FD_OK" = "1" ]; then exec 3<&- || true; fi
 print_next_steps
