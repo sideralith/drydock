@@ -16,7 +16,7 @@ setup and usage.
 
 ## 2. Architectural Invariants
 
-Eight invariants, each following the Mercadona pattern — Rule, Why (with a specific falsifiable
+Eight invariants, each following the next pattern — Rule, Why (with a specific falsifiable
 failure mode), Consequence — ordered outside-in: credentials → state isolation → hooks defense →
 optional features → DooD foundation → meta-rule → runtime hardening defaults. Stable identifiers
 (`INV-N`) enable cross-artifact citation; section identifiers (`§N`) likewise.
@@ -78,15 +78,24 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 ### INV-3: Hooks Read-Only Overlay
 
 - **Rule**: `~/.claude/hooks/` MUST be bind-mounted `:ro` on top of the container's `.claude`
-  mount. The agent MUST NOT have write access to its own hook scripts.
-- **Why**: The hooks directory is the tier-1 defense layer — deny-lists, guardrails, and
-  confirmation prompts live there. If the agent can write here, protection is advisory rather than
-  structural. A sufficiently instruction-following agent can disable its own guardrails mid-session
-  by overwriting the hook scripts, then proceed without them.
+  mount. The agent MUST NOT have write access to its own hook scripts. Additionally, drydock's
+  agent policy — the `permissions.deny` block and the `hooks.SessionStart` entry — MUST be
+  delivered via a Claude Code managed-settings drop-in baked into the image and owned by root.
+  The agent MUST NOT have write access to these policy files.
+- **Why**: The hooks directory and the managed-settings layer together form the tier-1 defense.
+  The hook scripts (guardrails, block-destructive) are RO via bind-mount. The deny block and the
+  SessionStart hook entry are tamper-proof via image-layer ownership: they live at
+  `/etc/claude-code/managed-settings.d/` (root-owned, non-root container user), loaded by Claude
+  Code at highest precedence and not overridable from project settings. Both protections are
+  structural, not advisory. Before v0.2.0, the deny block and hook entry lived in a per-project
+  `settings.json` that a sufficiently instruction-following agent could overwrite, silently
+  weakening the guardrails for the remainder of the session.
 - **Consequence of violating**: A buggy or prompt-injected agent disables its own guardrails
-  mid-session. All hook-based protections are silently bypassed for the remainder of the session
+  mid-session. Hook-based protections are silently bypassed for the remainder of the session
   with no indication to the operator.
-- **Where this lives in code**: `docker-compose.yml:65` (the `:ro` override line).
+- **Where this lives in code**: `docker-compose.yml:65` (the `:ro` override line);
+  `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
+  `templates/managed-settings.d/` (the policy drop-in files).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-4: Engram is Optional
