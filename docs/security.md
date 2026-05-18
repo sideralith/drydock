@@ -13,6 +13,14 @@ adversarial agent**. Read this so you don't develop a false sense of security.
   mounted.
 - **Self-modification of `~/.claude/hooks/block-destructive.sh`** — RO
   overlay; the agent can read its guardrails but not edit them.
+- **Weakening of the `permissions.deny` block or the `hooks.SessionStart` entry** —
+  drydock's agent policy (secret-protection deny entries, git-safety deny entries, and
+  the SessionStart hook) is delivered as a Claude Code managed-settings drop-in baked
+  into the image at `/etc/claude-code/managed-settings.d/`. The files are root-owned;
+  the non-root container user cannot write to `/etc/`. Claude Code loads managed
+  settings at highest precedence and the rules cannot be weakened from project-level
+  settings. The protection is structural, not advisory — it is not possible for an
+  agent to overwrite these policy files from inside the container.
 - **Damage to other projects under `~/`** — only `$PROJECT_DIR` is mounted;
   sibling projects aren't visible.
 
@@ -66,8 +74,8 @@ root-equivalent (see below) — INV-8 is additive defense in depth, not a replac
 - **Agent reading anything inside `$PROJECT_DIR`, including `.env`** —
   mitigated, not prevented, by a `Read(.env)` deny in your global
   `~/.claude/settings.json` (you set that up yourself; it's not part of
-  drydock — though `drydock init` does add `Read(~/.ssh/**)` etc. to each
-  project's `.claude/settings.json`).
+  drydock — though drydock's managed-settings layer does add `Read(~/.ssh/**)` etc.
+  as image-baked policy that applies automatically to every container session).
 - **Network exfiltration** — the container shares the host's network
   namespace (`network_mode: host`). The agent can make arbitrary outbound
   connections.
