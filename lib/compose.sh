@@ -286,6 +286,15 @@ export_compose_env() {
 	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
 	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
 
+	# ── drydock container identity markers (issue #8, Slice A) ───────────────
+	# Forwarded into the container via the environment: block so Claude can
+	# detect it is running inside drydock. DRYDOCK_HOME is a plain bash var
+	# set inline in bin/drydock; export it here so docker-compose.yml can
+	# substitute ${DRYDOCK_HOME} in volume mount sources (e.g. Slice B hook mount).
+	export DRYDOCK=1
+	export DRYDOCK_VERSION
+	export DRYDOCK_HOME
+
 	# ── deploy-key migration warning (REQ-11) ─────────────────────────────────
 	# If the raw basename differs from the sanitized PROJECT_NAME AND an old-named
 	# key file exists at the old location, warn the user to rename it. Non-fatal.

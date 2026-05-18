@@ -821,3 +821,32 @@ MI
 	run export_compose_env "$dotted_dir"
 	[ "$status" -eq 0 ]
 }
+
+# ── identity markers (issue #8, Slice A) ─────────────────────────────────────
+# Use subshell checks for DRYDOCK and DRYDOCK_VERSION because the function must
+# export (not just set) them — the test validates the export attribute, not the
+# value alone. A plain `[ -n "$DRYDOCK_VERSION" ]` would pass green immediately
+# because common.sh sets the var in the current shell before export_compose_env runs.
+
+@test "export_compose_env: A-1 — exports DRYDOCK=1 (visible in child process)" {
+	export_compose_env "$TEST_PROJECT_DIR"
+	run bash -c 'printf "%s" "${DRYDOCK-UNSET}"'
+	[ "$status" -eq 0 ]
+	[ "$output" = "1" ]
+}
+
+@test "export_compose_env: A-2 — exports DRYDOCK_VERSION (non-empty in child process)" {
+	export_compose_env "$TEST_PROJECT_DIR"
+	run bash -c 'printf "%s" "${DRYDOCK_VERSION-UNSET}"'
+	[ "$status" -eq 0 ]
+	[ "$output" != "UNSET" ]
+	[ -n "$output" ]
+}
+
+@test "export_compose_env: A-3 — exports DRYDOCK_HOME (non-empty in child process)" {
+	export_compose_env "$TEST_PROJECT_DIR"
+	run bash -c 'printf "%s" "${DRYDOCK_HOME-UNSET}"'
+	[ "$status" -eq 0 ]
+	[ "$output" != "UNSET" ]
+	[ -n "$output" ]
+}
