@@ -70,7 +70,7 @@ Host-side runtime state (`~/.engram-container/`, `~/.claude-container/`,
 # Existing project (already has .claude/settings.json):
 cd ~/git/myproject && drydock
 
-# New project — create the baseline .claude/settings.json (git-init mental model):
+# New project — seed a minimal .claude/settings.json stub (git-init mental model):
 drydock init ~/git/newproject
 cd ~/git/newproject && drydock
 
@@ -90,7 +90,7 @@ scripts, a justfile) runs the same way.
 | Command | What it does |
 |---|---|
 | `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed |
-| `drydock init [DIR]` | Per-project setup: create `.claude/settings.json` baseline |
+| `drydock init [DIR]` | Per-project setup: seed a minimal `.claude/settings.json` stub for your own customization (drydock's deny policy is image-baked, applies automatically) |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host |
 | `drydock build` | Build/rebuild `drydock:latest` |
@@ -225,6 +225,13 @@ env-var knobs:
 | `DRYDOCK_TMPFS_SIZE=<size>` | Override `/tmp` size cap (e.g. `4g`, `512m`) — hardening otherwise active |
 
 See [docs/security.md](docs/security.md) for the cap list rationale.
+
+**Managed-settings layer (v0.2.0+):** drydock's tier-1 agent policy — the `permissions.deny`
+secret/git-safety block and the `hooks.SessionStart` entry — ships image-baked as a Claude Code
+managed-settings drop-in (`/etc/claude-code/managed-settings.d/`, root-owned). It applies
+automatically with zero per-project setup and cannot be weakened from a project's
+`.claude/settings.json`. `drydock init` seeds a minimal per-project stub for your own
+customization; the policy itself lives in the image.
 
 ## Documentation
 
