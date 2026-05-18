@@ -245,7 +245,7 @@ _ASK_FD_OK=0
 _ask_fd_open() {
 	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
 	local _tty="${_DRYDOCK_TTY:-/dev/tty}"
-	if ( exec 3<"$_tty" ) 2>/dev/null; then
+	if (exec 3<"$_tty") 2>/dev/null; then
 		exec 3<"$_tty"
 		_ASK_FD_OK=1
 	fi
@@ -258,7 +258,10 @@ _ask_fd_open() {
 # losing the fd 3 position advance back to the parent shell.
 _ASK_RESULT=n
 ask() {
-	[ "$DRYDOCK_INTERACTIVE" = "1" ] || { _ASK_RESULT="$2"; return 0; }
+	[ "$DRYDOCK_INTERACTIVE" = "1" ] || {
+		_ASK_RESULT="$2"
+		return 0
+	}
 	local _ans=""
 	printf '%s [%s] ' "$1" "$2" >&2
 	if [ "$_ASK_FD_OK" = "1" ]; then
