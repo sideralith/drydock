@@ -648,6 +648,48 @@ _setup_build_stub() {
 	refute_output --partial "1)"
 }
 
+# ── T-14/T-15: Non-interactive parity regression guards ──────────────────────
+# Explicit parity assertions: DRYDOCK_INTERACTIVE=0 (pipe-install / curl|bash)
+# MUST produce byte-identical non-interactive behavior — no sentinel, no build,
+# no rc modification — and exit 0. These are regression guards that survive
+# future refactors even if the per-feature tests above are changed.
+
+@test "parity(NI): no engram sentinel, no build, no rc change, exit 0" {
+	# Combined non-interactive parity: one single run asserts ALL three
+	# interactive features are suppressed when DRYDOCK_INTERACTIVE=0
+	local _home="$BATS_TEST_TMPDIR/home-parity"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc"
+
+	# Pre-seed INSTALL_DIR: avoids clone, provides a callable bin/drydock stub
+	local _install="$BATS_TEST_TMPDIR/parity-install"
+	local _build_log="$BATS_TEST_TMPDIR/parity-build.log"
+	mkdir -p "$_install/.git" "$_install/bin" "$_install/lib"
+	touch "$_install/lib/common.sh"
+	# Stub that would fail loudly if ever called
+	printf '#!/usr/bin/env bash\nprintf "PARITY_STUB_CALLED\n" >%s\nexit 1\n' "$_build_log" \
+		>"$_install/bin/drydock"
+	chmod +x "$_install/bin/drydock"
+
+	run env DRYDOCK_INSTALL_DIR="$_install" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=0 \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+
+	# Exit 0 — install must succeed
+	assert_success
+	# No engram sentinel
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+	# bin/drydock build stub NOT called
+	refute [ -f "$_build_log" ]
+	# rc file not modified (still empty / unchanged)
+	assert [ ! -s "$_home/.bashrc" ]
+}
+
 # Case 6: env_overrides
 @test "env overrides: all 4 vars respected" {
 	local _custom_install="$BATS_TEST_TMPDIR/custom-install"
