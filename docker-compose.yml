@@ -45,6 +45,8 @@ services:
     # widens nothing; the agent could already `gh auth token`.)
     environment:
       - GITHUB_PERSONAL_ACCESS_TOKEN
+      - DRYDOCK
+      - DRYDOCK_VERSION
 
     volumes:
       # ── Docker-out-of-Docker socket ────────────────────────────────────────
