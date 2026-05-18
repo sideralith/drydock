@@ -63,7 +63,7 @@ Debian 12 slim container that:
 - **Tamper-proof guardrails** — an image-baked `permissions.deny` policy plus a read-only `PreToolUse` hook; the agent cannot edit its own guardrails (INV-3).
 - **Container hardening** — dropped Linux capabilities, `no-new-privileges`, and a size-bounded `/tmp` (INV-8).
 
-These defend against agent *accidents*, not a motivated attacker — the bind-mounted Docker socket is root-equivalent on the host by design (INV-6). Full detail in [docs/security.md](docs/security.md).
+These raise the floor against agent *accidents* — not an adversarial sandbox. Full detail in [docs/security.md](docs/security.md).
 
 ## Quick start
 
