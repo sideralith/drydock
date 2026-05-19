@@ -701,6 +701,21 @@ cmd_link() {
 		if [ "$container_target" = "/" ]; then
 			err "rejected: container target '/' is the filesystem root"
 		fi
+		# R3-FIX-4: reject any target containing a '..' path component. Docker
+		# normalizes /workspace-siblings/../etc/foo to /etc/foo at mount time,
+		# which would shadow a system directory while bypassing all guards.
+		# Regex: any /.. followed by / or end-of-string → a .. path component.
+		if [[ "$container_target" =~ /\.\.(/|$) ]]; then
+			err "rejected: container target '$container_target' contains '..' which would normalize to a different path"
+		fi
+		# R3-FIX-5: reject any target containing a '.' path component (single dot).
+		# /workspace-siblings/. normalizes to /workspace-siblings and bypasses
+		# the exact-string guard (g) because the guard compares the literal string.
+		# Regex: any /. followed by / or end-of-string → a single-dot component.
+		# This is safe: /.hidden, /.claude etc. have a non-/ char after the dot.
+		if [[ "$container_target" =~ /\.(/|$) ]]; then
+			err "rejected: container target '$container_target' contains '.' component which would normalize to a different path"
+		fi
 		# (d) Explicitly reject the RO hooks mount path (INV-3): /opt/drydock/hooks.
 		# Checked BEFORE the generic /opt system-dir reject so the error message
 		# names INV-3 specifically. Bind-mounted :ro per docker-compose.yml line 84;

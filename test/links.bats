@@ -961,3 +961,61 @@ _links_setup() {
 	tmp_count="$(find "$FAKE_HOME/.config/drydock/links/" -name "*.tmp*" 2>/dev/null | wc -l || echo 0)"
 	[ "$tmp_count" -eq 0 ]
 }
+
+# ── R3-FIX-4: .. component bypasses guards via path normalization ─────────────
+
+@test "cmd_link: R3-FIX-4 rejects container target containing .." {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/workspace-siblings/../etc/foo"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *".."* ]]
+	)
+}
+
+@test "cmd_link: R3-FIX-4 rejects container target starting with .." {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/../etc/foo"
+		[ "$status" -ne 0 ]
+	)
+}
+
+# ── R3-FIX-5: . component bypasses guard (g) ─────────────────────────────────
+
+@test "cmd_link: R3-FIX-5 rejects container target /workspace-siblings/." {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/workspace-siblings/."
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"."* ]]
+	)
+}
+
+@test "cmd_link: R3-FIX-5 rejects container target with embedded . component" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/some/./path"
+		[ "$status" -ne 0 ]
+	)
+}
