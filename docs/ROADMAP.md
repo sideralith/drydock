@@ -34,7 +34,7 @@ file.
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Done |
 | [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Done |
 | [destructive-command-guardrails](#destructive-command-guardrails) | v0.2.0 | [#30][i30] | Done |
-| [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Planned |
+| [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Done |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.3.0 | [#17][i17] | Planned |
@@ -253,6 +253,8 @@ section of the source hook is dropped entirely in favour of the existing
 **Provenance.** This session; issue [#30][i30].
 
 ### concurrent-sessions
+
+**Status.** Done — shipped in v0.2.0 (issue #9 closed).
 
 **Problem.** `cmd_run` names the container deterministically `drydock-<project>`.
 A second `drydock` in the same project collides on that name and is refused — no

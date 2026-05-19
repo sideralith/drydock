@@ -331,10 +331,23 @@ ensure_synced() {
 
 # pre_flight_notice — non-blocking informational notice printed before starting
 # a new drydock session when other sessions for the same project are already
-# running. Counts existing drydock-<project>-* containers and prints one line
-# so the user knows concurrent sessions are active. Never refuses (R5).
-# Implemented in PR 3 (Phase 3 — UX + docs). No-op stub for PR 2 wire-in.
-pre_flight_notice() { :; }
+# running. Counts existing drydock-<project>-<disc> containers (run sessions
+# only; -shell suffixed containers are excluded by the anchored regex) and
+# prints one informational line. Never refuses — exit is always 0 (R5).
+# Called from both cmd_run and cmd_shell after export_compose_env.
+pre_flight_notice() {
+	local existing count
+	# Query running containers with an anchored name filter; strip any names the
+	# filter passed through that don't strictly match (e.g. -shell variants when
+	# the Docker daemon applies the regex less strictly than POSIX ERE).
+	existing="$("$DOCKER" ps \
+		--filter "name=^drydock-${PROJECT_NAME}-[0-9a-f]+$" \
+		--format '{{.Names}}' 2>/dev/null |
+		grep -E "^drydock-${PROJECT_NAME}-[0-9a-f]+$" || true)"
+	count="$(printf '%s' "$existing" | grep -c . || true)"
+	[ "$count" -gt 0 ] && note "drydock: $count existing drydock-${PROJECT_NAME}-* session(s) running; starting another."
+	return 0
+}
 
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]

@@ -1656,6 +1656,179 @@ _setup_cmd_name_test() {
 	[[ "$log" != *" kill "* ]]
 }
 
+# ── pre_flight_notice (concurrent-sessions, PR 3 UX — Task 3.1 RED) ──────────
+# R5: print a non-blocking informational notice when ≥1 same-project containers
+# are running. Zero containers → silent. Exit code always 0.
+# Tests cover count detection, zero-silence, -shell exclusion, and that both
+# cmd_run and cmd_shell invoke the notice (via a spy stub in the integration
+# smoke test).
+
+# Helper: build a fake HOME + seam environment for pre_flight_notice unit tests.
+# Sets PFN_TEST_PROJECT_DIR (global) and exports PROJECT_NAME.
+_setup_preflight_test() {
+	local fakehome="$BATS_TEST_TMPDIR/pfn-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	PFN_TEST_PROJECT_DIR="$BATS_TEST_TMPDIR/pfn-proj-$$"
+	mkdir -p "$PFN_TEST_PROJECT_DIR"
+	export PROJECT_NAME="myproject"
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-pfn-$$.log"
+	touch "$DOCKER_CALL_LOG"
+}
+
+# Helper: create a DOCKER stub that returns $1 on stdout for "ps" subcommand.
+_make_pfn_docker_stub() {
+	local ps_output="$1"
+	local stub_file="$BATS_TEST_TMPDIR/docker-pfn-stub-$$"
+	cat >"$stub_file" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "\${DOCKER_CALL_LOG:?}"
+if [ "\${1:-}" = "ps" ]; then
+	printf '%s\n' '$ps_output'
+fi
+exit 0
+STUB
+	chmod +x "$stub_file"
+	printf '%s' "$stub_file"
+}
+
+@test "pre_flight_notice: one existing session — prints notice with count 1" {
+	_setup_preflight_test
+	export DOCKER="$(_make_pfn_docker_stub "drydock-myproject-a1b2")"
+	run pre_flight_notice
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"1"* ]]
+	[[ "$output" == *"myproject"* ]]
+}
+
+@test "pre_flight_notice: two existing sessions — prints notice with count 2" {
+	_setup_preflight_test
+	# ps output has two container names (newline-separated); embed literal newline in stub.
+	local stub_file="$BATS_TEST_TMPDIR/docker-pfn-two-stub-$$"
+	cat >"$stub_file" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "${DOCKER_CALL_LOG:?}"
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproject-a1b2\ndrydock-myproject-c3d4\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_file"
+	export DOCKER="$stub_file"
+	run pre_flight_notice
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"2"* ]]
+}
+
+@test "pre_flight_notice: zero existing sessions — prints nothing" {
+	_setup_preflight_test
+	export DOCKER="$(_make_pfn_docker_stub "")"
+	run pre_flight_notice
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "pre_flight_notice: -shell containers are NOT counted" {
+	_setup_preflight_test
+	# Only a -shell container exists; anchored regex must exclude it.
+	export DOCKER="$(_make_pfn_docker_stub "drydock-myproject-a1b2-shell")"
+	run pre_flight_notice
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "pre_flight_notice: exit code is 0 even when sessions exist" {
+	_setup_preflight_test
+	export DOCKER="$(_make_pfn_docker_stub "drydock-myproject-a1b2")"
+	run pre_flight_notice
+	[ "$status" -eq 0 ]
+}
+
+@test "pre_flight_notice: called from cmd_run path (R5 — notice fires in cmd_run)" {
+	# This test verifies that cmd_run actually calls pre_flight_notice. We use a
+	# spy stub that writes a sentinel to a log, then assert the sentinel appears.
+	# Testing the notice content is covered by the direct unit tests above.
+	local fakehome="$BATS_TEST_TMPDIR/pfn-run-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	ensure_synced() { :; }
+
+	_fixed_disc_pfn_run() { printf 'cafe'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_pfn_run
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-pfn-run-log-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	# Override pre_flight_notice with a spy that outputs a sentinel.
+	pre_flight_notice() { printf 'preflight-called\n'; }
+
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	local project_dir="$BATS_TEST_TMPDIR/pfn-run-proj-$$"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"preflight-called"* ]]
+}
+
+@test "pre_flight_notice: called from cmd_shell path (R5 — notice fires in cmd_shell)" {
+	# Same spy approach as above but for cmd_shell.
+	local fakehome="$BATS_TEST_TMPDIR/pfn-shell-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	ensure_synced() { :; }
+
+	_fixed_disc_pfn_shell() { printf 'babe'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_pfn_shell
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-pfn-shell-log-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	# Override pre_flight_notice with a spy that outputs a sentinel.
+	pre_flight_notice() { printf 'preflight-called\n'; }
+
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	local project_dir="$BATS_TEST_TMPDIR/pfn-shell-proj-$$"
+	mkdir -p "$project_dir"
+	run cmd_shell "$project_dir"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"preflight-called"* ]]
+}
+
 # ── integration smoke test (concurrent-sessions, PR 2 Wire-in — Task 2.8) ─────
 # Asserts end-to-end call order for cmd_run with all seams stubbed:
 # ensure_synced (skipped) → gc_orphan_session_dirs → discriminator → seed → pre_flight_notice → compose run
