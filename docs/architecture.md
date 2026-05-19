@@ -13,12 +13,16 @@ HOST                                CONTAINER (debian:12-slim)
   (see "engram" section below)          usable (Linux host + binary on PATH)
 
 ~/.claude/                          ~/.claude/  (container-specific)
-  (host Claude's config dir)          ← bind from ~/.claude-container/
+  (host Claude's config dir)          ← bind from ~/.claude-container-<disc>/
+                                       (seeded per-session from the
+                                        ~/.claude-container/ prototype)
                                        Skills, plugins, hooks, settings visible
 
 ~/.claude.json                      ~/.claude.json  (container-specific)
-  (project list, onboarding flags,    ← bind from ~/.claude-container.json
-   MCP servers, OAuth account)          Without this, Claude Code in the
+  (project list, onboarding flags,    ← bind from ~/.claude-container-<disc>.json
+   MCP servers, OAuth account)          (seeded per-session from the
+                                        ~/.claude-container.json prototype)
+                                        Without this, Claude Code in the
                                         container can't find its config file,
                                         creates a fresh ephemeral one, and
                                         "settings don't persist". MUST mount.
@@ -58,14 +62,15 @@ both:
 
 | Location | Type | Contains | Container sibling |
 |---|---|---|---|
-| `~/.claude/` | directory | skills, plugins, agents, commands, hooks, `settings.json`, `CLAUDE.md`, `mcp/*.json` | `~/.claude-container/` |
-| `~/.claude.json` | single file | project registry, onboarding flags, "seen hints", `mcpServers`, OAuth account, various caches | `~/.claude-container.json` |
+| `~/.claude/` | directory | skills, plugins, agents, commands, hooks, `settings.json`, `CLAUDE.md`, `mcp/*.json` | `~/.claude-container-<disc>/` (per-session, seeded from `~/.claude-container/` prototype) |
+| `~/.claude.json` | single file | project registry, onboarding flags, "seen hints", `mcpServers`, OAuth account, various caches | `~/.claude-container-<disc>.json` (per-session, seeded from `~/.claude-container.json` prototype) |
 
 Forgetting the second one is a classic mistake: the container can't find
 `~/.claude.json`, Claude Code creates a fresh one on the container's
 ephemeral filesystem, and everything you configure in a session evaporates
-on exit. drydock's `cmd_setup` creates both siblings; `cmd_sync` refreshes
-both from host.
+on exit. `cmd_setup` and `cmd_sync` maintain the `~/.claude-container/`
+prototype; each `drydock run` seeds a per-session `~/.claude-container-<disc>/`
+pair from it via `seed_session_config_dir`.
 
 ## engram (optional)
 
@@ -149,25 +154,37 @@ Neither is implemented in v0.1.0.
 ## Why the storage is split (host vs. container)
 
 The container does **not** use the host's `~/.claude/`, `~/.claude.json`, or
-`~/.engram/` directly. Claude config gets container-specific siblings
-(`~/.claude-container/`, `~/.claude-container.json`), initialized once as a
-copy. Engram uses `~/.engram-container/` when isolated mode is active, or the
-host's `~/.engram/` directly when shared mode is active.
+`~/.engram/` directly. Claude config uses per-session container-specific
+siblings (`~/.claude-container-<disc>/`, `~/.claude-container-<disc>.json`),
+seeded from the `~/.claude-container/` prototype on each run via
+`seed_session_config_dir`. Engram uses `~/.engram-container/` when isolated
+mode is active, or the host's `~/.engram/` directly when shared mode is active.
 
 Reasons (Claude config split — always applies):
 
 1. **`~/.claude.json` is hot**: Claude Code rewrites it constantly (changelog
    fetch timestamps, "have you seen X", project `lastUsed` times, etc.).
-   Shared between concurrent host + container sessions = constant last-writer-
-   wins churn. Separate copies → no churn.
+   Shared between any two concurrent sessions = constant last-writer-wins
+   churn. Each session gets its own per-session copy → no churn.
 
 2. **OAuth refresh**: `~/.claude/.credentials.json` and `~/.claude.json`
    carry auth state. Concurrent refresh from two sessions = one invalidates
-   the other. Separate copies sidestep this.
+   the other. Per-session copies avoid this.
 
 3. **Plugin install isolation**: `/plugin install foo` from inside the
-   container lands in `~/.claude-container/plugins/` only — the host doesn't
-   know. Useful as a reversible playground (see [lifecycle.md](lifecycle.md)).
+   container lands in `~/.claude-container-<disc>/plugins/` only — the host
+   doesn't know. Useful as a reversible playground (see [lifecycle.md](lifecycle.md)).
+
+**Per-session config isolation (v0.2.0+).** Concurrent same-project sessions
+— whether host-vs-container or container-vs-container — engage reasons 1 and
+2 equally. Two drydock containers running concurrently for the same project
+both perform read-modify-write on `~/.claude.json` and can refresh
+`.credentials.json`. The mechanism that keeps this safe is per-session config
+isolation: each invocation mounts its own `~/.claude-container-<disc>/`
+directory and `~/.claude-container-<disc>.json` file (where `<disc>` is a
+4-character random hex discriminator). No two concurrent sessions ever share
+a `~/.claude*` source path with write access, so neither failure mode can
+occur between sessions.
 
 Reasons (engram isolated — the default):
 
@@ -187,7 +204,7 @@ contention-free concurrent host + container sessions.
 
 ## The hooks RO overlay
 
-`~/.claude/hooks/` is bind-mounted **`:ro`** on top of the `.claude-container`
+`~/.claude/hooks/` is bind-mounted **`:ro`** on top of the `.claude-container-<disc>`
 mount (the second mount masks that subpath of the first). Effect: the agent
 inside the container can read its hooks (e.g. `block-destructive.sh`, which
 is a PreToolUse guardrail) but **cannot edit them**. Without this, the agent
