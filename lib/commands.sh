@@ -270,15 +270,15 @@ ensure_synced() {
 	# -newer is on the PRINT branch (not the top-level) to avoid printing
 	# HOST_CLAUDE_JSON unconditionally when it is not newer than the marker.
 	if find "$HOST_CLAUDE" "$HOST_CLAUDE_JSON" \
-		\( -path '*/sessions/*'   -o -path '*/projects/*' \
+		\( -path '*/sessions/*' -o -path '*/projects/*' \
 		-o -path '*/file-history/*' -o -path '*/shell-snapshots/*' \
-		-o -path '*/paste-cache/*'  -o -path '*/cache/*' \
-		-o -path '*/backups/*'      -o -path '*/telemetry/*' \
-		-o -path '*/plans/*'        -o -path '*/tasks/*' \
-		-o -path '*/ide/*'          -o -path '*/session-env/*' \
-		-o -path '*/downloads/*'    -o -path '*/uploads/*' \
+		-o -path '*/paste-cache/*' -o -path '*/cache/*' \
+		-o -path '*/backups/*' -o -path '*/telemetry/*' \
+		-o -path '*/plans/*' -o -path '*/tasks/*' \
+		-o -path '*/ide/*' -o -path '*/session-env/*' \
+		-o -path '*/downloads/*' -o -path '*/uploads/*' \
 		-o -path '*/themes/*' \
-		-o -name '.last-cleanup'    -o -name 'scheduled_tasks.lock' \
+		-o -name '.last-cleanup' -o -name 'scheduled_tasks.lock' \
 		-o -name '.credentials.json' -o -name '.drydock-last-sync' \
 		-o -name '*.bak.pre-dockerized' \
 		"${engram_prune[@]}" \) -prune \
