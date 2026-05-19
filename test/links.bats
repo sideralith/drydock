@@ -600,6 +600,23 @@ _links_setup() {
 @test "cmd_link: R2-FIX-1/2 accepts host-path-mirror custom target under \$HOME (maintainer use case)" {
 	_links_setup
 
+	# This test exercises R2-FIX-1's "target under $HOME is accepted" guard.
+	# _links_setup sets HOME=$BATS_TEST_TMPDIR/fakehome, so HOME's first path
+	# component follows TMPDIR. scripts/test.sh redirects TMPDIR to a /home-
+	# rooted path (first component `home`, NOT in the system-dir denylist);
+	# running `bats test/` directly leaves TMPDIR under /tmp (first component
+	# `tmp`, denylisted), which makes block (c) reject any target under HOME
+	# BEFORE block (f) can exercise the under-HOME exception we want to test.
+	# Skip cleanly in that case so direct-bats runs don't produce a misleading
+	# false negative.
+	local _home_first="${HOME#/}"
+	_home_first="${_home_first%%/*}"
+	case "$_home_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "HOME first-component '/$_home_first' is system-denylisted; run via scripts/test.sh"
+		;;
+	esac
+
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sibling_dir"
 
