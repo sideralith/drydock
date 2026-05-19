@@ -244,6 +244,9 @@ generate_links_overlay() {
 	local host target
 	while IFS='|' read -r host target _; do
 		[ -z "$host" ] && continue
+		# FIX #8: skip malformed lines with an empty target field to prevent
+		# a broken "host::ro" volume spec from entering the compose overlay.
+		[ -z "$target" ] && continue
 		body+=$(printf '      - "%s:%s:ro"\n' "$host" "$target")
 		body+=$'\n'
 	done < "$list_file"

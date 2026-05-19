@@ -1447,6 +1447,33 @@ _setup_wiring_home() {
 	grep -qF '"/host/path/mylib:/opt/mylib:ro"' "$LINKS_OVERLAY"
 }
 
+# ── FIX #7/#8: skip malformed lines with empty target ─────────────────────────
+
+@test "generate_links_overlay: FIX-8 line with empty target is skipped — no broken volume spec" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-badtarget"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	# First line: empty target field (malformed); second: valid
+	printf '/host/path/broken||\n' > "$list_dir/myproject.list"
+	printf '/host/path/good|/workspace-siblings/good/|\n' >> "$list_dir/myproject.list"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-badtarget.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ -f "$LINKS_OVERLAY" ]
+	# Broken line must NOT appear in the overlay.
+	# Use `run` + status check (not bare `!`) because bare `! grep -q` silently
+	# passes in bats due to bash's ERR-trap suppression on `! command` forms.
+	run grep -F '/host/path/broken' "$LINKS_OVERLAY"
+	[ "$status" -ne 0 ]
+	# Valid line MUST appear
+	grep -qF '/host/path/good' "$LINKS_OVERLAY"
+}
+
 # ── T12-RED: compose_files wiring ─────────────────────────────────────────────
 
 @test "compose_files: LINKS_OVERLAY present and non-empty → included after submount, before hardening" {

@@ -515,6 +515,24 @@ _links_setup() {
 	)
 }
 
+@test "cmd_link: FIX-8 link succeeds when list has a malformed line with empty target" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	# Inject a malformed line with empty target — should not cause false collision or crash
+	printf '/some/other/path||\n' >> "$list_file"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+}
+
 @test "cmd_link: FIX-3 rejects duplicate container target from two different host paths" {
 	_links_setup
 
