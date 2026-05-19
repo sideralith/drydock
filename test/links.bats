@@ -909,6 +909,30 @@ _links_setup() {
 
 # ── R3-FIX-7: stale .tmp files opportunistically cleaned at top of cmd_unlink ─
 
+
+# ── R3-FIX-2: resolve_project_dir returns logical pwd; normalize to realpath ──
+
+@test "cmd_link: R3-FIX-2 symlinked CWD does not bypass own-project guard" {
+	_links_setup
+
+	# Create a real project dir and a symlink pointing to it
+	local real_proj="$BATS_TEST_TMPDIR/real-project"
+	local link_proj="$BATS_TEST_TMPDIR/link-project"
+	mkdir -p "$real_proj"
+	ln -s "$real_proj" "$link_proj"
+
+	# cd into the symlink path — resolve_project_dir returns the symlink path (pwd)
+	# cmd_link should still detect that canonical == realpath(project_dir) and reject
+	(
+		cd "$link_proj"
+		# Link the real path (canonical = real_proj); project_dir via pwd = link_proj
+		# but realpath(link_proj) = real_proj, so the guard must fire
+		run cmd_link "$real_proj"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"current project"* ]]
+	)
+}
+
 @test "cmd_unlink: R3-FIX-7 pre-existing stale .tmp file is cleaned up on next successful unlink" {
 	_links_setup
 

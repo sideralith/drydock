@@ -672,9 +672,14 @@ cmd_link() {
 		err "rejected: '$canonical' is under a protected path (credentials or drydock state)"
 	fi
 
-	# Reject the project's own directory
+	# Reject the project's own directory.
+	# R3-FIX-2: resolve_project_dir returns logical pwd (symlink path). If CWD
+	# is a symlink, the logical path differs from canonical (realpath-resolved).
+	# Normalize project_dir to its realpath so a symlinked CWD cannot bypass
+	# this guard. Do NOT modify resolve_project_dir — it is used elsewhere with
+	# pwd-style expectations; only this comparison needs realpath normalization.
 	local project_dir
-	project_dir="$(resolve_project_dir "")"
+	project_dir="$(realpath "$(resolve_project_dir "")" 2>/dev/null || resolve_project_dir "")"
 	if [ "$canonical" = "$project_dir" ]; then
 		err "rejected: '$canonical' is the current project directory (already mounted at /workspace)"
 	fi
