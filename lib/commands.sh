@@ -125,6 +125,8 @@ cmd_setup() {
 	fi
 
 	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
+	# Stamp last-sync marker so the first drydock run after setup is a no-op.
+	touch "$CONTAINER_CLAUDE/.drydock-last-sync"
 }
 
 # Per-project setup. Creates `.claude/settings.json` stub in the target

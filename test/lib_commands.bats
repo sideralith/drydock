@@ -986,6 +986,30 @@ _setup_cmd_conflict() {
 	[[ "$output" != *"already running"* ]]
 }
 
+# ── auto-sync: Phase 3 — marker in cmd_setup ─────────────────────────────────
+
+@test "cmd_setup: creates .drydock-last-sync marker as final action" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Ensure CONTAINER_CLAUDE does not exist so cmd_setup creates it.
+	rm -rf "$CONTAINER_CLAUDE"
+	rm -f "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_setup
+	[ "$status" -eq 0 ]
+	[ -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+}
+
 # ── auto-sync: Phase 2 — rsync excludes + marker in cmd_sync ─────────────────
 
 @test "cmd_sync: rsync args include --exclude='.credentials.json'" {
