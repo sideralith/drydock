@@ -554,3 +554,178 @@ _current_project_name() {
 _links_list_file() {
 	printf '%s/.config/drydock/links/%s.list\n' "$HOME" "$(_current_project_name)"
 }
+
+# ── cmd_link ──────────────────────────────────────────────────────────────────
+
+# cmd_link [--rw] <host-path> [container-target]
+# Validates and appends a sibling entry to the project list file.
+# RO-only this slice; --rw is parsed and rejected with a stub error.
+cmd_link() {
+	local rw=0
+	local src="" target_arg=""
+
+	# Parse args: --rw flag, then 1-2 positional args
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--rw)
+			rw=1
+			shift
+			;;
+		-*)
+			err "unknown option: $1"
+			;;
+		*)
+			if [ -z "$src" ]; then
+				src="$1"
+			elif [ -z "$target_arg" ]; then
+				target_arg="$1"
+			else
+				err "too many arguments"
+			fi
+			shift
+			;;
+		esac
+	done
+
+	# SP-3: --rw is parsed but not yet implemented
+	if [ "$rw" -eq 1 ]; then
+		err "RW links not yet implemented"
+	fi
+
+	[ -n "$src" ] || err "usage: drydock link <host-path> [container-target]"
+
+	# D7: canonicalize BEFORE all guards
+	local canonical
+	canonical="$(realpath "$src" 2>/dev/null)" || err "path does not exist: $src"
+
+	# SP-6: host-source rejection guard
+	# Reject $HOME itself, ancestors of $HOME, and sensitive subdirs.
+	# Use [[ ]] for prefix matching; handle root "/" specially.
+	if [ "$canonical" = "$HOME" ]; then
+		err "rejected: '$canonical' is \$HOME"
+	fi
+	# Ancestor check: canonical is an ancestor of HOME when HOME starts with canonical/
+	# Special-case root "/" which would produce a double-slash in pattern.
+	if [ "$canonical" = "/" ] || [[ "$HOME/" == "$canonical/"* ]]; then
+		err "rejected: '$canonical' is an ancestor of \$HOME"
+	fi
+	# Sensitive subdir check: prefix comparison on canonical
+	if [[ "$canonical/" == "$HOME/.claude"* ]] \
+		|| [[ "$canonical/" == "$HOME/.engram"* ]] \
+		|| [[ "$canonical/" == "$HOME/.config/drydock"* ]]; then
+		err "rejected: '$canonical' is under a drydock-managed path"
+	fi
+
+	# Reject the project's own directory
+	local project_dir
+	project_dir="$(resolve_project_dir "")"
+	if [ "$canonical" = "$project_dir" ]; then
+		err "rejected: '$canonical' is the current project directory (already mounted at /workspace)"
+	fi
+
+	# Derive <name> = basename of canonical host path
+	local name
+	name="$(basename "$canonical")"
+
+	# Compute container target (default or custom)
+	local container_target
+	if [ -n "$target_arg" ]; then
+		container_target="$target_arg"
+		# SP-7: custom target rejection guard
+		case "$container_target/" in
+		"/workspace/"*)
+			err "rejected: container target '$container_target' shadows /workspace"
+			;;
+		"/workspace")
+			err "rejected: container target '$container_target' shadows /workspace"
+			;;
+		"/etc/"*)
+			err "rejected: container target '$container_target' shadows /etc"
+			;;
+		"$HOME/.claude"*)
+			err "rejected: container target '$container_target' shadows container state"
+			;;
+		"$HOME/.engram"*)
+			err "rejected: container target '$container_target' shadows container state"
+			;;
+		"$HOME/.config/drydock"*)
+			err "rejected: container target '$container_target' shadows drydock config"
+			;;
+		esac
+		# Catch /workspace without trailing slash
+		[ "$container_target" = "/workspace" ] && err "rejected: container target shadows /workspace"
+	else
+		container_target="/workspace-siblings/$name/"
+	fi
+
+	# ADR-5: basename collision check against existing list entries
+	local list_file
+	list_file="$(_links_list_file)"
+	if [ -f "$list_file" ]; then
+		local existing_host existing_target existing_flags existing_name
+		while IFS='|' read -r existing_host existing_target existing_flags; do
+			[ -z "$existing_host" ] && continue
+			existing_name="$(basename "$existing_host")"
+			if [ "$existing_name" = "$name" ] && [ "$existing_host" != "$canonical" ]; then
+				err "basename collision: '$name' is already used by '$existing_host'; cannot also link '$canonical'"
+			fi
+			# Idempotent: same host path already present
+			if [ "$existing_host" = "$canonical" ]; then
+				note "already linked: $canonical"
+				return 0
+			fi
+		done < "$list_file"
+	fi
+
+	# Append entry (create dir+file if absent)
+	mkdir -p "$(dirname "$list_file")"
+	printf '%s|%s|\n' "$canonical" "$container_target" >> "$list_file"
+	ok "linked: $canonical → $container_target (ro)"
+}
+
+# ── cmd_unlink ────────────────────────────────────────────────────────────────
+
+# cmd_unlink <host-path>
+# Removes the matching entry from the project list file.
+# Exits non-zero when the path is not found in the list.
+cmd_unlink() {
+	local src="${1:-}"
+	[ -n "$src" ] || err "usage: drydock unlink <host-path>"
+
+	# Canonicalize input for consistent comparison
+	local canonical
+	canonical="$(realpath "$src" 2>/dev/null || printf '%s' "$src")"
+
+	local list_file
+	list_file="$(_links_list_file)"
+
+	if [ ! -f "$list_file" ] || ! grep -qF "${canonical}|" "$list_file"; then
+		err "not linked: $canonical"
+	fi
+
+	# Remove the matching line (match on host column = first field).
+	# grep -v exits 1 when no output lines remain (set -e safe workaround).
+	local tmp_file
+	tmp_file="${list_file}.tmp$$"
+	grep -vF "${canonical}|" "$list_file" > "$tmp_file" || true
+	mv "$tmp_file" "$list_file"
+	ok "unlinked: $canonical"
+}
+
+# ── cmd_links ─────────────────────────────────────────────────────────────────
+
+# cmd_links
+# Prints all sibling entries for the current project, one per line.
+# Empty list: silent exit 0.
+cmd_links() {
+	local list_file
+	list_file="$(_links_list_file)"
+
+	[ -f "$list_file" ] || return 0
+
+	local host target flags
+	while IFS='|' read -r host target flags; do
+		[ -z "$host" ] && continue
+		printf '%s -> %s\n' "$host" "$target"
+	done < "$list_file"
+}
