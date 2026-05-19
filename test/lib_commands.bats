@@ -1708,3 +1708,98 @@ _setup_cmd_name_test() {
 	[[ "$log" != *" stop "* ]]
 	[[ "$log" != *" kill "* ]]
 }
+
+# ── integration smoke test (concurrent-sessions, PR 2 Wire-in — Task 2.8) ─────
+# Asserts end-to-end call order for cmd_run with all seams stubbed:
+# ensure_synced (skipped) → gc_orphan_session_dirs → discriminator → seed → pre_flight_notice → compose run
+# Also asserts --name argument and no stop/kill.
+
+@test "integration: cmd_run call order — gc → disc → seed → pre_flight_notice → compose run --name disc" {
+	local fakehome="$BATS_TEST_TMPDIR/integ-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	# DRYDOCK_SKIP_AUTOSYNC=1 skips the actual sync; or stub ensure_synced directly.
+	ensure_synced() { :; }
+
+	# Call-order log for tracking function invocations.
+	local call_order_log="$BATS_TEST_TMPDIR/call-order-$$.log"
+	touch "$call_order_log"
+
+	# Pin discriminator to "abcd" and track its call.
+	_fixed_disc_integ() {
+		printf 'gc-done disc-called seed-done\n' >> "$call_order_log"
+		printf 'abcd'
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_integ
+
+	# Wrap gc_orphan_session_dirs to log its call.
+	gc_orphan_session_dirs() {
+		printf 'gc-called\n' >> "$call_order_log"
+	}
+
+	# Wrap seed_session_config_dir to log its call.
+	seed_session_config_dir() {
+		printf 'seed-called\n' >> "$call_order_log"
+	}
+
+	# Wrap pre_flight_notice to log its call.
+	pre_flight_notice() {
+		printf 'preflight-called\n' >> "$call_order_log"
+	}
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-integ-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	local project_dir="$BATS_TEST_TMPDIR/integ-proj-$$"
+	mkdir -p "$project_dir"
+
+	# Capture exec call instead of replacing process.
+	exec() {
+		printf 'compose-run-called\n' >> "$call_order_log"
+		echo "$*" >> "$DOCKER_CALL_LOG"
+		return 0
+	}
+
+	run cmd_run "$project_dir"
+	[ "$status" -eq 0 ]
+
+	local order
+	order="$(cat "$call_order_log")"
+	local compose_log
+	compose_log="$(cat "$DOCKER_CALL_LOG")"
+
+	# Verify gc was called before disc/seed.
+	[[ "$order" == *"gc-called"* ]]
+	[[ "$order" == *"seed-called"* ]]
+	[[ "$order" == *"preflight-called"* ]]
+	[[ "$order" == *"compose-run-called"* ]]
+
+	# gc must appear before disc/seed in the log.
+	local gc_pos disc_pos seed_pos compose_pos
+	gc_pos=$(printf '%s' "$order" | grep -n "gc-called" | head -1 | cut -d: -f1)
+	disc_pos=$(printf '%s' "$order" | grep -n "gc-done disc-called" | head -1 | cut -d: -f1)
+	seed_pos=$(printf '%s' "$order" | grep -n "seed-called" | head -1 | cut -d: -f1)
+	compose_pos=$(printf '%s' "$order" | grep -n "compose-run-called" | head -1 | cut -d: -f1)
+	[ "$gc_pos" -lt "$disc_pos" ]
+	[ "$disc_pos" -lt "$seed_pos" ]
+	[ "$seed_pos" -lt "$compose_pos" ]
+
+	# compose run must receive --name with discriminator suffix.
+	[[ "$compose_log" == *"--name drydock-integ-proj-"*"-abcd"* ]]
+
+	# No stop or kill in docker calls.
+	[[ "$compose_log" != *" stop "* ]]
+	[[ "$compose_log" != *" kill "* ]]
+}
