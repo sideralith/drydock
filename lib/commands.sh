@@ -272,12 +272,8 @@ ensure_synced() {
 		return 0
 	fi
 	# Engram-conditional prune entry: mirrors _engram_exclude in cmd_sync.
-	# Deliberate asymmetry: find uses -path '*/mcp/engram.json' (no trailing slash)
-	# while rsync uses --exclude='mcp/engram.json' (also no trailing slash, but
-	# rsync interprets it as a file pattern).  Claude Code only ever creates these
-	# names as directories, so a hypothetical bare file with this name is the only
-	# case where the two forms would diverge — not a real scenario in ~/.claude/.
-	# -type d is intentionally omitted to avoid complicating the compound expression.
+	# mcp/engram.json is a file on both sides (find -path and rsync --exclude),
+	# no trailing slash either way — no asymmetry here.
 	local -a engram_prune=()
 	if ! engram_usable; then
 		engram_prune=(-o -path '*/mcp/engram.json')
@@ -292,6 +288,13 @@ ensure_synced() {
 	# Directory entries omit the trailing /* so -prune skips the directory itself
 	# before descent, preventing find from walking all files inside large state
 	# dirs on every no-op invocation.
+	# Deliberate asymmetry: these directory entries use -path '*/sessions' etc.
+	# (no trailing slash → matches a file OR a directory of that name), while
+	# cmd_sync's rsync uses --exclude='sessions/' (trailing slash → directories
+	# only). Safe because Claude Code only ever creates these names as
+	# directories in ~/.claude/; a bare file so named is the sole divergence
+	# case and not a real scenario. -type d is omitted to keep the compound
+	# expression simple.
 	# -newer is on the PRINT branch (not the top-level) to avoid printing
 	# HOST_CLAUDE_JSON unconditionally when it is not newer than the marker.
 	# Output is captured into $hits; find's exit code is ignored (|| true) so
