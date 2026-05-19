@@ -540,6 +540,58 @@ setup() {
 	[ "$result" = "null" ]
 }
 
+# ── cmd_sync: purge .credentials.json from container on every sync ───────────
+
+@test "cmd_sync: purges .credentials.json from container even when pre-existing" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Pre-create container dir with a stale credentials file (simulates a user
+	# who synced before the --exclude was added, leaving a token behind).
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	touch "$CONTAINER_CLAUDE/.credentials.json"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	[ ! -f "$CONTAINER_CLAUDE/.credentials.json" ]
+}
+
+# ── cmd_setup: purge .credentials.json on the upgrade (else) path ────────────
+
+@test "cmd_setup: purges .credentials.json when CONTAINER_CLAUDE already exists (upgrade path)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Pre-create CONTAINER_CLAUDE so the else branch runs (upgrade path),
+	# and plant a stale credentials file inside it.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE/.credentials.json"
+
+	run cmd_setup
+	[ "$status" -eq 0 ]
+	[ ! -f "$CONTAINER_CLAUDE/.credentials.json" ]
+}
+
 # ── ensure_runtime_dirs: shared mode ─────────────────────────────────────────
 
 @test "ensure_runtime_dirs: shared mode (sentinel present + usable) — missing CONTAINER_ENGRAM does NOT trigger cmd_setup" {
@@ -984,6 +1036,646 @@ _setup_cmd_conflict() {
 	run cmd_run "$project_dir"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"already running"* ]]
+}
+
+# ── auto-sync: Phase 6 — parity guard: prune list == rsync exclude list ───────
+# Structural test: every path-based entry in ensure_synced's find prune set
+# must appear as a matching --exclude entry in cmd_sync, and vice versa.
+# This prevents silent drift between the two lists (a pruned-but-not-excluded
+# path causes unnecessary Docker cold-starts on the happy path).
+#
+# Approach: grep the source file for the two lists, normalize to a canonical
+# form, and compare. The engram conditional entry is verified structurally in
+# the next test ("parity: engram conditional entry matches between cmd_sync and ensure_synced").
+
+@test "parity: ensure_synced prune paths match cmd_sync rsync excludes" {
+	local src="$DRYDOCK_HOME/lib/commands.sh"
+
+	# Scope each extraction to its own function body to prevent unrelated
+	# rsync/find calls elsewhere in the file from masking real drift.
+	local cmd_sync_body ensure_synced_body
+	cmd_sync_body=$(sed -n '/^cmd_sync()/,/^}/p' "$src")
+	ensure_synced_body=$(sed -n '/^ensure_synced()/,/^}/p' "$src")
+
+	# Strip comment lines from both bodies BEFORE applying the extraction regexes.
+	# A doc comment that contains an example -path '*/sessions' or --exclude='foo/'
+	# pattern would otherwise inject a phantom entry into the extracted list and
+	# cause a spurious parity failure.  grep -v '^[[:space:]]*#' drops any line
+	# whose first non-whitespace character is '#'.
+	cmd_sync_body=$(echo "$cmd_sync_body" | grep -v '^[[:space:]]*#')
+	ensure_synced_body=$(echo "$ensure_synced_body" | grep -v '^[[:space:]]*#')
+
+	# Extract cmd_sync --exclude entries (drop engram conditional and *.bak.pre-dockerized/).
+	# Normalise: strip trailing slash so dir-entries match prune entries.
+	# bak.pre-dockerized/ is filtered because rsync needs TWO excludes for this case
+	# (.bak.pre-dockerized without slash for files, .bak.pre-dockerized/ for dirs) but
+	# find needs only ONE prune pattern (-name '*.bak.pre-dockerized').  The 1:2 asymmetry
+	# is intentional; parity is verified by the name-only form matching the prune entry.
+	local sync_excludes
+	sync_excludes=$(echo "$cmd_sync_body" \
+		| grep -oP "(?<=--exclude=')[^']+" \
+		| grep -v "mcp/engram.json" \
+		| grep -v "bak.pre-dockerized/" \
+		| sed 's|/$||' \
+		| sort)
+
+	# Extract ensure_synced prune -path and -name entries (drop engram conditional).
+	# -path '*/X' → X   -name 'Y' → Y  (no trailing slash in either case)
+	local prune_entries
+	prune_entries=$({ echo "$ensure_synced_body" \
+		| grep -oP "(?<=-path '\*/)([^']+)(?=')" \
+		| grep -v "mcp/engram.json"; \
+		echo "$ensure_synced_body" \
+		| grep -oP "(?<=-name ')([^']+)(?=')" \
+		| grep -v "mcp/engram.json"; } | sort)
+
+	# Both lists must be non-empty and identical.
+	[ -n "$sync_excludes" ]
+	[ -n "$prune_entries" ]
+	[ "$sync_excludes" = "$prune_entries" ]
+
+	# Parity guard: assert minimum entry count so a partial regex match can't
+	# pass vacuously by returning a smaller-but-equal subset of both lists.
+	# Hard-coded minimum reflects entries as of the time this guard was added;
+	# adding new excludes/prune entries is fine — this only fails if entries
+	# are silently lost (regex breakage, format change, etc.).
+	local sync_count prune_count
+	sync_count=$(echo "$sync_excludes" | wc -l)
+	prune_count=$(echo "$prune_entries" | wc -l)
+	[ "$sync_count" -ge 20 ]
+	[ "$prune_count" -ge 20 ]
+}
+
+@test "parity: engram conditional entry matches between cmd_sync and ensure_synced" {
+	local src="$DRYDOCK_HOME/lib/commands.sh"
+
+	# Scope each extraction to its own function body, consistent with the
+	# main parity test above.
+	local cmd_sync_body ensure_synced_body
+	cmd_sync_body=$(sed -n '/^cmd_sync()/,/^}/p' "$src")
+	ensure_synced_body=$(sed -n '/^ensure_synced()/,/^}/p' "$src")
+
+	# Extract the bare path from cmd_sync's _engram_exclude assignment.
+	# Matches: _engram_exclude="--exclude=mcp/engram.json"
+	local sync_engram_path
+	sync_engram_path=$(echo "$cmd_sync_body" \
+		| grep -oP '(?<=--exclude=)mcp/engram\.json' \
+		| head -1)
+
+	# Extract the bare path from ensure_synced's engram_prune construction.
+	# Matches: engram_prune=(-o -path '*/mcp/engram.json')
+	local prune_engram_path
+	prune_engram_path=$(echo "$ensure_synced_body" \
+		| grep -oP '(?<=-path \x27\*/)mcp/engram\.json(?=\x27)' \
+		| head -1)
+
+	# Both must resolve to the same bare path.
+	[ -n "$sync_engram_path" ]
+	[ -n "$prune_engram_path" ]
+	[ "$sync_engram_path" = "$prune_engram_path" ]
+}
+
+# ── auto-sync: Phase 5 — call sites: cmd_run and cmd_shell ───────────────────
+
+@test "cmd_run: calls ensure_synced before export_compose_env" {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local seq_log="$BATS_TEST_TMPDIR/seq-run-$$"
+	ensure_synced() { echo "ensure_synced" >>"$seq_log"; }
+	export_compose_env() { echo "export_compose_env" >>"$seq_log"; }
+
+	local project_dir="$BATS_TEST_TMPDIR/proj-run-$$"
+	mkdir -p "$project_dir"
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-run-sync-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_run "$project_dir"
+
+	[ -f "$seq_log" ]
+	[ "$(head -1 "$seq_log")" = "ensure_synced" ]
+}
+
+@test "cmd_shell: calls ensure_synced before export_compose_env" {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local seq_log="$BATS_TEST_TMPDIR/seq-shell-$$"
+	ensure_synced() { echo "ensure_synced" >>"$seq_log"; }
+	export_compose_env() { echo "export_compose_env" >>"$seq_log"; }
+
+	local project_dir="$BATS_TEST_TMPDIR/proj-shell-$$"
+	mkdir -p "$project_dir"
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-shell-sync-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_shell "$project_dir"
+
+	[ -f "$seq_log" ]
+	[ "$(head -1 "$seq_log")" = "ensure_synced" ]
+}
+
+# ── auto-sync: Phase 4 — ensure_synced helper ────────────────────────────────
+# Helper: build fake-HOME tree suitable for ensure_synced mtime tests.
+# Creates HOST_CLAUDE, HOST_CLAUDE_JSON, and a minimal CONTAINER_CLAUDE.
+_setup_ensure_synced() {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-es-$$"
+	mkdir -p "$fakehome/.claude"
+	touch "$fakehome/.claude.json"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+}
+
+@test "ensure_synced: DRYDOCK_SKIP_AUTOSYNC=1 — cmd_sync NOT called even with stale marker" {
+	_setup_ensure_synced
+	# Stub engram_usable to avoid executing uname from /tmp (noexec on WSL2 host).
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-skip-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	# Create stale marker and a newer file in HOST_CLAUDE
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	export DRYDOCK_SKIP_AUTOSYNC=1
+	ensure_synced
+	unset DRYDOCK_SKIP_AUTOSYNC
+
+	[ ! -f "$sentinel" ]
+}
+
+@test "ensure_synced: absent marker — cmd_sync called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-absent-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	# Ensure marker does not exist
+	rm -f "$CONTAINER_CLAUDE/.drydock-last-sync"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: stale dir — newer file in HOST_CLAUDE triggers cmd_sync" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-stale-dir-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: stale JSON — newer HOST_CLAUDE_JSON triggers cmd_sync" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-stale-json-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# HOST_CLAUDE has no newer files, but HOST_CLAUDE_JSON is newer
+	touch -d '@2000000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: fresh-pruned (sessions) — only sessions file newer, cmd_sync NOT called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-sessions-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# Only a sessions file is newer — should be pruned (AS-2: state-directory exclusion)
+	mkdir -p "$HOST_CLAUDE/sessions"
+	touch -d '@2000000000' "$HOST_CLAUDE/sessions/some-session.jsonl"
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ ! -f "$sentinel" ]
+}
+
+@test "ensure_synced: fresh-pruned (cache) — only cache file newer, cmd_sync NOT called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-fresh-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# Only a cache file is newer — should be pruned
+	mkdir -p "$HOST_CLAUDE/cache"
+	touch -d '@2000000000' "$HOST_CLAUDE/cache/x"
+	# HOST_CLAUDE_JSON older than marker
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ ! -f "$sentinel" ]
+}
+
+@test "ensure_synced: fresh-pruned (mcp/engram.json) — engram_usable=false, engram.json newer, cmd_sync NOT called" {
+	_setup_ensure_synced
+	# Stub engram_usable to return false (no engram) → mcp/engram.json gets pruned.
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-engram-excl-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# mcp/engram.json is newer but should be pruned when engram not usable
+	mkdir -p "$HOST_CLAUDE/mcp"
+	touch -d '@2000000000' "$HOST_CLAUDE/mcp/engram.json"
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ ! -f "$sentinel" ]
+}
+
+@test "ensure_synced: stale (mcp/engram.json) — engram_usable=true, engram.json newer, cmd_sync IS called" {
+	_setup_ensure_synced
+	# Stub engram_usable to return true (engram active) → mcp/engram.json NOT pruned.
+	engram_usable() { return 0; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-engram-incl-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# mcp/engram.json is newer; when engram is usable, it should NOT be pruned
+	mkdir -p "$HOST_CLAUDE/mcp"
+	touch -d '@2000000000' "$HOST_CLAUDE/mcp/engram.json"
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+# ── ensure_synced: non-fatal cmd_sync failure (FIX 3) ────────────────────────
+
+@test "ensure_synced: cmd_sync fails — ensure_synced returns 0 (non-fatal)" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	# cmd_sync always fails.
+	cmd_sync() { return 1; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	run ensure_synced
+	[ "$status" -eq 0 ]
+}
+
+@test "ensure_synced: absent marker + cmd_sync fails — ensure_synced returns 0 (non-fatal)" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	# cmd_sync always fails.
+	cmd_sync() { return 1; }
+
+	rm -f "$CONTAINER_CLAUDE/.drydock-last-sync"
+
+	run ensure_synced
+	[ "$status" -eq 0 ]
+}
+
+# ── ensure_synced: absent HOST_CLAUDE_JSON (FIX 4) ───────────────────────────
+
+@test "ensure_synced: HOST_CLAUDE_JSON absent — newer file in HOST_CLAUDE still triggers cmd_sync" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-es-fix4-$$"
+	mkdir -p "$fakehome/.claude"
+	# Intentionally NO .claude.json — HOST_CLAUDE_JSON will not exist.
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	engram_usable() { return 1; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-no-json-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	# HOST_CLAUDE_JSON does not exist — find must not fail, sync must still trigger.
+	[ ! -f "$HOST_CLAUDE_JSON" ]
+
+	# Call directly (not via `run`): ensure_synced is not expected to exit non-zero,
+	# and we need the sentinel check to reflect the function's actual behavior rather
+	# than an exit-code wrapper.  The probe_paths guard prevents find from being
+	# called with a missing path at all, which is the cleanest defense regardless
+	# of grep's exit-code masking behavior.
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+# ── ensure_synced: find exits non-zero but prints a match (decoupling) ───────
+
+@test "ensure_synced: find exits non-zero but prints a match — cmd_sync still called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-find-nonzero-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+
+	# Stub find: print a path (simulating a real match) then exit 1
+	# (simulating a permission error encountered after the match was printed).
+	# The old | grep -q . pipeline under pipefail would propagate find's exit 1
+	# and make the if-condition false, silently skipping the sync.
+	# The new captured-output approach ignores find's exit code, so cmd_sync
+	# must still be called whenever find printed anything.
+	find() { printf '%s/hooks/test.sh\n' "$HOST_CLAUDE"; return 1; }
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: find exits non-zero and prints nothing — cmd_sync NOT called, warn emitted" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-find-fail-noout-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+
+	# Stub find: print nothing and exit non-zero (total probe failure —
+	# e.g. HOST_CLAUDE itself is unreadable so traversal cannot even start).
+	# cmd_sync must NOT be called (no match was found), but a warn must be
+	# emitted so the skipped sync is visible to the user.
+	find() { return 1; }
+
+	run ensure_synced
+
+	[ ! -f "$sentinel" ]
+	[[ "$output" == *"staleness probe failed"* ]]
+}
+
+# ── cmd_setup: .credentials.json exclusion (FIX 1) ──────────────────────────
+
+@test "cmd_setup: .credentials.json absent from container copy after setup" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	# Plant .credentials.json in source ~/.claude/ to verify it gets removed.
+	printf '{"token":"secret-oauth-token"}\n' >"$fakehome/.claude/.credentials.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Ensure fresh setup (no pre-existing container dir).
+	rm -rf "$CONTAINER_CLAUDE"
+	rm -f "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_setup
+	[ "$status" -eq 0 ]
+	[ ! -f "$CONTAINER_CLAUDE/.credentials.json" ]
+}
+
+# ── auto-sync: Phase 3 — marker in cmd_setup ─────────────────────────────────
+
+@test "cmd_setup: creates .drydock-last-sync marker after successful setup" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Ensure CONTAINER_CLAUDE does not exist so cmd_setup creates it.
+	rm -rf "$CONTAINER_CLAUDE"
+	rm -f "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_setup
+	[ "$status" -eq 0 ]
+	[ -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+}
+
+# ── auto-sync: Phase 2 — rsync excludes + marker in cmd_sync ─────────────────
+
+@test "cmd_sync: rsync args include --exclude='.credentials.json'" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-excl-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--exclude=.credentials.json"* ]]
+}
+
+@test "cmd_sync: rsync args include --exclude=themes/" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-excl-themes-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--exclude=themes/"* ]]
+}
+
+@test "cmd_sync: rsync args include --exclude=.drydock-last-sync" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-excl-marker-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--exclude=.drydock-last-sync"* ]]
+}
+
+@test "cmd_sync: marker .drydock-last-sync created after successful sync" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-marker-ok-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	[ -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+}
+
+@test "cmd_sync: marker .drydock-last-sync NOT created when rsync fails" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-marker-fail-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export MOCK_DOCKER_EXIT=1
+
+	run cmd_sync
+	[ "$status" -ne 0 ]
+	[ ! -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+	unset MOCK_DOCKER_EXIT
+}
+
+# ── auto-sync: Phase 1 — DRYDOCK_SKIP_AUTOSYNC seam (lib/paths.sh) ──────────
+
+@test "paths.sh: DRYDOCK_SKIP_AUTOSYNC defaults to '0' when unset" {
+	unset DRYDOCK_SKIP_AUTOSYNC
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	[ "$DRYDOCK_SKIP_AUTOSYNC" = "0" ]
 }
 
 # ── cmd_doctor: managed-settings policy line ─────────────────────────────────

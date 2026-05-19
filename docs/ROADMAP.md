@@ -30,7 +30,7 @@ file.
 |------|-------|-------|--------|
 | [link-sibling-projects](#link-sibling-projects) | v0.2.0 | [#13][i13] | Planned |
 | [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Done |
-| [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Planned |
+| [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Done |
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Done |
 | [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Done |
 | [destructive-command-guardrails](#destructive-command-guardrails) | v0.2.0 | [#30][i30] | Done |
@@ -117,6 +117,8 @@ byte-identical.
 **Status.** Done — shipped in v0.2.0 (issue #14 closed).
 
 ### auto-sync
+
+**Status.** Done — shipped in v0.2.0 (issue #15 closed).
 
 **Problem.** INV-2 splits host `~/.claude/` from the container's
 `~/.claude-container/`. Host-side config changes (statusline, hooks, skills, MCP

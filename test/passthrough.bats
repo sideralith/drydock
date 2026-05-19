@@ -19,6 +19,7 @@ _run_cmd_run() {
     ensure_prereqs()    { :; }
     ensure_runtime_dirs() { :; }
     ensure_image()      { :; }
+    ensure_synced()     { :; }
     export_compose_env() { :; }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     DOCKER=echo
@@ -35,6 +36,7 @@ _run_cmd_shell() {
     ensure_prereqs()    { :; }
     ensure_runtime_dirs() { :; }
     ensure_image()      { :; }
+    ensure_synced()     { :; }
     export_compose_env() { :; }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     DOCKER=echo
@@ -51,6 +53,7 @@ _run_main() {
     ensure_prereqs()    { :; }
     ensure_runtime_dirs() { :; }
     ensure_image()      { :; }
+    ensure_synced()     { :; }
     export_compose_env() { :; }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     DOCKER=echo

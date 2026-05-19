@@ -84,6 +84,9 @@ cmd_setup() {
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
 		note "Copiando $HOST_CLAUDE → $CONTAINER_CLAUDE (excluyendo session state)..."
 		cp -a "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
+		# Purge immediately — closes the credential window between cp -a and the
+		# deferred unconditional purge below (which covers the upgrade path).
+		rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 		for excluded in sessions projects file-history shell-snapshots paste-cache cache backups telemetry ide session-env downloads uploads plans tasks themes; do
 			rm -rf "${CONTAINER_CLAUDE:?}/$excluded"
 		done
@@ -93,6 +96,10 @@ cmd_setup() {
 	else
 		ok "$CONTAINER_CLAUDE ya existe ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	fi
+	# Purge any stale OAuth token unconditionally — covers both the fresh-init
+	# and the upgrade (already-exists) path.  Uses the fail-safe ${VAR:?} form
+	# consistent with the rm -rf calls above.
+	rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 
 	# ~/.claude.json — the OTHER config location Claude Code reads (project list,
 	# onboarding flags, MCP servers, OAuth account). Without a container-specific
@@ -124,6 +131,10 @@ cmd_setup() {
 		rm -f "${CONTAINER_CLAUDE:?}/mcp/engram.json"
 	fi
 
+	# Stamp last-sync marker so the first drydock run after setup is a no-op.
+	# touch precedes the "Done" note so the marker exists before the user is told
+	# setup succeeded (mirrors the ordering in cmd_sync: touch then ok "Sync done").
+	touch "${CONTAINER_CLAUDE:?}/.drydock-last-sync"
 	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
 }
 
@@ -214,8 +225,16 @@ cmd_sync() {
 		--exclude='scheduled_tasks.lock' \
 		--exclude='*.bak.pre-dockerized' \
 		--exclude='*.bak.pre-dockerized/' \
+		--exclude='.credentials.json' \
+		--exclude='themes/' \
+		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
-		/src/ /dst/
+		/src/ /dst/ || return $?
+	# Purge any stale OAuth token from the container.  rsync --exclude prevents
+	# the file from being COPIED on new syncs, but --delete never removes excluded
+	# files from the destination — so an explicit purge is required to clean up
+	# tokens that were copied by pre-exclusion versions of drydock.
+	rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 	# Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
 	# MCP filter: when engram is not usable, strip the engram MCP server entry
 	# so Claude Code in the container sees no startup error.
@@ -233,7 +252,81 @@ cmd_sync() {
 		fi
 		ok "$CONTAINER_CLAUDE_JSON refreshed from host"
 	fi
+	# Stamp last-sync marker AFTER both rsync and the JSON refresh succeed.
+	# Under set -euo pipefail an earlier touch would leave a falsely-fresh marker
+	# if the JSON step failed. ensure_synced reads this marker to detect freshness.
+	# NOTE: ensure_prereqs / ensure_image are also called by cmd_run / cmd_shell
+	# before delegating here — that double call is intentional (idempotent; see design).
+	touch "${CONTAINER_CLAUDE:?}/.drydock-last-sync"
 	ok "Sync done"
+}
+
+# ensure_synced — auto-sync gate for cmd_run / cmd_shell.
+# Evaluates staleness of the host ~/.claude/ config relative to the last-sync
+# marker.  Calls cmd_sync when stale; is silent on the fresh path.
+# Prune set mirrors cmd_sync's rsync --exclude list (including engram conditional).
+# Probe includes HOST_CLAUDE_JSON (sibling file, not under HOST_CLAUDE) because
+# drydock sync refreshes it and MCP server edits there are a primary motivator.
+ensure_synced() {
+	[ "$DRYDOCK_SKIP_AUTOSYNC" = "1" ] && return 0
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	if [ ! -f "$marker" ]; then
+		cmd_sync || warn "auto-sync failed — continuing without sync"
+		return 0
+	fi
+	# Engram-conditional prune entry: mirrors _engram_exclude in cmd_sync.
+	# mcp/engram.json is a file on both sides (find -path and rsync --exclude),
+	# no trailing slash either way — no asymmetry here.
+	local -a engram_prune=()
+	if ! engram_usable; then
+		engram_prune=(-o -path '*/mcp/engram.json')
+	fi
+	# Build probe-paths array: always include HOST_CLAUDE; include HOST_CLAUDE_JSON
+	# only when it exists — find emits an error on a missing path.  The guard
+	# keeps the probe clean and avoids a spurious non-zero exit from find.
+	local -a probe_paths=("$HOST_CLAUDE")
+	[ -f "$HOST_CLAUDE_JSON" ] && probe_paths+=("$HOST_CLAUDE_JSON")
+	# Find any non-state, non-excluded config file newer than the marker.
+	# Prune list is kept byte-for-byte aligned with cmd_sync rsync excludes.
+	# Directory entries omit the trailing /* so -prune skips the directory itself
+	# before descent, preventing find from walking all files inside large state
+	# dirs on every no-op invocation.
+	# Deliberate asymmetry: these directory entries use -path '*/sessions' etc.
+	# (no trailing slash → matches a file OR a directory of that name), while
+	# cmd_sync's rsync uses --exclude='sessions/' (trailing slash → directories
+	# only). Safe because Claude Code only ever creates these names as
+	# directories in ~/.claude/; a bare file so named is the sole divergence
+	# case and not a real scenario. -type d is omitted to keep the compound
+	# expression simple.
+	# -newer is on the PRINT branch (not the top-level) to avoid printing
+	# HOST_CLAUDE_JSON unconditionally when it is not newer than the marker.
+	# Output is captured into $hits; find's exit code is captured via find_rc.
+	# When find prints a match, its exit code is irrelevant — the non-empty $hits
+	# drives the sync regardless. When find prints nothing AND exits non-zero, the
+	# probe failed entirely (e.g. HOST_CLAUDE unreadable at traversal start) and
+	# we warn so the skipped sync is visible. When find prints nothing AND exits 0,
+	# the config is genuinely fresh — the happy-path silent no-op.
+	local hits find_rc=0
+	hits="$(find "${probe_paths[@]}" \
+		\( -path '*/sessions' -o -path '*/projects' \
+		-o -path '*/file-history' -o -path '*/shell-snapshots' \
+		-o -path '*/paste-cache' -o -path '*/cache' \
+		-o -path '*/backups' -o -path '*/telemetry' \
+		-o -path '*/plans' -o -path '*/tasks' \
+		-o -path '*/ide' -o -path '*/session-env' \
+		-o -path '*/downloads' -o -path '*/uploads' \
+		-o -path '*/themes' \
+		-o -name '.last-cleanup' -o -name 'scheduled_tasks.lock' \
+		-o -name '.credentials.json' -o -name '.drydock-last-sync' \
+		-o -name '*.bak.pre-dockerized' \
+		"${engram_prune[@]}" \) -prune \
+		-o -newer "$marker" -type f -print -quit 2>/dev/null)" || find_rc=$?
+	if [ -n "$hits" ]; then
+		note "auto-sync: host config changed — syncing into container..."
+		cmd_sync || warn "auto-sync failed — continuing without sync"
+	elif [ "$find_rc" -ne 0 ]; then
+		warn "auto-sync: staleness probe failed (find exited $find_rc) — skipping; run 'drydock sync' manually if host config changed"
+	fi
 }
 
 # is_container_running — return 0 iff the named container is currently running.
@@ -261,6 +354,7 @@ cmd_run() {
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
+	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
@@ -306,6 +400,7 @@ cmd_shell() {
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
+	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
