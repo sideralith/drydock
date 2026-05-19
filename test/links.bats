@@ -342,6 +342,21 @@ _links_setup() {
 	)
 }
 
+@test "cmd_link: R2-FIX-5 rejects custom target containing backslash" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		# Pass a target with a literal backslash in it
+		run cmd_link "$sibling_dir" '/mnt/path\with\backslash'
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"backslash"* ]] || [[ "$output" == *"character"* ]] || [[ "$output" == *'\'* ]]
+	)
+}
+
 # ── FIX #2: custom target robust validation ───────────────────────────────────
 
 @test "cmd_link: FIX-2 rejects relative custom target (not absolute path)" {

@@ -567,6 +567,28 @@ _links_list_file() {
 	printf '%s/.config/drydock/links/%s.list\n' "$HOME" "$(_current_project_name)"
 }
 
+# _check_path_metachar — reject a path string that would corrupt the
+# pipe-delimited list file, break the Docker Compose volume spec, or break YAML.
+# Args: <path> <label>   (label is used verbatim in the error message)
+_check_path_metachar() {
+	local _p="$1" _label="$2"
+	if [[ "$_p" == *'|'* ]]; then
+		err "rejected: $_label contains '|' which would corrupt the link list file"
+	fi
+	if [[ "$_p" == *':'* ]]; then
+		err "rejected: $_label contains ':' which would break the Docker Compose volume spec"
+	fi
+	if [[ "$_p" == *'"'* ]]; then
+		err "rejected: $_label contains '\"' which would break YAML formatting"
+	fi
+	if [[ "$_p" == *$'\\'* ]]; then
+		err "rejected: $_label contains a backslash which would produce an invalid escape in the YAML volume string"
+	fi
+	if [[ "$_p" =~ [[:cntrl:]] ]]; then
+		err "rejected: $_label contains a control character (including newline)"
+	fi
+}
+
 # ── cmd_link ──────────────────────────────────────────────────────────────────
 
 # cmd_link [--rw] <host-path> [container-target]
@@ -614,21 +636,6 @@ cmd_link() {
 	# pipe-delimited list file, break the Docker Compose volume string, or
 	# break YAML. Applied to canonical (already realpath-resolved) and to
 	# target_arg (user-supplied, validated before use).
-	_check_path_metachar() {
-		local _p="$1" _label="$2"
-		if [[ "$_p" == *'|'* ]]; then
-			err "rejected: $_label contains '|' which would corrupt the link list file"
-		fi
-		if [[ "$_p" == *':'* ]]; then
-			err "rejected: $_label contains ':' which would break the Docker Compose volume spec"
-		fi
-		if [[ "$_p" == *'"'* ]]; then
-			err "rejected: $_label contains '\"' which would break YAML formatting"
-		fi
-		if [[ "$_p" =~ [[:cntrl:]] ]]; then
-			err "rejected: $_label contains a control character (including newline)"
-		fi
-	}
 	_check_path_metachar "$canonical" "host path '$canonical'"
 	[ -z "$target_arg" ] || _check_path_metachar "$target_arg" "container target '$target_arg'"
 
