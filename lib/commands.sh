@@ -247,13 +247,13 @@ cmd_sync() {
 		fi
 		ok "$CONTAINER_CLAUDE_JSON refreshed from host"
 	fi
-	ok "Sync done"
 	# Stamp last-sync marker AFTER both rsync and the JSON refresh succeed.
 	# Under set -euo pipefail an earlier touch would leave a falsely-fresh marker
 	# if the JSON step failed. ensure_synced reads this marker to detect freshness.
 	# NOTE: ensure_prereqs / ensure_image are also called by cmd_run / cmd_shell
 	# before delegating here — that double call is intentional (idempotent; see design).
 	touch "$CONTAINER_CLAUDE/.drydock-last-sync"
+	ok "Sync done"
 }
 
 # ensure_synced — auto-sync gate for cmd_run / cmd_shell.
