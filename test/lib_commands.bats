@@ -1320,9 +1320,11 @@ _setup_ensure_synced() {
 	# HOST_CLAUDE_JSON does not exist — find must not fail, sync must still trigger.
 	[ ! -f "$HOST_CLAUDE_JSON" ]
 
-	# Call directly (not via `run`) so set -euo pipefail is active — this is the
-	# failure mode: under pipefail, find failing on the missing path causes the
-	# condition to be false and cmd_sync is skipped.
+	# Call directly (not via `run`): ensure_synced is not expected to exit non-zero,
+	# and we need the sentinel check to reflect the function's actual behavior rather
+	# than an exit-code wrapper.  The probe_paths guard prevents find from being
+	# called with a missing path at all, which is the cleanest defense regardless
+	# of grep's exit-code masking behavior.
 	ensure_synced
 
 	[ -f "$sentinel" ]
