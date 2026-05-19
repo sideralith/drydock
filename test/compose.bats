@@ -214,23 +214,23 @@ STUB
 # for the expected variable interpolation patterns).
 
 @test "docker-compose.yml: container_name uses DRYDOCK_DISCRIMINATOR in interpolation" {
-  # After PR 2, container_name must include ${DRYDOCK_DISCRIMINATOR} so each
-  # session gets a unique container name.
-  grep -qE 'container_name:.*\$\{DRYDOCK_DISCRIMINATOR\}' \
+  # After PR 2, container_name must include ${DRYDOCK_DISCRIMINATOR} (with :? guard)
+  # so each session gets a unique container name and bare compose invocations fail loudly.
+  grep -qE 'container_name:.*\$\{DRYDOCK_DISCRIMINATOR:\?' \
     "$DRYDOCK_HOME/docker-compose.yml"
 }
 
 @test "docker-compose.yml: Claude dir mount uses DRYDOCK_SESSION_CLAUDE_DIR" {
   # The per-session Claude config dir mount source must reference
-  # ${DRYDOCK_SESSION_CLAUDE_DIR} instead of the old ${HOME}/.claude-container.
-  grep -qF '${DRYDOCK_SESSION_CLAUDE_DIR}' \
+  # ${DRYDOCK_SESSION_CLAUDE_DIR} (with :? guard) instead of the old ${HOME}/.claude-container.
+  grep -qF '${DRYDOCK_SESSION_CLAUDE_DIR:?' \
     "$DRYDOCK_HOME/docker-compose.yml"
 }
 
 @test "docker-compose.yml: Claude json mount uses DRYDOCK_SESSION_CLAUDE_JSON" {
   # The per-session Claude config json mount source must reference
-  # ${DRYDOCK_SESSION_CLAUDE_JSON} instead of the old ${HOME}/.claude-container.json.
-  grep -qF '${DRYDOCK_SESSION_CLAUDE_JSON}' \
+  # ${DRYDOCK_SESSION_CLAUDE_JSON} (with :? guard) instead of the old ${HOME}/.claude-container.json.
+  grep -qF '${DRYDOCK_SESSION_CLAUDE_JSON:?' \
     "$DRYDOCK_HOME/docker-compose.yml"
 }
 

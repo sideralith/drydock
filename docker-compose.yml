@@ -26,7 +26,7 @@ services:
         USER_GID: "${USER_GID:-1000}"
         HOST_DOCKER_GID: "${HOST_DOCKER_GID:-1001}"
     image: drydock:latest
-    container_name: "drydock-${PROJECT_NAME}-${DRYDOCK_DISCRIMINATOR}"
+    container_name: "drydock-${PROJECT_NAME}-${DRYDOCK_DISCRIMINATOR:?DRYDOCK_DISCRIMINATOR not set — invoke via the drydock CLI}"
 
     # Share host network namespace. Lets `curl http://localhost:PORT/...` work
     # identically to host-side, and lets the container reach sibling
@@ -63,8 +63,8 @@ services:
       # ~/.claude-container/ by export_compose_env) so concurrent sessions never
       # race on the same config files. DRYDOCK_SESSION_CLAUDE_DIR and
       # DRYDOCK_SESSION_CLAUDE_JSON are set per-session by export_compose_env.
-      - "${DRYDOCK_SESSION_CLAUDE_DIR}:${HOME}/.claude:rw"
-      - "${DRYDOCK_SESSION_CLAUDE_JSON}:${HOME}/.claude.json:rw"
+      - "${DRYDOCK_SESSION_CLAUDE_DIR:?DRYDOCK_SESSION_CLAUDE_DIR not set — invoke via the drydock CLI}:${HOME}/.claude:rw"
+      - "${DRYDOCK_SESSION_CLAUDE_JSON:?DRYDOCK_SESSION_CLAUDE_JSON not set — invoke via the drydock CLI}:${HOME}/.claude.json:rw"
 
       # ── Hooks: RO override (agent can't self-edit guardrails) ──────────────
       - "${HOME}/.claude/hooks:${HOME}/.claude/hooks:ro"

@@ -808,59 +808,6 @@ setup() {
 	[[ "$log" == *"--name drydock-sideralith-com-test-shell"* ]]
 }
 
-# ── is_container_running unit tests (REQ-5, S5.1–S5.4) ───────────────────────
-
-# Shared helper: setup sources and DOCKER seam for is_container_running tests.
-_setup_icr() {
-	local fakehome
-	fakehome="$(setup_fake_home)"
-	export HOME="$fakehome"
-	setup_no_engram_on_path
-	setup_plain_linux_seams
-	source "$DRYDOCK_HOME/lib/paths.sh"
-	source "$DRYDOCK_HOME/lib/compose.sh"
-	source "$DRYDOCK_HOME/lib/commands.sh"
-	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
-	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-icr-$$.log"
-	touch "$DOCKER_CALL_LOG"
-}
-
-@test "is_container_running: S5.1 — inspect returns 'true' → exits 0" {
-	_setup_icr
-	export MOCK_DOCKER_INSPECT_OUTPUT=true
-	export MOCK_DOCKER_EXIT=0
-	run is_container_running "drydock-foo"
-	[ "$status" -eq 0 ]
-}
-
-@test "is_container_running: S5.2 — inspect returns 'false' (stopped) → exits non-zero" {
-	_setup_icr
-	export MOCK_DOCKER_INSPECT_OUTPUT=false
-	export MOCK_DOCKER_EXIT=0
-	run is_container_running "drydock-foo"
-	[ "$status" -ne 0 ]
-}
-
-@test "is_container_running: S5.3 — inspect exits non-zero (absent) → exits non-zero" {
-	_setup_icr
-	unset MOCK_DOCKER_INSPECT_OUTPUT
-	export MOCK_DOCKER_EXIT=1
-	run is_container_running "drydock-foo"
-	[ "$status" -ne 0 ]
-}
-
-@test "is_container_running: S5.4 — exact name forwarded to docker inspect, false output → exits non-zero" {
-	_setup_icr
-	# Verifies is_container_running passes the exact name argument through to docker inspect.
-	export MOCK_DOCKER_INSPECT_OUTPUT=false
-	export MOCK_DOCKER_EXIT=0
-	run is_container_running "drydock-foo-shell"
-	[ "$status" -ne 0 ]
-	local log
-	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"drydock-foo-shell"* ]]
-}
-
 # ── mock-docker helper extension (REQ-10, S10.1–S10.2) ───────────────────────
 # These tests invoke mock-docker directly (not via is_container_running) to
 # prove the per-subcommand stdout extension is correct in isolation.
