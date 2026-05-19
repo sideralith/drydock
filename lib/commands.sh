@@ -329,16 +329,6 @@ ensure_synced() {
 	fi
 }
 
-# is_container_running — return 0 iff the named container is currently running.
-# Pure-ish: reads Docker state, no mutations. Exact-name match is by-design
-# (docker inspect matches exact name or ID, never a prefix) — REQ-5 S5.4.
-is_container_running() {
-	local name="${1:-}" state
-	[ -n "$name" ] || return 1
-	state="$("$DOCKER" inspect --format '{{.State.Running}}' "$name" 2>/dev/null)" || return 1
-	[ "$state" = "true" ]
-}
-
 # pre_flight_notice — non-blocking informational notice printed before starting
 # a new drydock session when other sessions for the same project are already
 # running. Counts existing drydock-<project>-* containers and prints one line
@@ -406,10 +396,11 @@ cmd_shell() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	# Per-session container name: DRYDOCK_SESSION_NAME is drydock-<project>-<disc>.
-	# Shell container appends -shell suffix for a distinct identity while sharing
-	# the same per-session config dir as a paired cmd_run session. Collision retry
-	# in export_compose_env guarantees uniqueness (R4: no existing session killed).
+	# Per-session container name: export_compose_env generated a fresh discriminator
+	# via collision retry, so this shell session gets its OWN unique discriminator
+	# and its OWN ~/.claude-container-<disc>/ dir — it does NOT share a config dir
+	# with any concurrent drydock run. The -shell suffix further distinguishes the
+	# container name so ps output is unambiguous (R4: no existing session killed).
 	local _name="${DRYDOCK_SESSION_NAME}-shell"
 	pre_flight_notice
 	if [ "${#passthrough[@]}" -gt 0 ]; then

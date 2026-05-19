@@ -310,8 +310,10 @@ export_compose_env() {
 		# (drydock-<proj>-<disc>-shell).  --format '{{.Names}}' gives one name
 		# per line so ^ and $ anchors are exact; no column-padding false-matches.
 		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
-			# Remove the stopped container for THIS project+disc if present.
-			# Silently skips if it belongs to another project or is still running.
+			# The collision check is project-agnostic (any drydock-*-<disc> match),
+			# but the rm targets only THIS project's container for that disc.
+			# If the collision belongs to a foreign project, the rm is a silent
+			# no-op (container name mismatch); the loop retries with a fresh disc.
 			"$DOCKER" rm "${_session_name}" >/dev/null 2>&1 || true
 			# Always retry with a fresh disc to guarantee uniqueness.
 			continue
@@ -450,7 +452,7 @@ export_compose_env() {
 #   3. If NEITHER name appears in `docker ps -a`, rm -rf the dir and its .json sibling.
 #   4. Returns 0 always — GC failures are non-fatal.
 #
-# Requires: PROJECT_NAME set in caller's env. Uses DOCKER seam.
+# Uses DOCKER seam.
 gc_orphan_session_dirs() {
 	local _disc _dir _json _ps_out
 	# Collect docker ps -a output once (avoid N docker calls for N dirs).
@@ -500,7 +502,7 @@ gc_orphan_session_dirs() {
 #   - The .drydock-last-sync staleness marker is NOT copied (rm it from the
 #     session dir if present — prototype owns it).
 #
-# Requires: PROJECT_NAME set in caller's env. Uses DOCKER seam.
+# Uses DOCKER seam.
 seed_session_config_dir() {
 	local disc="$1"
 	# Guard against a degenerate empty discriminator: rm -rf "$HOME/.claude-container-"
