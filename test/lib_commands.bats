@@ -986,6 +986,42 @@ _setup_cmd_conflict() {
 	[[ "$output" != *"already running"* ]]
 }
 
+# ── auto-sync: Phase 6 — parity guard: prune list == rsync exclude list ───────
+# Structural test: every path-based entry in ensure_synced's find prune set
+# must appear as a matching --exclude entry in cmd_sync, and vice versa.
+# This prevents silent drift between the two lists (a pruned-but-not-excluded
+# path causes unnecessary Docker cold-starts on the happy path).
+#
+# Approach: grep the source file for the two lists, normalize to a canonical
+# form, and compare. The engram conditional entry is verified separately.
+
+@test "parity: ensure_synced prune paths match cmd_sync rsync excludes" {
+	local src="$DRYDOCK_HOME/lib/commands.sh"
+
+	# Extract cmd_sync --exclude entries (drop engram conditional and *.bak.pre-dockerized/).
+	# Normalise: strip trailing slash so dir-entries match prune entries.
+	local sync_excludes
+	sync_excludes=$(grep -oP "(?<=--exclude=')[^']+" "$src" \
+		| grep -v "mcp/engram.json" \
+		| grep -v "bak.pre-dockerized/" \
+		| sed 's|/$||' \
+		| sort)
+
+	# Extract ensure_synced prune -path and -name entries (drop engram conditional).
+	# -path '*/X/*' → X   -name 'Y' → Y  (trailing /* stripped, no trailing slash)
+	local prune_entries
+	prune_entries=$({ grep -oP "(?<=-path '\*/)([^']+)(?=')" "$src" \
+		| grep -v "mcp/engram.json" \
+		| sed 's|/\*$||'; \
+		grep -oP "(?<=-name ')([^']+)(?=')" "$src" \
+		| grep -v "mcp/engram.json"; } | sort)
+
+	# Both lists must be non-empty and identical.
+	[ -n "$sync_excludes" ]
+	[ -n "$prune_entries" ]
+	[ "$sync_excludes" = "$prune_entries" ]
+}
+
 # ── auto-sync: Phase 5 — call sites: cmd_run and cmd_shell ───────────────────
 
 @test "cmd_run: calls ensure_synced before export_compose_env" {
