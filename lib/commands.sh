@@ -643,11 +643,18 @@ cmd_link() {
 	if [ "$canonical" = "/" ] || [[ "$HOME/" == "$canonical/"* ]]; then
 		err "rejected: '$canonical' is an ancestor of \$HOME"
 	fi
-	# Sensitive subdir check: prefix comparison on canonical
+	# Sensitive subdir check: prefix comparison on canonical.
+	# Covers drydock-managed dirs AND credential dirs (INV-1 defense-in-depth:
+	# FIX #6 adds ~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.docker).
 	if [[ "$canonical/" == "$HOME/.claude"* ]] \
 		|| [[ "$canonical/" == "$HOME/.engram"* ]] \
-		|| [[ "$canonical/" == "$HOME/.config/drydock"* ]]; then
-		err "rejected: '$canonical' is under a drydock-managed path"
+		|| [[ "$canonical/" == "$HOME/.config/drydock"* ]] \
+		|| [[ "$canonical/" == "$HOME/.ssh"* ]] \
+		|| [[ "$canonical/" == "$HOME/.aws"* ]] \
+		|| [[ "$canonical/" == "$HOME/.gnupg"* ]] \
+		|| [[ "$canonical/" == "$HOME/.kube"* ]] \
+		|| [[ "$canonical/" == "$HOME/.docker"* ]]; then
+		err "rejected: '$canonical' is under a protected path (credentials or drydock state)"
 	fi
 
 	# Reject the project's own directory

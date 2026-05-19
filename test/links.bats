@@ -216,6 +216,84 @@ _links_setup() {
 	)
 }
 
+# ── FIX #6: credential subdir host-source guard ──────────────────────────────
+
+@test "cmd_link: FIX-6 rejects \$HOME/.ssh (INV-1 credential guard)" {
+	_links_setup
+	local ssh_dir="$FAKE_HOME/.ssh"
+	mkdir -p "$ssh_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$ssh_dir"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-6 rejects \$HOME/.aws (INV-1 credential guard)" {
+	_links_setup
+	local aws_dir="$FAKE_HOME/.aws"
+	mkdir -p "$aws_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$aws_dir"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-6 rejects \$HOME/.gnupg (INV-1 credential guard)" {
+	_links_setup
+	local gnupg_dir="$FAKE_HOME/.gnupg"
+	mkdir -p "$gnupg_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$gnupg_dir"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-6 rejects \$HOME/.kube (INV-1 credential guard)" {
+	_links_setup
+	local kube_dir="$FAKE_HOME/.kube"
+	mkdir -p "$kube_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$kube_dir"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-6 rejects \$HOME/.docker (INV-1 credential guard)" {
+	_links_setup
+	local docker_cfg="$FAKE_HOME/.docker"
+	mkdir -p "$docker_cfg"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$docker_cfg"
+		[ "$status" -ne 0 ]
+	)
+}
+
+# ── SP-6 ancestor check triangulation (from sdd-verify gap) ──────────────────
+
+@test "cmd_link: SP-6 rejects intermediate ancestor of \$HOME (e.g. /home or parent dir)" {
+	_links_setup
+
+	# dirname of FAKE_HOME = BATS_TEST_TMPDIR which is an ancestor of FAKE_HOME
+	local ancestor_dir
+	ancestor_dir="$(dirname "$FAKE_HOME")"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$ancestor_dir"
+		[ "$status" -ne 0 ]
+	)
+}
+
 # ── FIX #5: metacharacter validation ─────────────────────────────────────────
 
 @test "cmd_link: FIX-5 rejects host path containing pipe character" {
