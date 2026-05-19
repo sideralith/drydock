@@ -850,3 +850,118 @@ MI
 	[ "$output" != "UNSET" ]
 	[ -n "$output" ]
 }
+
+# ── gc_orphan_session_dirs (concurrent-sessions, PR 1 Foundation) ─────────────
+# Uses a fake HOME (BATS_TEST_TMPDIR/gc-fakehome-*) and a per-test docker stub
+# written to BATS_TEST_TMPDIR so docker ps -a output is controllable.
+# PROJECT_NAME must be exported by the test (not via export_compose_env).
+
+# Helper: write a docker stub that emits $1 on stdout for any "ps" sub-command.
+_make_docker_ps_stub() {
+	local stub_file="$BATS_TEST_TMPDIR/docker-ps-stub-$$"
+	local ps_output="$1"
+	cat >"$stub_file" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "\${DOCKER_CALL_LOG:?}"
+if [ "\${1:-}" = "ps" ]; then
+	printf '%s\n' '$ps_output'
+fi
+exit 0
+STUB
+	chmod +x "$stub_file"
+	printf '%s' "$stub_file"
+}
+
+@test "gc_orphan_session_dirs: prunes orphan session dir when no container exists" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-orphan"
+	mkdir -p "$fake_home"
+	# Create an orphan session dir + sibling json
+	mkdir -p "$fake_home/.claude-container-dead1"
+	touch "$fake_home/.claude-container-dead1.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a returns empty (no matching container)
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ ! -d "$fake_home/.claude-container-dead1" ]
+}
+
+@test "gc_orphan_session_dirs: prunes sibling .json alongside orphan dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-json"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-dead2"
+	touch "$fake_home/.claude-container-dead2.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ ! -f "$fake_home/.claude-container-dead2.json" ]
+}
+
+@test "gc_orphan_session_dirs: does NOT prune prototype ~/.claude-container/ (no discriminator suffix)" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-proto"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container" ]
+}
+
+@test "gc_orphan_session_dirs: does NOT prune dir when run container is live" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-live-run"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-a1b2"
+	touch "$fake_home/.claude-container-a1b2.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a shows the run container as live
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-a1b2")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-a1b2" ]
+}
+
+@test "gc_orphan_session_dirs: does NOT prune dir when shell container is live" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-live-shell"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-c3d4"
+	touch "$fake_home/.claude-container-c3d4.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a shows the shell container as live
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-c3d4-shell")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-c3d4" ]
+}
+
+@test "gc_orphan_session_dirs: is idempotent — second call on clean state is a no-op" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-idempotent"
+	mkdir -p "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	# First call on empty HOME — no dirs to prune
+	gc_orphan_session_dirs
+	# Second call — still no error
+	gc_orphan_session_dirs
+	# No .claude-container-* dirs appeared
+	local count
+	count=0
+	for d in "$fake_home"/.claude-container-?*/; do
+		[ -d "$d" ] && count=$((count + 1))
+	done
+	[ "$count" -eq 0 ]
+}
