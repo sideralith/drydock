@@ -284,7 +284,51 @@ export_compose_env() {
 	USER_NAME="$(id -un)"
 	export HOST_DOCKER_GID
 	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
-	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
+
+	# ── Per-session identity: discriminator + session dirs ────────────────────
+	# Order: GC orphans → generate discriminator (collision retry) → seed dir.
+	# GC must run first so orphan dirs don't pollute the collision check.
+	gc_orphan_session_dirs
+
+	# Collision retry: generate a discriminator and verify it is free.
+	# A "free" disc means no drydock-*-<disc> or drydock-*-<disc>-shell
+	# container exists in docker ps -a. On a collision: remove the stopped
+	# container for the CURRENT project+disc (belt-and-suspenders cleanup), then
+	# retry with a fresh disc. R4 (no-kill): running containers are never stopped —
+	# a collision with a running container forces a retry with a new disc.
+	local _disc _session_name _ps_out _max_retries=5 _attempt=0
+	while true; do
+		_attempt=$((_attempt + 1))
+		if [ "$_attempt" -gt "$_max_retries" ]; then
+			err "drydock: could not find a free session discriminator after ${_max_retries} attempts — too many concurrent sessions?"
+		fi
+		_disc="$("$DRYDOCK_DISCRIMINATOR_FN")"
+		_session_name="drydock-${PROJECT_NAME}-${_disc}"
+		_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
+		# Check if any container (any project) already uses this disc — match
+		# both the run name (drydock-<proj>-<disc>) and the shell companion
+		# (drydock-<proj>-<disc>-shell).  --format '{{.Names}}' gives one name
+		# per line so ^ and $ anchors are exact; no column-padding false-matches.
+		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
+			# The collision check is project-agnostic (any drydock-*-<disc> match),
+			# but the rm targets only THIS project's container for that disc.
+			# If the collision belongs to a foreign project, the rm is a silent
+			# no-op (container name mismatch); the loop retries with a fresh disc.
+			"$DOCKER" rm "${_session_name}" >/dev/null 2>&1 || true
+			# Always retry with a fresh disc to guarantee uniqueness.
+			continue
+		fi
+		break
+	done
+
+	export DRYDOCK_DISCRIMINATOR="$_disc"
+	export DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-${_disc}"
+	export DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-${_disc}.json"
+	export DRYDOCK_SESSION_NAME="$_session_name"
+	export COMPOSE_PROJECT_NAME="$_session_name"
+
+	# Seed the per-session config dir from the freshly-synced prototype.
+	seed_session_config_dir "$_disc"
 
 	# ── drydock container identity markers (issue #8, Slice A) ───────────────
 	# Forwarded into the container via the environment: block so Claude can
@@ -408,11 +452,13 @@ export_compose_env() {
 #   3. If NEITHER name appears in `docker ps -a`, rm -rf the dir and its .json sibling.
 #   4. Returns 0 always — GC failures are non-fatal.
 #
-# Requires: PROJECT_NAME set in caller's env. Uses DOCKER seam.
+# Uses DOCKER seam.
 gc_orphan_session_dirs() {
-	local _disc _run_name _shell_name _dir _json _ps_out
+	local _disc _dir _json _ps_out
 	# Collect docker ps -a output once (avoid N docker calls for N dirs).
-	_ps_out="$("$DOCKER" ps -a 2>/dev/null)" || true
+	# --format '{{.Names}}' emits one container name per line so ^ and $ anchors
+	# are exact and column-padding cannot produce false matches.
+	_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
 
 	# Use a for-loop with a glob; protect against no-match (nullglob absent).
 	for _dir in "$HOME"/.claude-container-?*/; do
@@ -421,14 +467,15 @@ gc_orphan_session_dirs() {
 		# Extract disc: remove prefix "$HOME/.claude-container-" and trailing "/".
 		_disc="${_dir#"$HOME"/.claude-container-}"
 		_disc="${_disc%/}"
-		# Derive both container names.
-		_run_name="drydock-${PROJECT_NAME}-${_disc}"
-		_shell_name="drydock-${PROJECT_NAME}-${_disc}-shell"
-		# If either container exists in ps -a, protect this dir.
-		if printf '%s' "$_ps_out" | grep -qF "$_run_name"; then
-			continue
-		fi
-		if printf '%s' "$_ps_out" | grep -qF "$_shell_name"; then
+		# Validate discriminator shape: only prune dirs drydock itself could have
+		# created (4-char lowercase hex).  Dirs with any other suffix — e.g.
+		# ~/.claude-container-backup — are user-owned and must never be removed.
+		[[ "$_disc" =~ ^[0-9a-f]{4}$ ]] || continue
+		# Project-agnostic liveness check: protect the dir if ANY
+		# drydock-*-<disc> or drydock-*-<disc>-shell container exists,
+		# regardless of which project owns it.  Combined alternation so both
+		# the run name and the shell companion are matched in one pass.
+		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
 			continue
 		fi
 		# Orphan — prune dir and sibling .json.
@@ -455,23 +502,30 @@ gc_orphan_session_dirs() {
 #   - The .drydock-last-sync staleness marker is NOT copied (rm it from the
 #     session dir if present — prototype owns it).
 #
-# Requires: PROJECT_NAME set in caller's env. Uses DOCKER seam.
+# Uses DOCKER seam.
 seed_session_config_dir() {
 	local disc="$1"
+	# Guard against a degenerate empty discriminator: rm -rf "$HOME/.claude-container-"
+	# would target the wrong path.  Return early — nothing safe to seed.
+	[ -n "$disc" ] || return 0
 	local session_dir="$HOME/.claude-container-${disc}"
 	local session_json="$HOME/.claude-container-${disc}.json"
-	local run_name="drydock-${PROJECT_NAME}-${disc}"
-	local shell_name="drydock-${PROJECT_NAME}-${disc}-shell"
-
-	# Live-container guard: do not wipe a dir whose container is still running.
+	# Live-container guard: project-agnostic — match ANY drydock-*-<disc> or
+	# drydock-*-<disc>-shell container, regardless of which project owns it.
+	# This prevents a cross-project invocation from re-seeding a live session dir
+	# whose discriminator happens to match the current invocation's disc.
+	# --format '{{.Names}}' gives one name per line; ^ and $ are exact anchors.
 	local _ps_out
-	_ps_out="$("$DOCKER" ps -a 2>/dev/null)" || true
-	if printf '%s' "$_ps_out" | grep -qF "$run_name"; then
+	_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
+	if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${disc}(-shell)?$"; then
 		return 0
 	fi
-	if printf '%s' "$_ps_out" | grep -qF "$shell_name"; then
-		return 0
-	fi
+
+	# If the prototype does not exist yet, skip seeding.
+	# In production, ensure_runtime_dirs always creates it before export_compose_env
+	# is called. Tests that bypass ensure_runtime_dirs may land here without a
+	# prototype; returning early is safe (no dir to copy = no corruption).
+	[ -d "$HOME/.claude-container" ] || return 0
 
 	# Clean re-seed: remove stale session dir.
 	rm -rf "$session_dir"

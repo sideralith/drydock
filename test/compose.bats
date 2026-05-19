@@ -40,6 +40,27 @@ MOUNTS
   export MOUNTINFO_FILE=/dev/null
   # Hermetic SUBMOUNT_OVERLAY so compose_files doesn't write to /tmp.
   export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount.yml"
+
+  # Default DOCKER stub: returns empty for "ps" sub-commands so export_compose_env
+  # GC/collision-check/seed calls are safe for tests that don't stub DOCKER.
+  local _default_docker_stub="$BATS_TEST_TMPDIR/default-docker-stub-$$"
+  cat >"$_default_docker_stub" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then printf ''; fi
+exit 0
+STUB
+  chmod +x "$_default_docker_stub"
+  export DOCKER="$_default_docker_stub"
+
+  # Default discriminator stub: emit "dflt" for predictable test output.
+  _default_disc() { printf 'dflt'; }
+  export DRYDOCK_DISCRIMINATOR_FN=_default_disc
+
+  # Default fake HOME with prototype dirs for export_compose_env calls.
+  local _default_home="$BATS_TEST_TMPDIR/default-home-$$"
+  mkdir -p "$_default_home/.claude-container"
+  touch "$_default_home/.claude-container.json"
+  export HOME="$_default_home"
 }
 
 # ── compose_files tests ──────────────────────────────────────────────────────
@@ -82,10 +103,24 @@ MOUNTS
   [ -n "$HOST_DOCKER_GID" ]
 }
 
-@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix" {
+@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix and discriminator" {
+  _fixed_disc() { printf 'test'; }
+  export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+  # Stub DOCKER for collision-check and GC (empty ps = no containers).
+  local stub_file="$BATS_TEST_TMPDIR/docker-disc-stub-$$"
+  cat >"$stub_file" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then printf ''; fi
+exit 0
+STUB
+  chmod +x "$stub_file"
+  export DOCKER="$stub_file"
+  export HOME="$BATS_TEST_TMPDIR/compose-ecpn-home-$$"
+  mkdir -p "$HOME/.claude-container"
+  touch "$HOME/.claude-container.json"
   export_compose_env "$TEST_PROJECT_DIR"
   [ -n "$COMPOSE_PROJECT_NAME" ]
-  [[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject" ]]
+  [[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-test" ]]
 }
 
 @test "export_compose_env sets USER_NAME to id -un" {
@@ -123,15 +158,19 @@ MOUNTS
 }
 
 @test "export_compose_env: deploy key present — sets DRYDOCK_SSH_DEPLOY_KEY" {
-  HOME="$BATS_TEST_TMPDIR/fakehome"
+  HOME="$BATS_TEST_TMPDIR/fakehome-dk-$$"
   mkdir -p "$HOME/.config/drydock/keys"
+  mkdir -p "$HOME/.claude-container"
+  touch "$HOME/.claude-container.json"
   : > "$HOME/.config/drydock/keys/myproject_deploy"
   export_compose_env "$TEST_PROJECT_DIR"
   [ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/myproject_deploy" ]
 }
 
 @test "export_compose_env: no deploy key — DRYDOCK_SSH_DEPLOY_KEY unset" {
-  HOME="$BATS_TEST_TMPDIR/fakehome"
+  HOME="$BATS_TEST_TMPDIR/fakehome-nodk-$$"
+  mkdir -p "$HOME/.claude-container"
+  touch "$HOME/.claude-container.json"
   export_compose_env "$TEST_PROJECT_DIR"
   [ -z "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]
 }
@@ -166,5 +205,39 @@ MOUNTS
   # it set. (~/.config/gh is already mounted RW, so this widens nothing — the
   # agent could already `gh auth token`.)
   grep -qE '^[[:space:]]+- GITHUB_PERSONAL_ACCESS_TOKEN[[:space:]]*$' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+# ── docker-compose.yml parametrization (concurrent-sessions, PR 2 Wire-in) ───
+# Task 2.4: verify docker-compose.yml uses per-session env vars for container_name
+# and Claude config mounts. These tests check the YAML source directly (grepping
+# for the expected variable interpolation patterns).
+
+@test "docker-compose.yml: container_name uses DRYDOCK_DISCRIMINATOR in interpolation" {
+  # After PR 2, container_name must include ${DRYDOCK_DISCRIMINATOR} (with :? guard)
+  # so each session gets a unique container name and bare compose invocations fail loudly.
+  grep -qE 'container_name:.*\$\{DRYDOCK_DISCRIMINATOR:\?' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "docker-compose.yml: Claude dir mount uses DRYDOCK_SESSION_CLAUDE_DIR" {
+  # The per-session Claude config dir mount source must reference
+  # ${DRYDOCK_SESSION_CLAUDE_DIR} (with :? guard) instead of the old ${HOME}/.claude-container.
+  grep -qF '${DRYDOCK_SESSION_CLAUDE_DIR:?' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "docker-compose.yml: Claude json mount uses DRYDOCK_SESSION_CLAUDE_JSON" {
+  # The per-session Claude config json mount source must reference
+  # ${DRYDOCK_SESSION_CLAUDE_JSON} (with :? guard) instead of the old ${HOME}/.claude-container.json.
+  grep -qF '${DRYDOCK_SESSION_CLAUDE_JSON:?' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "docker-compose.yml: old hardcoded .claude-container mount is gone" {
+  # Ensure the old literal ${HOME}/.claude-container: mount is replaced.
+  # Note: .claude-container/ itself (as a string) should not appear in volume
+  # source positions — only the new ${DRYDOCK_SESSION_*} vars should.
+  ! grep -E '^\s+-\s+"\$\{HOME\}/\.claude-container:' \
     "$DRYDOCK_HOME/docker-compose.yml"
 }

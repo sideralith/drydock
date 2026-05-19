@@ -52,6 +52,9 @@ jobs:
           HOST_DOCKER_GID=1001 \
           PROJECT_DIR="$GITHUB_WORKSPACE" \
           PROJECT_NAME="drydock-smoke" \
+          DRYDOCK_DISCRIMINATOR="smoke" \
+          DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-smoke" \
+          DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-smoke.json" \
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.hardening.yml \
@@ -69,6 +72,9 @@ jobs:
           HOST_DOCKER_GID=1001 \
           PROJECT_DIR="$GITHUB_WORKSPACE" \
           PROJECT_NAME="drydock-smoke" \
+          DRYDOCK_DISCRIMINATOR="smoke" \
+          DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-smoke" \
+          DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-smoke.json" \
           docker compose \
             -f docker-compose.yml \
             config >/dev/null

@@ -26,7 +26,7 @@ services:
         USER_GID: "${USER_GID:-1000}"
         HOST_DOCKER_GID: "${HOST_DOCKER_GID:-1001}"
     image: drydock:latest
-    container_name: "drydock-${PROJECT_NAME}"
+    container_name: "drydock-${PROJECT_NAME}-${DRYDOCK_DISCRIMINATOR:?DRYDOCK_DISCRIMINATOR not set — invoke via the drydock CLI}"
 
     # Share host network namespace. Lets `curl http://localhost:PORT/...` work
     # identically to host-side, and lets the container reach sibling
@@ -55,13 +55,16 @@ services:
       # ── Project tree (same path inside as outside so Makefile resolves) ────
       - "${PROJECT_DIR}:${PROJECT_DIR}:rw"
 
-      # ── Claude state: container-specific ───────────────────────────────────
+      # ── Claude state: per-session isolated ────────────────────────────────
       # Two locations Claude Code reads config from:
       #   ~/.claude/      — directory: skills, plugins, settings.json, CLAUDE.md, hooks
       #   ~/.claude.json  — single file: project list, onboarding flags, MCP servers, OAuth
-      # Both get container-specific siblings so host + container don't race.
-      - "${HOME}/.claude-container:${HOME}/.claude:rw"
-      - "${HOME}/.claude-container.json:${HOME}/.claude.json:rw"
+      # Each session gets its own isolated sibling pair (seeded from the prototype
+      # ~/.claude-container/ by export_compose_env) so concurrent sessions never
+      # race on the same config files. DRYDOCK_SESSION_CLAUDE_DIR and
+      # DRYDOCK_SESSION_CLAUDE_JSON are set per-session by export_compose_env.
+      - "${DRYDOCK_SESSION_CLAUDE_DIR:?DRYDOCK_SESSION_CLAUDE_DIR not set — invoke via the drydock CLI}:${HOME}/.claude:rw"
+      - "${DRYDOCK_SESSION_CLAUDE_JSON:?DRYDOCK_SESSION_CLAUDE_JSON not set — invoke via the drydock CLI}:${HOME}/.claude.json:rw"
 
       # ── Hooks: RO override (agent can't self-edit guardrails) ──────────────
       - "${HOME}/.claude/hooks:${HOME}/.claude/hooks:ro"

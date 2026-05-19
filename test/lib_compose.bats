@@ -49,6 +49,30 @@ MOUNTS
 	# Hermetic seam: unrelated ssh/gpg/engram tests must not be perturbed by the
 	# host machine having real submounts under $TEST_PROJECT_DIR.
 	export MOUNTINFO_FILE=/dev/null
+
+	# Default DOCKER stub: returns empty for "ps" sub-commands so export_compose_env
+	# GC/collision-check/seed calls are safe for tests that don't stub DOCKER.
+	local _default_docker_stub="$BATS_TEST_TMPDIR/default-docker-stub-$$"
+	cat >"$_default_docker_stub" <<'STUB'
+#!/usr/bin/env bash
+printf '' >> "${DOCKER_CALL_LOG:-/dev/null}"
+if [ "${1:-}" = "ps" ]; then printf ''; fi
+exit 0
+STUB
+	chmod +x "$_default_docker_stub"
+	export DOCKER="$_default_docker_stub"
+
+	# Default discriminator stub: emit "dflt" so export_compose_env tests that
+	# don't care about the disc value get a stable, predictable result.
+	_default_disc() { printf 'dflt'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_default_disc
+
+	# Default fake HOME with prototype dirs for export_compose_env calls.
+	# Tests that need a specific HOME override it inline.
+	local _default_home="$BATS_TEST_TMPDIR/default-home-$$"
+	mkdir -p "$_default_home/.claude-container"
+	touch "$_default_home/.claude-container.json"
+	export HOME="$_default_home"
 }
 
 # ── compose_files / generate_submount_overlay ─────────────────────────────────
@@ -122,9 +146,15 @@ MOUNTS
 	[ -n "$HOST_DOCKER_GID" ]
 }
 
-@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix" {
+@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix and discriminator" {
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export HOME="$BATS_TEST_TMPDIR/ecpn-home-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	export_compose_env "$TEST_PROJECT_DIR"
-	[ "$COMPOSE_PROJECT_NAME" = "drydock-myproject" ]
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-test" ]]
 }
 
 @test "export_compose_env sets USER_NAME to id -un" {
@@ -198,22 +228,28 @@ MOUNTS
 }
 
 @test "export_compose_env: deploy key present — sets DRYDOCK_SSH_DEPLOY_KEY" {
-	HOME="$BATS_TEST_TMPDIR/fakehome"
+	HOME="$BATS_TEST_TMPDIR/fakehome-dk-$$"
 	mkdir -p "$HOME/.config/drydock/keys"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	: >"$HOME/.config/drydock/keys/myproject_deploy"
 	export_compose_env "$TEST_PROJECT_DIR"
 	[ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/myproject_deploy" ]
 }
 
 @test "export_compose_env: no deploy key — DRYDOCK_SSH_DEPLOY_KEY unset" {
-	HOME="$BATS_TEST_TMPDIR/fakehome"
+	HOME="$BATS_TEST_TMPDIR/fakehome-nodk-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	export_compose_env "$TEST_PROJECT_DIR"
 	[ -z "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]
 }
 
 @test "export_compose_env: signing dir with a key — sets DRYDOCK_GPG_SIGNINGKEY" {
 	command -v gpg >/dev/null 2>&1 || skip "gpg not installed"
-	HOME="$BATS_TEST_TMPDIR/fakehome"
+	HOME="$BATS_TEST_TMPDIR/fakehome-gpg-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	mkdir -p "$HOME/.config/drydock/signing"
 	chmod 700 "$HOME/.config/drydock/signing"
 	GNUPGHOME="$HOME/.config/drydock/signing" gpg --batch --pinentry-mode loopback --passphrase '' \
@@ -748,13 +784,19 @@ MI
 # S3.3 and S3.4 (cmd_run/cmd_shell DOCKER_CALL_LOG) live in lib_commands.bats
 # because those commands are only available after sourcing commands.sh.
 
-@test "export_compose_env: S3.1 — COMPOSE_PROJECT_NAME equals drydock-sideralith-com" {
+@test "export_compose_env: S3.1 — COMPOSE_PROJECT_NAME equals drydock-sideralith-com-<disc>" {
 	# Use a parent dir so basename is exactly "sideralith.com"
 	local parent_dir="$BATS_TEST_TMPDIR/s31-parent"
 	local dotted_dir="$parent_dir/sideralith.com"
 	mkdir -p "$dotted_dir"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export HOME="$BATS_TEST_TMPDIR/s31-home-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	export_compose_env "$dotted_dir"
-	[ "$COMPOSE_PROJECT_NAME" = "drydock-sideralith-com" ]
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-sideralith-com-test" ]]
 }
 
 @test "export_compose_env: S3.2 — deploy-key path uses sanitized PROJECT_NAME" {
@@ -875,9 +917,9 @@ STUB
 @test "gc_orphan_session_dirs: prunes orphan session dir when no container exists" {
 	local fake_home="$BATS_TEST_TMPDIR/gc-home-orphan"
 	mkdir -p "$fake_home"
-	# Create an orphan session dir + sibling json
-	mkdir -p "$fake_home/.claude-container-dead1"
-	touch "$fake_home/.claude-container-dead1.json"
+	# Create an orphan session dir + sibling json (4-char hex disc matches generator shape)
+	mkdir -p "$fake_home/.claude-container-d1d1"
+	touch "$fake_home/.claude-container-d1d1.json"
 	HOME="$fake_home"
 	export PROJECT_NAME="myproject"
 	# Docker stub: ps -a returns empty (no matching container)
@@ -885,21 +927,22 @@ STUB
 	stub="$(_make_docker_ps_stub "")"
 	export DOCKER="$stub"
 	gc_orphan_session_dirs
-	[ ! -d "$fake_home/.claude-container-dead1" ]
+	[ ! -d "$fake_home/.claude-container-d1d1" ]
 }
 
 @test "gc_orphan_session_dirs: prunes sibling .json alongside orphan dir" {
 	local fake_home="$BATS_TEST_TMPDIR/gc-home-json"
 	mkdir -p "$fake_home"
-	mkdir -p "$fake_home/.claude-container-dead2"
-	touch "$fake_home/.claude-container-dead2.json"
+	# 4-char hex disc so it passes the generator-shape validation guard.
+	mkdir -p "$fake_home/.claude-container-d2d2"
+	touch "$fake_home/.claude-container-d2d2.json"
 	HOME="$fake_home"
 	export PROJECT_NAME="myproject"
 	local stub
 	stub="$(_make_docker_ps_stub "")"
 	export DOCKER="$stub"
 	gc_orphan_session_dirs
-	[ ! -f "$fake_home/.claude-container-dead2.json" ]
+	[ ! -f "$fake_home/.claude-container-d2d2.json" ]
 }
 
 @test "gc_orphan_session_dirs: does NOT prune prototype ~/.claude-container/ (no discriminator suffix)" {
@@ -1083,4 +1126,284 @@ _make_prototype() {
 	export DOCKER="$stub"
 	seed_session_config_dir "babe"
 	[ -f "$fake_home/.claude-container-babe/shell.txt" ]
+}
+
+# ── Cross-project GC/seed hazard fix (concurrent-sessions, PR 2) ─────────────
+# A foreign-project live container (drydock-otherproject-<disc>) MUST protect
+# ~/.claude-container-<disc>/ from being pruned or re-seeded by the current
+# project's GC / seed passes. The liveness check must be project-agnostic:
+# match <disc> against ANY drydock-*-<disc> name in docker ps -a output.
+
+@test "gc_orphan_session_dirs: foreign-project live run container protects the disc dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-foreign-run"
+	mkdir -p "$fake_home"
+	# Session dir for disc "f00d" — belongs to projectA, but we run as projectB.
+	mkdir -p "$fake_home/.claude-container-f00d"
+	touch "$fake_home/.claude-container-f00d.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-f00d is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-f00d")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-f00d" ]
+}
+
+@test "gc_orphan_session_dirs: foreign-project live shell container protects the disc dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-foreign-shell"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-beef"
+	touch "$fake_home/.claude-container-beef.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-beef-shell is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-beef-shell")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-beef" ]
+}
+
+@test "seed_session_config_dir: foreign-project live run container prevents re-seed" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-foreign-run"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	mkdir -p "$fake_home/.claude-container-d00d"
+	printf 'foreign-content' >"$fake_home/.claude-container-d00d/live.txt"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-d00d is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-d00d")"
+	export DOCKER="$stub"
+	seed_session_config_dir "d00d"
+	# Dir must NOT have been wiped — foreign-project's live content intact.
+	[ -f "$fake_home/.claude-container-d00d/live.txt" ]
+}
+
+@test "seed_session_config_dir: foreign-project live shell container prevents re-seed" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-foreign-shell"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	mkdir -p "$fake_home/.claude-container-b00b"
+	printf 'foreign-shell-content' >"$fake_home/.claude-container-b00b/live.txt"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-b00b-shell is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-b00b-shell")"
+	export DOCKER="$stub"
+	seed_session_config_dir "b00b"
+	[ -f "$fake_home/.claude-container-b00b/live.txt" ]
+}
+
+# ── export_compose_env wiring tests (concurrent-sessions, PR 2 Wire-in) ───────
+# Tests for tasks 2.1–2.3: discriminator exports, collision retry/exhaustion,
+# GC-first ordering. All tests use DRYDOCK_DISCRIMINATOR_FN stub + fake HOME.
+
+# Helper: write a stateful docker stub that returns different ps output each call.
+# Args: counter_file response_1 response_2 ... (responses are space-separated names)
+# Each call to the stub increments the counter; returns response_N for call N.
+_make_docker_ps_seq_stub() {
+	local counter_file="$1"
+	shift
+	local stub_file="$BATS_TEST_TMPDIR/docker-seq-stub-$$"
+	# Encode responses as embedded shell array in the stub script.
+	local resp_code=""
+	local i=0
+	for r in "$@"; do
+		resp_code+="responses[$i]='$r'
+"
+		i=$((i + 1))
+	done
+	local total_responses=$i
+	cat >"$stub_file" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "\${DOCKER_CALL_LOG:-/dev/null}"
+if [ "\${1:-}" = "ps" ]; then
+	declare -a responses
+	${resp_code}total=${total_responses}
+	count=0
+	[ -f "${counter_file}" ] && count="\$(cat "${counter_file}")"
+	idx="\$count"
+	[ "\$idx" -ge "\$total" ] && idx="\$((total - 1))"
+	new_count="\$((count + 1))"
+	printf '%s\n' "\$new_count" > "${counter_file}"
+	printf '%s\n' "\${responses[\$idx]}"
+fi
+exit 0
+STUB
+	chmod +x "$stub_file"
+	printf '%s' "$stub_file"
+}
+
+# Helper: setup a fake home with prototype for wiring tests.
+_setup_wiring_home() {
+	local fake_home="$1"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+}
+
+@test "export_compose_env: exports DRYDOCK_DISCRIMINATOR to the pinned value" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-disc-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_DISCRIMINATOR" = "test" ]
+}
+
+@test "export_compose_env: exports DRYDOCK_SESSION_CLAUDE_DIR as HOME/.claude-container-<disc>" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-dir-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_SESSION_CLAUDE_DIR" = "$fake_home/.claude-container-test" ]
+}
+
+@test "export_compose_env: exports DRYDOCK_SESSION_CLAUDE_JSON as HOME/.claude-container-<disc>.json" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-json-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_SESSION_CLAUDE_JSON" = "$fake_home/.claude-container-test.json" ]
+}
+
+@test "export_compose_env: exports DRYDOCK_SESSION_NAME as drydock-<project>-<disc>" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-name-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_SESSION_NAME" = "drydock-myproject-test" ]
+}
+
+@test "export_compose_env: collision retry uses next disc when first two collide" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-retry-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Discriminator fn emits "aaaa" twice (both collide), then "bbbb" (free).
+	local call_count_file="$BATS_TEST_TMPDIR/disc-call-count-$$"
+	printf '0' >"$call_count_file"
+	_seq_disc() {
+		local n
+		n="$(cat "$call_count_file")"
+		printf '%s' "$((n + 1))" >"$call_count_file"
+		case "$n" in
+			0) printf 'aaaa' ;;
+			1) printf 'aaaa' ;;
+			*) printf 'bbbb' ;;
+		esac
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc
+	# Stateful stub sequence: gc_orphan_session_dirs calls docker ps -a once at
+	# entry (even with no orphan dirs to process); the collision loop then makes
+	# additional ps calls. Responses in order:
+	#   call 0 (gc pre-check):           "" — no orphans, gc does nothing
+	#   call 1 (collision check: "aaaa"): "drydock-myproject-aaaa" — collision!
+	#   call 2 (collision check: "aaaa"): "drydock-myproject-aaaa" — still collides
+	#   call 3 (collision check: "bbbb"): "" — bbbb is free, break
+	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-retry-$$"
+	printf '0' >"$counter_file"
+	local stub
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "" "drydock-myproject-aaaa" "drydock-myproject-aaaa" "")"
+	export DOCKER="$stub"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-retry-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# Final COMPOSE_PROJECT_NAME should use the non-colliding disc "bbbb".
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-bbbb" ]]
+}
+
+@test "export_compose_env: collision exhaustion exits non-zero after 5 retries" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-exhaust-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Always return the same disc (always collides).
+	_always_same_disc() { printf 'ffff'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_always_same_disc
+	# Docker stub always returns the container as live.
+	export DOCKER="$(_make_docker_ps_stub "drydock-myproject-ffff")"
+	run export_compose_env "$TEST_PROJECT_DIR"
+	[ "$status" -ne 0 ]
+}
+
+@test "export_compose_env: gc_orphan_session_dirs is called before discriminator generation" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-gc-order-$$"
+	_setup_wiring_home "$fake_home"
+	# Create an orphan session dir that GC should prune.
+	mkdir -p "$fake_home/.claude-container-dead"
+	touch "$fake_home/.claude-container-dead.json"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# GC should have pruned the orphan dir before the disc was assigned.
+	[ ! -d "$fake_home/.claude-container-dead" ]
+}
+
+# ── Concurrent-sessions PR 2 Slice 2 fixes ────────────────────────────────────
+
+# RED — fix #1 (CRITICAL): a live *-shell container with disc X forces collision
+# retry; the collision loop was asymmetric and only matched run containers.
+@test "export_compose_env: collision retry when live shell container holds disc" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-shell-retry-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Discriminator fn emits "a1b2" (collides with shell container), then "c3d4" (free).
+	local call_count_file="$BATS_TEST_TMPDIR/disc-shell-count-$$"
+	printf '0' >"$call_count_file"
+	_seq_disc_shell() {
+		local n
+		n="$(cat "$call_count_file")"
+		printf '%s' "$((n + 1))" >"$call_count_file"
+		case "$n" in
+			0) printf 'a1b2' ;;
+			*) printf 'c3d4' ;;
+		esac
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc_shell
+	# Stateful stub: gc pre-check (empty), then collision check sees -shell, then free.
+	#   call 0 (gc):             "" — no orphans
+	#   call 1 (check "a1b2"):   "drydock-myproject-a1b2-shell" — collision!
+	#   call 2 (check "c3d4"):   "" — c3d4 is free, break
+	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-shell-$$"
+	printf '0' >"$counter_file"
+	local stub
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "" "drydock-myproject-a1b2-shell" "")"
+	export DOCKER="$stub"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-shell-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# Must have retried — final disc is c3d4, not a1b2.
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-c3d4" ]]
+}
+
+# RED — fix #2 (WARNING): GC must NOT prune dirs whose discriminator suffix does
+# not match the generator's shape ^[0-9a-f]{4}$  (e.g. "backup").
+@test "gc_orphan_session_dirs: does NOT prune dir with non-hex discriminator suffix" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-backup"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-backup"
+	touch "$fake_home/.claude-container-backup.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Must still exist — "backup" is not a valid drydock discriminator.
+	[ -d "$fake_home/.claude-container-backup" ]
 }

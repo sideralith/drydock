@@ -731,7 +731,7 @@ setup() {
 # These tests live in lib_commands.bats because cmd_run/cmd_shell require
 # commands.sh to be sourced. (S3.1–S3.2 live in lib_compose.bats.)
 
-@test "cmd_run: S3.3 — dotted project dir → container name is drydock-sideralith-com" {
+@test "cmd_run: S3.3 — dotted project dir → container name is drydock-sideralith-com-<disc>" {
 	local fakehome
 	fakehome="$(setup_fake_home)"
 	export HOME="$fakehome"
@@ -745,8 +745,13 @@ setup() {
 	ensure_prereqs() { :; }
 	ensure_runtime_dirs() { :; }
 	ensure_image() { :; }
+	ensure_synced() { :; }
 	mkdir -p "$CONTAINER_CLAUDE"
 	touch "$CONTAINER_CLAUDE_JSON"
+
+	# Pin discriminator so container name is deterministic.
+	_fixed_disc_s33() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_s33
 
 	# Create a project dir whose basename is exactly "sideralith.com"
 	local parent_dir="$BATS_TEST_TMPDIR/s33-parent"
@@ -756,19 +761,17 @@ setup() {
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-s33.log"
 	touch "$DOCKER_CALL_LOG"
 
-	# cmd_run does exec so use a no-op replacement for docker compose run
-	# We capture the rm call and the compose call without actually exec-ing
-	# Override exec via a helper that records and returns instead of replacing process
+	# cmd_run does exec so use a no-op replacement for docker compose run.
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 
 	run cmd_run "$project_dir"
 
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"--name drydock-sideralith-com"* ]]
+	[[ "$log" == *"--name drydock-sideralith-com-test"* ]]
 }
 
-@test "cmd_shell: S3.4 — dotted project dir → container name is drydock-sideralith-com-shell" {
+@test "cmd_shell: S3.4 — dotted project dir → container name is drydock-sideralith-com-<disc>-shell" {
 	local fakehome
 	fakehome="$(setup_fake_home)"
 	export HOME="$fakehome"
@@ -782,8 +785,12 @@ setup() {
 	ensure_prereqs() { :; }
 	ensure_runtime_dirs() { :; }
 	ensure_image() { :; }
+	ensure_synced() { :; }
 	mkdir -p "$CONTAINER_CLAUDE"
 	touch "$CONTAINER_CLAUDE_JSON"
+
+	_fixed_disc_s34() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_s34
 
 	local parent_dir="$BATS_TEST_TMPDIR/s34-parent"
 	local project_dir="$parent_dir/sideralith.com"
@@ -798,60 +805,7 @@ setup() {
 
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"--name drydock-sideralith-com-shell"* ]]
-}
-
-# ── is_container_running unit tests (REQ-5, S5.1–S5.4) ───────────────────────
-
-# Shared helper: setup sources and DOCKER seam for is_container_running tests.
-_setup_icr() {
-	local fakehome
-	fakehome="$(setup_fake_home)"
-	export HOME="$fakehome"
-	setup_no_engram_on_path
-	setup_plain_linux_seams
-	source "$DRYDOCK_HOME/lib/paths.sh"
-	source "$DRYDOCK_HOME/lib/compose.sh"
-	source "$DRYDOCK_HOME/lib/commands.sh"
-	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
-	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-icr-$$.log"
-	touch "$DOCKER_CALL_LOG"
-}
-
-@test "is_container_running: S5.1 — inspect returns 'true' → exits 0" {
-	_setup_icr
-	export MOCK_DOCKER_INSPECT_OUTPUT=true
-	export MOCK_DOCKER_EXIT=0
-	run is_container_running "drydock-foo"
-	[ "$status" -eq 0 ]
-}
-
-@test "is_container_running: S5.2 — inspect returns 'false' (stopped) → exits non-zero" {
-	_setup_icr
-	export MOCK_DOCKER_INSPECT_OUTPUT=false
-	export MOCK_DOCKER_EXIT=0
-	run is_container_running "drydock-foo"
-	[ "$status" -ne 0 ]
-}
-
-@test "is_container_running: S5.3 — inspect exits non-zero (absent) → exits non-zero" {
-	_setup_icr
-	unset MOCK_DOCKER_INSPECT_OUTPUT
-	export MOCK_DOCKER_EXIT=1
-	run is_container_running "drydock-foo"
-	[ "$status" -ne 0 ]
-}
-
-@test "is_container_running: S5.4 — exact name forwarded to docker inspect, false output → exits non-zero" {
-	_setup_icr
-	# Verifies is_container_running passes the exact name argument through to docker inspect.
-	export MOCK_DOCKER_INSPECT_OUTPUT=false
-	export MOCK_DOCKER_EXIT=0
-	run is_container_running "drydock-foo-shell"
-	[ "$status" -ne 0 ]
-	local log
-	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"drydock-foo-shell"* ]]
+	[[ "$log" == *"--name drydock-sideralith-com-test-shell"* ]]
 }
 
 # ── mock-docker helper extension (REQ-10, S10.1–S10.2) ───────────────────────
@@ -878,9 +832,14 @@ _setup_icr() {
 	[ "$output" = "true" ]
 }
 
-# ── cmd_run running-container pre-check (REQ-6, S6.1–S6.2) ──────────────────
+# ── cmd_run / cmd_shell: concurrent-session contract (v0.2.0 Wire-in) ─────────
+# R4 (no-kill): drydock run and shell NEVER stop, kill, or reuse a running
+# container. Concurrent invocations each get a unique discriminator-suffixed
+# name from export_compose_env's collision retry. These tests verify the v0.2.0
+# behavior. S6.x–S9.x (v0.1.x "already running" guard) are retired because the
+# guard is replaced by the discriminator: every invocation gets its own name.
 
-_setup_cmd_conflict() {
+_setup_cmd_concurrent() {
 	local fakehome
 	fakehome="$(setup_fake_home)"
 	export HOME="$fakehome"
@@ -892,150 +851,50 @@ _setup_cmd_conflict() {
 	ensure_prereqs() { :; }
 	ensure_runtime_dirs() { :; }
 	ensure_image() { :; }
+	ensure_synced() { :; }
 	mkdir -p "$CONTAINER_CLAUDE"
 	touch "$CONTAINER_CLAUDE_JSON"
+	_fixed_disc_cc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_cc
 	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
-	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-conflict-$$.log"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-concurrent-$$.log"
 	touch "$DOCKER_CALL_LOG"
-	# Stub exec so we can run cmd_run/cmd_shell without replacing the process.
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 }
 
-@test "cmd_run: S6.1 — running container → diagnostic on stderr, no compose run, exits non-zero" {
-	_setup_cmd_conflict
+@test "cmd_run: concurrent invocation always proceeds — no 'already running' error" {
+	_setup_cmd_concurrent
+	# Even with MOCK_DOCKER_INSPECT_OUTPUT=true (container exists), cmd_run
+	# should NOT error — the discriminator ensures a unique name is used.
 	export MOCK_DOCKER_INSPECT_OUTPUT=true
 	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s61/foo"
+	local project_dir="$BATS_TEST_TMPDIR/cc-run/foo"
 	mkdir -p "$project_dir"
 	run cmd_run "$project_dir"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *"running"* ]]
-	local log
-	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" != *"compose"* ]] || [[ "$log" != *"run --rm"* ]]
-}
-
-@test "cmd_run: S6.2 — no running container → no diagnostic, compose run proceeds" {
-	_setup_cmd_conflict
-	export MOCK_DOCKER_INSPECT_OUTPUT=false
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s62/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
+	[ "$status" -eq 0 ]
 	[[ "$output" != *"already running"* ]]
-	local log
-	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"run --rm --name drydock-foo"* ]]
 }
 
-# ── cmd_shell running-container pre-check (REQ-7, S7.1–S7.2) ─────────────────
-
-@test "cmd_shell: S7.1 — running shell container → diagnostic on stderr, exits non-zero" {
-	_setup_cmd_conflict
+@test "cmd_shell: concurrent invocation always proceeds — no 'already running' error" {
+	_setup_cmd_concurrent
 	export MOCK_DOCKER_INSPECT_OUTPUT=true
 	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s71/foo"
-	mkdir -p "$project_dir"
-	run cmd_shell "$project_dir"
-	[ "$status" -ne 0 ]
-	[[ "$output" == *"running"* ]]
-}
-
-@test "cmd_shell: S7.2 — drydock-foo running but drydock-foo-shell absent → NO diagnostic, shell proceeds" {
-	_setup_cmd_conflict
-	# Set inspect to return 'false' (stopped/absent) — this simulates the shell container absent.
-	# The main container's running state is irrelevant since cmd_shell checks drydock-foo-shell.
-	export MOCK_DOCKER_INSPECT_OUTPUT=false
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s72/foo"
+	local project_dir="$BATS_TEST_TMPDIR/cc-shell/foo"
 	mkdir -p "$project_dir"
 	run cmd_shell "$project_dir"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"already running"* ]]
+}
+
+@test "cmd_run: compose run receives correct discriminator-suffixed --name" {
+	_setup_cmd_concurrent
+	export MOCK_DOCKER_EXIT=0
+	local project_dir="$BATS_TEST_TMPDIR/cc-name/foo"
+	mkdir -p "$project_dir"
+	run cmd_run "$project_dir"
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"--name drydock-foo-shell"* ]]
-}
-
-# ── diagnostic content (REQ-8, S8.1–S8.5) ────────────────────────────────────
-
-@test "cmd_run: S8.1 — conflict diagnostic contains literal container name" {
-	_setup_cmd_conflict
-	export MOCK_DOCKER_INSPECT_OUTPUT=true
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s81/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
-	[[ "$output" == *"drydock-foo"* ]]
-}
-
-@test "cmd_run: S8.2 — conflict diagnostic contains word 'running'" {
-	_setup_cmd_conflict
-	export MOCK_DOCKER_INSPECT_OUTPUT=true
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s82/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
-	[[ "$output" == *"running"* ]]
-}
-
-@test "cmd_run: S8.3 — conflict diagnostic contains exec command" {
-	_setup_cmd_conflict
-	export MOCK_DOCKER_INSPECT_OUTPUT=true
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s83/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
-	[[ "$output" == *"docker exec -it drydock-foo bash"* ]]
-}
-
-@test "cmd_run: S8.4 — conflict diagnostic contains stop command" {
-	_setup_cmd_conflict
-	export MOCK_DOCKER_INSPECT_OUTPUT=true
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s84/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
-	[[ "$output" == *"docker stop drydock-foo"* ]]
-}
-
-@test "cmd_run: S8.5 — conflict diagnostic contains collision-rename hint" {
-	_setup_cmd_conflict
-	export MOCK_DOCKER_INSPECT_OUTPUT=true
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s85/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
-	[[ "$output" == *"rename"* ]]
-}
-
-# ── regression guard: stopped containers still pre-cleaned (REQ-9, S9.1–S9.2) ─
-
-@test "cmd_run: S9.1 — stopped container → rm issued, compose run proceeds, no diagnostic" {
-	_setup_cmd_conflict
-	# stopped: inspect returns 'false', exit 0 → is_container_running returns non-zero
-	export MOCK_DOCKER_INSPECT_OUTPUT=false
-	export MOCK_DOCKER_EXIT=0
-	local project_dir="$BATS_TEST_TMPDIR/s91/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
-	[ "$status" -eq 0 ]
-	[[ "$output" != *"already running"* ]]
-	local log
-	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"rm drydock-foo"* ]]
-	[[ "$log" == *"run --rm --name drydock-foo"* ]]
-}
-
-@test "cmd_run: S9.2 — no container at all → proceeds normally, no diagnostic" {
-	_setup_cmd_conflict
-	unset MOCK_DOCKER_INSPECT_OUTPUT
-	export MOCK_DOCKER_EXIT=1
-	local project_dir="$BATS_TEST_TMPDIR/s92/foo"
-	mkdir -p "$project_dir"
-	run cmd_run "$project_dir"
-	[ "$status" -eq 0 ]
-	[[ "$output" != *"already running"* ]]
+	[[ "$log" == *"--name drydock-foo-test"* ]]
 }
 
 # ── auto-sync: Phase 6 — parity guard: prune list == rsync exclude list ───────
@@ -1716,3 +1575,178 @@ _setup_ensure_synced() {
 	rm -rf "$tmpdir"
 }
 
+# ── cmd_run / cmd_shell name tests (concurrent-sessions, PR 2 Wire-in) ────────
+# Task 2.6: verify cmd_run uses DRYDOCK_SESSION_NAME for --name, and cmd_shell
+# appends -shell suffix. No existing container is killed or stopped (R4).
+#
+# Helper: set up a hermetic env for cmd_run/cmd_shell tests with disc stub.
+# Sets CMD_NAME_TEST_PROJECT_DIR (global) rather than using $() to avoid the
+# "functions defined in subshell don't persist to parent" trap.
+_setup_cmd_name_test() {
+	local fakehome="$BATS_TEST_TMPDIR/cmd-name-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	# Stub ensure_* to prevent side effects.
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	ensure_synced() { :; }
+
+	# Pin the discriminator to "abcd" for predictable assertions.
+	_fixed_disc_name() { printf 'abcd'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_name
+
+	# DOCKER: returns empty for ps (no containers = no collisions).
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-name-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	# Set global var instead of returning via $() to preserve function defs.
+	CMD_NAME_TEST_PROJECT_DIR="$BATS_TEST_TMPDIR/cmd-name-proj-$$"
+	mkdir -p "$CMD_NAME_TEST_PROJECT_DIR"
+}
+
+@test "cmd_run: container --name uses DRYDOCK_SESSION_NAME (drydock-<proj>-<disc>)" {
+	_setup_cmd_name_test
+	# Override exec to capture the compose run args instead of replacing process.
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_run "$CMD_NAME_TEST_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# The --name arg must be drydock-<project>-abcd (discriminator suffix).
+	[[ "$log" == *"--name drydock-cmd-name-proj-"*"-abcd"* ]]
+}
+
+@test "cmd_shell: container --name uses DRYDOCK_SESSION_NAME with -shell suffix" {
+	_setup_cmd_name_test
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_shell "$CMD_NAME_TEST_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# The --name arg must be drydock-<project>-abcd-shell.
+	[[ "$log" == *"--name drydock-cmd-name-proj-"*"-abcd-shell"* ]]
+}
+
+@test "cmd_run: does NOT stop or kill an existing container (R4 no-kill)" {
+	_setup_cmd_name_test
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_run "$CMD_NAME_TEST_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# No "stop" or "kill" subcommand must appear in docker call log.
+	[[ "$log" != *" stop "* ]]
+	[[ "$log" != *" kill "* ]]
+}
+
+@test "cmd_shell: does NOT stop or kill an existing container (R4 no-kill)" {
+	_setup_cmd_name_test
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_shell "$CMD_NAME_TEST_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" != *" stop "* ]]
+	[[ "$log" != *" kill "* ]]
+}
+
+# ── integration smoke test (concurrent-sessions, PR 2 Wire-in — Task 2.8) ─────
+# Asserts end-to-end call order for cmd_run with all seams stubbed:
+# ensure_synced (skipped) → gc_orphan_session_dirs → discriminator → seed → pre_flight_notice → compose run
+# Also asserts --name argument and no stop/kill.
+
+@test "integration: cmd_run call order — gc → disc → seed → pre_flight_notice → compose run --name disc" {
+	local fakehome="$BATS_TEST_TMPDIR/integ-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	# DRYDOCK_SKIP_AUTOSYNC=1 skips the actual sync; or stub ensure_synced directly.
+	ensure_synced() { :; }
+
+	# Call-order log for tracking function invocations.
+	local call_order_log="$BATS_TEST_TMPDIR/call-order-$$.log"
+	touch "$call_order_log"
+
+	# Pin discriminator to "abcd" and track its call.
+	_fixed_disc_integ() {
+		printf 'gc-done disc-called seed-done\n' >> "$call_order_log"
+		printf 'abcd'
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_integ
+
+	# Wrap gc_orphan_session_dirs to log its call.
+	gc_orphan_session_dirs() {
+		printf 'gc-called\n' >> "$call_order_log"
+	}
+
+	# Wrap seed_session_config_dir to log its call.
+	seed_session_config_dir() {
+		printf 'seed-called\n' >> "$call_order_log"
+	}
+
+	# Wrap pre_flight_notice to log its call.
+	pre_flight_notice() {
+		printf 'preflight-called\n' >> "$call_order_log"
+	}
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-integ-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	local project_dir="$BATS_TEST_TMPDIR/integ-proj-$$"
+	mkdir -p "$project_dir"
+
+	# Capture exec call instead of replacing process.
+	exec() {
+		printf 'compose-run-called\n' >> "$call_order_log"
+		echo "$*" >> "$DOCKER_CALL_LOG"
+		return 0
+	}
+
+	run cmd_run "$project_dir"
+	[ "$status" -eq 0 ]
+
+	local order
+	order="$(cat "$call_order_log")"
+	local compose_log
+	compose_log="$(cat "$DOCKER_CALL_LOG")"
+
+	# Verify gc was called before disc/seed.
+	[[ "$order" == *"gc-called"* ]]
+	[[ "$order" == *"seed-called"* ]]
+	[[ "$order" == *"preflight-called"* ]]
+	[[ "$order" == *"compose-run-called"* ]]
+
+	# gc must appear before disc/seed in the log.
+	local gc_pos disc_pos seed_pos compose_pos
+	gc_pos=$(printf '%s' "$order" | grep -n "gc-called" | head -1 | cut -d: -f1)
+	disc_pos=$(printf '%s' "$order" | grep -n "gc-done disc-called" | head -1 | cut -d: -f1)
+	seed_pos=$(printf '%s' "$order" | grep -n "seed-called" | head -1 | cut -d: -f1)
+	compose_pos=$(printf '%s' "$order" | grep -n "compose-run-called" | head -1 | cut -d: -f1)
+	[ "$gc_pos" -lt "$disc_pos" ]
+	[ "$disc_pos" -lt "$seed_pos" ]
+	[ "$seed_pos" -lt "$compose_pos" ]
+
+	# compose run must receive --name with discriminator suffix.
+	[[ "$compose_log" == *"--name drydock-integ-proj-"*"-abcd"* ]]
+
+	# No stop or kill in docker calls.
+	[[ "$compose_log" != *" stop "* ]]
+	[[ "$compose_log" != *" kill "* ]]
+}
