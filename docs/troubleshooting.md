@@ -8,7 +8,8 @@ paths, mount detection, and GIDs.
 Claude Code reads config from TWO locations: the `~/.claude/` **directory**
 (skills, plugins, `settings.json`, `CLAUDE.md`, hooks) AND the `~/.claude.json`
 **file** (project list, onboarding flags, `mcpServers`, OAuth). drydock must
-mount both. If `~/.claude-container.json` doesn't exist on host, Claude Code
+mount both. If the `~/.claude-container.json` prototype doesn't exist on host,
+the per-session `~/.claude-container-<disc>.json` cannot be seeded, Claude Code
 inside the container can't find `~/.claude.json`, creates a fresh one on the
 container's ephemeral filesystem, and any config you do (onboarding, theme,
 hints) is lost when the container exits.
@@ -16,11 +17,13 @@ hints) is lost when the container exits.
 Fix:
 
 ```bash
-cp -a ~/.claude.json ~/.claude-container.json    # or: drydock setup
+cp -a ~/.claude.json ~/.claude-container.json    # repair the prototype; or: drydock setup
 ```
 
-`drydock setup` auto-creates it. `drydock sync` refreshes it from host. The
-compose file mounts `~/.claude-container.json:/home/rai/.claude.json:rw`.
+`drydock setup` auto-creates the prototype. `drydock sync` refreshes it from
+host. The compose file mounts a per-session `~/.claude-container-<disc>.json`
+(seeded from the `~/.claude-container.json` prototype) at
+`/home/rai/.claude.json:rw`.
 
 ## `docker exec` from inside the container fails with permission denied
 
