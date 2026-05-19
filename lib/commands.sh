@@ -708,15 +708,19 @@ cmd_unlink() {
 	local list_file
 	list_file="$(_links_list_file)"
 
-	if [ ! -f "$list_file" ] || ! grep -qF "${canonical}|" "$list_file"; then
+	# Existence check anchored to first field: $1 == canonical (awk -F'|').
+	# grep -F "${canonical}|" would match the literal string anywhere on the
+	# line, including inside the target column — silent deletion of the wrong
+	# entry. awk field-equality is exact.
+	if [ ! -f "$list_file" ] || ! awk -F'|' -v c="$canonical" '$1==c{f=1} END{exit !f}' "$list_file"; then
 		err "not linked: $canonical"
 	fi
 
-	# Remove the matching line (match on host column = first field).
-	# grep -v exits 1 when no output lines remain (set -e safe workaround).
+	# Remove lines whose first field equals canonical (anchored to host column).
+	# awk exits 0 even when no output lines remain — set -e safe.
 	local tmp_file
 	tmp_file="${list_file}.tmp$$"
-	grep -vF "${canonical}|" "$list_file" > "$tmp_file" || true
+	awk -F'|' -v c="$canonical" '$1!=c' "$list_file" > "$tmp_file"
 	mv "$tmp_file" "$list_file"
 	ok "unlinked: $canonical"
 }

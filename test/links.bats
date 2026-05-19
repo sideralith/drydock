@@ -305,6 +305,55 @@ _links_setup() {
 	)
 }
 
+# ── FIX #1: cmd_unlink anchored match ────────────────────────────────────────
+
+@test "cmd_unlink: FIX-1 does NOT delete a sibling whose target equals the unlinked host path" {
+	_links_setup
+
+	# Craft a list file where /host-b's container target matches /host-a's host path.
+	# With the unanchored grep -F "${canonical}|", unlinking /host-a would also
+	# delete /host-b because /host-a appears inside /host-b's target column.
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+
+	# /host-a is a real directory (realpath succeeds in cmd_unlink)
+	local host_a="$BATS_TEST_TMPDIR/host-a"
+	local host_b="$BATS_TEST_TMPDIR/host-b"
+	mkdir -p "$host_a" "$host_b"
+
+	# Write entries directly: host-b's target column IS host-a's path
+	printf '%s|%s|\n' "$host_a" "/workspace-siblings/host-a/" >> "$list_file"
+	printf '%s|%s|\n' "$host_b" "$host_a" >> "$list_file"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_unlink "$host_a"
+		[ "$status" -eq 0 ]
+	)
+
+	# host-b entry MUST still be present
+	grep -qF "$host_b" "$list_file"
+}
+
+@test "cmd_unlink: FIX-1 removing last entry leaves empty list file (set -e safe)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+		run cmd_unlink "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# File exists but is empty (or does not exist)
+	[ ! -f "$list_file" ] || [ ! -s "$list_file" ]
+}
+
 # ── T8-RED: cmd_links ─────────────────────────────────────────────────────────
 
 @test "cmd_links: SP-5 shows two entries — stdout contains host paths and targets" {
