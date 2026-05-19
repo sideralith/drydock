@@ -128,9 +128,11 @@ cmd_setup() {
 		rm -f "${CONTAINER_CLAUDE:?}/mcp/engram.json"
 	fi
 
-	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
 	# Stamp last-sync marker so the first drydock run after setup is a no-op.
-	touch "$CONTAINER_CLAUDE/.drydock-last-sync"
+	# touch precedes the "Done" note so the marker exists before the user is told
+	# setup succeeded (mirrors the ordering in cmd_sync: touch then ok "Sync done").
+	touch "${CONTAINER_CLAUDE:?}/.drydock-last-sync"
+	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
 }
 
 # Per-project setup. Creates `.claude/settings.json` stub in the target
@@ -252,7 +254,7 @@ cmd_sync() {
 	# if the JSON step failed. ensure_synced reads this marker to detect freshness.
 	# NOTE: ensure_prereqs / ensure_image are also called by cmd_run / cmd_shell
 	# before delegating here — that double call is intentional (idempotent; see design).
-	touch "$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch "${CONTAINER_CLAUDE:?}/.drydock-last-sync"
 	ok "Sync done"
 }
 

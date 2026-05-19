@@ -1447,7 +1447,7 @@ _setup_ensure_synced() {
 
 # ── auto-sync: Phase 3 — marker in cmd_setup ─────────────────────────────────
 
-@test "cmd_setup: creates .drydock-last-sync marker as final action" {
+@test "cmd_setup: creates .drydock-last-sync marker after successful setup" {
 	setup_no_engram_on_path
 	setup_plain_linux_seams
 
