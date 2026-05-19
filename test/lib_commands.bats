@@ -1254,6 +1254,33 @@ _setup_ensure_synced() {
 	[ -f "$sentinel" ]
 }
 
+# ── cmd_setup: .credentials.json exclusion (FIX 1) ──────────────────────────
+
+@test "cmd_setup: .credentials.json absent from container copy after setup" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	# Plant .credentials.json in source ~/.claude/ to verify it gets removed.
+	printf '{"token":"secret-oauth-token"}\n' >"$fakehome/.claude/.credentials.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Ensure fresh setup (no pre-existing container dir).
+	rm -rf "$CONTAINER_CLAUDE"
+	rm -f "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_setup
+	[ "$status" -eq 0 ]
+	[ ! -f "$CONTAINER_CLAUDE/.credentials.json" ]
+}
+
 # ── auto-sync: Phase 3 — marker in cmd_setup ─────────────────────────────────
 
 @test "cmd_setup: creates .drydock-last-sync marker as final action" {
