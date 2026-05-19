@@ -610,6 +610,28 @@ cmd_link() {
 	local canonical
 	canonical="$(realpath "$src" 2>/dev/null)" || err "path does not exist: $src"
 
+	# FIX #5: metacharacter validation — reject paths that would corrupt the
+	# pipe-delimited list file, break the Docker Compose volume string, or
+	# break YAML. Applied to canonical (already realpath-resolved) and to
+	# target_arg (user-supplied, validated before use).
+	_check_path_metachar() {
+		local _p="$1" _label="$2"
+		if [[ "$_p" == *'|'* ]]; then
+			err "rejected: $_label contains '|' which would corrupt the link list file"
+		fi
+		if [[ "$_p" == *':'* ]]; then
+			err "rejected: $_label contains ':' which would break the Docker Compose volume spec"
+		fi
+		if [[ "$_p" == *'"'* ]]; then
+			err "rejected: $_label contains '\"' which would break YAML formatting"
+		fi
+		if [[ "$_p" =~ [[:cntrl:]] ]]; then
+			err "rejected: $_label contains a control character (including newline)"
+		fi
+	}
+	_check_path_metachar "$canonical" "host path '$canonical'"
+	[ -z "$target_arg" ] || _check_path_metachar "$target_arg" "container target '$target_arg'"
+
 	# SP-6: host-source rejection guard
 	# Reject $HOME itself, ancestors of $HOME, and sensitive subdirs.
 	# Use [[ ]] for prefix matching; handle root "/" specially.

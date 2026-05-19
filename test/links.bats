@@ -216,6 +216,54 @@ _links_setup() {
 	)
 }
 
+# ── FIX #5: metacharacter validation ─────────────────────────────────────────
+
+@test "cmd_link: FIX-5 rejects host path containing pipe character" {
+	_links_setup
+
+	# Simulate a path that would contain | — create actual dir with that name
+	local bad_dir
+	bad_dir="$(mktemp -d "$BATS_TEST_TMPDIR/bad|dir.XXXXXX" 2>/dev/null)" || {
+		# If mktemp fails (filesystem doesn't support |), skip gracefully
+		skip "filesystem does not allow | in filenames"
+	}
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$bad_dir"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"|"* ]] || [[ "$output" == *"invalid"* ]] || [[ "$output" == *"character"* ]]
+	)
+}
+
+@test "cmd_link: FIX-5 rejects custom target containing colon" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/mnt/path:with:colons"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"invalid"* ]] || [[ "$output" == *"character"* ]] || [[ "$output" == *":"* ]]
+	)
+}
+
+@test "cmd_link: FIX-5 rejects custom target containing double-quote" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" '/mnt/"path"'
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"invalid"* ]] || [[ "$output" == *"character"* ]] || [[ "$output" == *'"'* ]]
+	)
+}
+
 # ── FIX #2: custom target robust validation ───────────────────────────────────
 
 @test "cmd_link: FIX-2 rejects relative custom target (not absolute path)" {
