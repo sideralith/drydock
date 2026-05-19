@@ -266,8 +266,8 @@ ensure_synced() {
 		engram_prune=(-o -path '*/mcp/engram.json')
 	fi
 	# Build probe-paths array: always include HOST_CLAUDE; include HOST_CLAUDE_JSON
-	# only when it exists — find errors on a missing path, which under pipefail
-	# would suppress the condition even when HOST_CLAUDE has newer files.
+	# only when it exists — find emits an error on a missing path.  The guard
+	# keeps the probe clean and avoids a spurious non-zero exit from find.
 	local -a probe_paths=("$HOST_CLAUDE")
 	[ -f "$HOST_CLAUDE_JSON" ] && probe_paths+=("$HOST_CLAUDE_JSON")
 	# Find any non-state, non-excluded config file newer than the marker.
@@ -277,7 +277,11 @@ ensure_synced() {
 	# dirs on every no-op invocation.
 	# -newer is on the PRINT branch (not the top-level) to avoid printing
 	# HOST_CLAUDE_JSON unconditionally when it is not newer than the marker.
-	if find "${probe_paths[@]}" \
+	# Output is captured into $hits; find's exit code is ignored (|| true) so
+	# that a permission error or other traversal failure cannot suppress a real
+	# staleness signal that find already printed before it errored.
+	local hits
+	hits="$(find "${probe_paths[@]}" \
 		\( -path '*/sessions' -o -path '*/projects' \
 		-o -path '*/file-history' -o -path '*/shell-snapshots' \
 		-o -path '*/paste-cache' -o -path '*/cache' \
@@ -290,7 +294,8 @@ ensure_synced() {
 		-o -name '.credentials.json' -o -name '.drydock-last-sync' \
 		-o -name '*.bak.pre-dockerized' \
 		"${engram_prune[@]}" \) -prune \
-		-o -newer "$marker" -type f -print -quit 2>/dev/null | grep -q .; then
+		-o -newer "$marker" -type f -print -quit 2>/dev/null)" || true
+	if [ -n "$hits" ]; then
 		note "auto-sync: host config changed — syncing into container..."
 		cmd_sync || warn "auto-sync failed — continuing without sync"
 	fi

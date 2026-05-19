@@ -1330,6 +1330,31 @@ _setup_ensure_synced() {
 	[ -f "$sentinel" ]
 }
 
+# ── ensure_synced: find exits non-zero but prints a match (decoupling) ───────
+
+@test "ensure_synced: find exits non-zero but prints a match — cmd_sync still called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-find-nonzero-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+
+	# Stub find: print a path (simulating a real match) then exit 1
+	# (simulating a permission error encountered after the match was printed).
+	# The old | grep -q . pipeline under pipefail would propagate find's exit 1
+	# and make the if-condition false, silently skipping the sync.
+	# The new captured-output approach ignores find's exit code, so cmd_sync
+	# must still be called whenever find printed anything.
+	find() { printf '%s/hooks/test.sh\n' "$HOST_CLAUDE"; return 1; }
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
 # ── cmd_setup: .credentials.json exclusion (FIX 1) ──────────────────────────
 
 @test "cmd_setup: .credentials.json absent from container copy after setup" {
