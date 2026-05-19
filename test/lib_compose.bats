@@ -1084,3 +1084,73 @@ _make_prototype() {
 	seed_session_config_dir "babe"
 	[ -f "$fake_home/.claude-container-babe/shell.txt" ]
 }
+
+# ── Cross-project GC/seed hazard fix (concurrent-sessions, PR 2) ─────────────
+# A foreign-project live container (drydock-otherproject-<disc>) MUST protect
+# ~/.claude-container-<disc>/ from being pruned or re-seeded by the current
+# project's GC / seed passes. The liveness check must be project-agnostic:
+# match <disc> against ANY drydock-*-<disc> name in docker ps -a output.
+
+@test "gc_orphan_session_dirs: foreign-project live run container protects the disc dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-foreign-run"
+	mkdir -p "$fake_home"
+	# Session dir for disc "f00d" — belongs to projectA, but we run as projectB.
+	mkdir -p "$fake_home/.claude-container-f00d"
+	touch "$fake_home/.claude-container-f00d.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-f00d is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-f00d")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-f00d" ]
+}
+
+@test "gc_orphan_session_dirs: foreign-project live shell container protects the disc dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-foreign-shell"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-beef"
+	touch "$fake_home/.claude-container-beef.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-beef-shell is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-beef-shell")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-beef" ]
+}
+
+@test "seed_session_config_dir: foreign-project live run container prevents re-seed" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-foreign-run"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	mkdir -p "$fake_home/.claude-container-d00d"
+	printf 'foreign-content' >"$fake_home/.claude-container-d00d/live.txt"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-d00d is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-d00d")"
+	export DOCKER="$stub"
+	seed_session_config_dir "d00d"
+	# Dir must NOT have been wiped — foreign-project's live content intact.
+	[ -f "$fake_home/.claude-container-d00d/live.txt" ]
+}
+
+@test "seed_session_config_dir: foreign-project live shell container prevents re-seed" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-foreign-shell"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	mkdir -p "$fake_home/.claude-container-b00b"
+	printf 'foreign-shell-content' >"$fake_home/.claude-container-b00b/live.txt"
+	HOME="$fake_home"
+	export PROJECT_NAME="projectb"
+	# Docker stub: drydock-projecta-b00b-shell is live (different project, same disc).
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-projecta-b00b-shell")"
+	export DOCKER="$stub"
+	seed_session_config_dir "b00b"
+	[ -f "$fake_home/.claude-container-b00b/live.txt" ]
+}
