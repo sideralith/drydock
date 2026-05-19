@@ -30,6 +30,10 @@ Debian 12 slim container that:
   race; and each concurrent session for the same project gets its own siblings
   too. If you use the optional [engram](docs/engram.md) memory server, it gets
   an isolated container DB too.
+- **Runs multiple sessions on one project** — launch `drydock` several times for
+  the same repo (a human session alongside an agent, or two parallel agents on
+  different branches); each gets its own container and isolated Claude config, so
+  concurrent sessions never clobber each other's settings or auth state.
 - **Bind-mounts the Docker socket (DooD)** — the containerized agent talks to
   your host Docker daemon, so it can bring your project's stack up, `docker exec`
   into a running service, and run its tests or migrations against the host
@@ -129,7 +133,7 @@ scripts, a justfile) runs the same way.
 
 | Command | What it does |
 |---|---|
-| `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed |
+| `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed — run it again for the same project to get a second concurrent session |
 | `drydock init [DIR]` | Per-project setup: seed a minimal `.claude/settings.json` stub for your own customization (drydock's deny policy is image-baked, applies automatically) |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host |
@@ -186,7 +190,10 @@ If a sub-mount does not appear inside the container, see
 2. **Don't edit the same file in host and container concurrently.** The
    project tree is mounted RW both ways; concurrent writes to the same file
    can tear, especially over 9P drvfs (WSL2 docs case). Close the host-side
-   editor before letting the agent edit, or wait for an idle moment.
+   editor before letting the agent edit, or wait for an idle moment. The same
+   caveat applies to two concurrent drydock sessions on one project: their
+   Claude config is per-session isolated and safe, but the shared project tree
+   is not — coordinate edits.
 
 ## Architecture
 
