@@ -300,10 +300,13 @@ ensure_synced() {
 	# expression simple.
 	# -newer is on the PRINT branch (not the top-level) to avoid printing
 	# HOST_CLAUDE_JSON unconditionally when it is not newer than the marker.
-	# Output is captured into $hits; find's exit code is ignored (|| true) so
-	# that a permission error or other traversal failure cannot suppress a real
-	# staleness signal that find already printed before it errored.
-	local hits
+	# Output is captured into $hits; find's exit code is captured via find_rc.
+	# When find prints a match, its exit code is irrelevant — the non-empty $hits
+	# drives the sync regardless. When find prints nothing AND exits non-zero, the
+	# probe failed entirely (e.g. HOST_CLAUDE unreadable at traversal start) and
+	# we warn so the skipped sync is visible. When find prints nothing AND exits 0,
+	# the config is genuinely fresh — the happy-path silent no-op.
+	local hits find_rc=0
 	hits="$(find "${probe_paths[@]}" \
 		\( -path '*/sessions' -o -path '*/projects' \
 		-o -path '*/file-history' -o -path '*/shell-snapshots' \
@@ -317,10 +320,12 @@ ensure_synced() {
 		-o -name '.credentials.json' -o -name '.drydock-last-sync' \
 		-o -name '*.bak.pre-dockerized' \
 		"${engram_prune[@]}" \) -prune \
-		-o -newer "$marker" -type f -print -quit 2>/dev/null)" || true
+		-o -newer "$marker" -type f -print -quit 2>/dev/null)" || find_rc=$?
 	if [ -n "$hits" ]; then
 		note "auto-sync: host config changed — syncing into container..."
 		cmd_sync || warn "auto-sync failed — continuing without sync"
+	elif [ "$find_rc" -ne 0 ]; then
+		warn "auto-sync: staleness probe failed (find exited $find_rc) — skipping; run 'drydock sync' manually if host config changed"
 	fi
 }
 

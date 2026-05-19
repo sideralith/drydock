@@ -1460,6 +1460,28 @@ _setup_ensure_synced() {
 	[ -f "$sentinel" ]
 }
 
+@test "ensure_synced: find exits non-zero and prints nothing — cmd_sync NOT called, warn emitted" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-find-fail-noout-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+
+	# Stub find: print nothing and exit non-zero (total probe failure —
+	# e.g. HOST_CLAUDE itself is unreadable so traversal cannot even start).
+	# cmd_sync must NOT be called (no match was found), but a warn must be
+	# emitted so the skipped sync is visible to the user.
+	find() { return 1; }
+
+	run ensure_synced
+
+	[ ! -f "$sentinel" ]
+	[[ "$output" == *"staleness probe failed"* ]]
+}
+
 # ── cmd_setup: .credentials.json exclusion (FIX 1) ──────────────────────────
 
 @test "cmd_setup: .credentials.json absent from container copy after setup" {
