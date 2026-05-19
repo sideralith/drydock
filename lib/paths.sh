@@ -13,6 +13,11 @@
 # Override in tests: export MOUNTINFO_FILE=/path/to/fixture before sourcing.
 : "${MOUNTINFO_FILE:=/proc/self/mountinfo}"
 
+# ── Auto-sync skip seam ───────────────────────────────────────────────────────
+# Set DRYDOCK_SKIP_AUTOSYNC=1 to bypass auto-sync in cmd_run / cmd_shell.
+# Override in tests: export DRYDOCK_SKIP_AUTOSYNC=1 before sourcing.
+: "${DRYDOCK_SKIP_AUTOSYNC:=0}"
+
 # ── OS-detection seams ────────────────────────────────────────────────────────
 # Override in tests to simulate macOS or plain-Linux CI without the real kernel.
 #   export OSRELEASE_FILE=/path/to/fixture   (default: /proc/sys/kernel/osrelease)

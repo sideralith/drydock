@@ -986,6 +986,14 @@ _setup_cmd_conflict() {
 	[[ "$output" != *"already running"* ]]
 }
 
+# ── auto-sync: Phase 1 — DRYDOCK_SKIP_AUTOSYNC seam (lib/paths.sh) ──────────
+
+@test "paths.sh: DRYDOCK_SKIP_AUTOSYNC defaults to '0' when unset" {
+	unset DRYDOCK_SKIP_AUTOSYNC
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	[ "$DRYDOCK_SKIP_AUTOSYNC" = "0" ]
+}
+
 # ── cmd_doctor: managed-settings policy line ─────────────────────────────────
 # G-1: doctor output must report the drydock managed-settings policy deny count.
 # G-2: the project settings.json line must NOT present its deny count as the
