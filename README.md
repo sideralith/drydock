@@ -136,6 +136,9 @@ scripts, a justfile) runs the same way.
 | `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed — run it again for the same project to get a second concurrent session |
 | `drydock init [DIR]` | Per-project setup: seed a minimal `.claude/settings.json` stub for your own customization (drydock's deny policy is image-baked, applies automatically) |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
+| `drydock link [PATH] [CONTAINER-PATH]` | Mount a sibling project read-only inside the container at `/workspace-siblings/<name>/` (or a custom path). Configuration persists; overlay regenerated on every launch. |
+| `drydock unlink PATH` | Remove a sibling mount from the current project's list |
+| `drydock links` | Show all sibling mounts configured for the current project |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host |
 | `drydock build` | Build/rebuild `drydock:latest` |
 | `drydock status` / `doctor` | Health snapshot / full diagnostics |

@@ -236,7 +236,7 @@ ownership, not merely by a bind-mount flag.
 
 | File | Layer | Contents |
 |------|-------|----------|
-| `00-secrets.json` | Tier 1 — deny | Secret-file read deny (`Read(~/.ssh/**)` etc.) |
+| `00-secrets.json` | Tier 1 — deny | Secret-file read deny — credential dirs/files use root-anchored `//**/<path>` patterns (effective at any mount depth, including inside sibling projects); drydock-state paths use `__HOME__`-anchored patterns |
 | `10-git-safety.json` | Tier 1 — deny | Git destructive-ops deny (force-push, protected-branch delete/rename, history-rewrite, GitHub API destructive ops) |
 | `20-hooks.json` | Tier 2 — hook wiring | `hooks.SessionStart` entry — wires `drydock-session-start.sh` |
 | `30-os-safety.json` | Tier 1 — deny | OS destructive-ops deny (rm system paths, disk destruction, package purge, firewall flush, docker host-escape) |
@@ -342,13 +342,23 @@ writes a temporary YAML overlay to `${TMPDIR:-/tmp}/drydock-submounts-$$.yml`
 compose invocation. The overlay is cleaned up by a `trap ... EXIT` registered
 inside `main()`.
 
+**Sibling-links overlay** (v0.2.0+): `drydock link <host-path> [container-target]`
+appends a pipe-delimited entry to `~/.config/drydock/links/<project>.list`
+(format: `<host_path>|<container_target>|<flags>`). On every `drydock run`/`shell`,
+`generate_links_overlay` reads the list and writes `${TMPDIR:-/tmp}/drydock-links-$$.yml`
+with a `services.drydock.volumes` block mounting each entry `:ro`. The overlay is
+simpler than sub-mount propagation — no `environment:` block, no env-var passthrough
+(all paths are static literals). `drydock unlink` removes entries; `drydock links`
+shows the current list. The feature is config-command-only: `link`/`unlink`/`links`
+do NOT invoke `export_compose_env`, so they work without a running container.
+
 Because `lib/commands.sh` uses `exec docker compose run` for `run`/`shell`
 (which replaces the bash process and fires no EXIT trap), `bin/drydock` also
-performs a **startup orphan reap**: on each invocation it globs for
-`/tmp/drydock-submounts-*.yml`, extracts the PID from each filename, checks
-liveness with `kill -0`, and removes any orphaned files from past `exec`'d
-invocations. Concurrent invocations are safe — a live PID's file is left
-untouched.
+performs a **startup orphan reap**: on each invocation it globs for both
+`/tmp/drydock-submounts-*.yml` and `/tmp/drydock-links-*.yml`, extracts the PID
+from each filename, checks liveness with `kill -0`, and removes any orphaned files
+from past `exec`'d invocations. Concurrent invocations are safe — a live PID's
+file is left untouched.
 
 ## Docker-out-of-Docker (DooD), not Docker-in-Docker
 

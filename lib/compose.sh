@@ -241,8 +241,8 @@ generate_links_overlay() {
 	[ -f "$list_file" ] || return 0
 
 	local body=""
-	local host target flags
-	while IFS='|' read -r host target flags; do
+	local host target
+	while IFS='|' read -r host target _; do
 		[ -z "$host" ] && continue
 		body+=$(printf '      - "%s:%s:ro"\n' "$host" "$target")
 		body+=$'\n'

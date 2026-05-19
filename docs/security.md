@@ -20,8 +20,15 @@ adversarial agent**. Read this so you don't develop a false sense of security.
   settings at highest precedence and the rules cannot be weakened from project-level
   settings. The protection is structural, not advisory — it is not possible for an
   agent to overwrite these policy files from inside the container.
-- **Damage to other projects under `~/`** — only `$PROJECT_DIR` is mounted;
-  sibling projects aren't visible.
+- **Damage to other projects under `~/`** — only `$PROJECT_DIR` is mounted by
+  default; sibling projects are not visible unless explicitly added via
+  `drydock link`. Linked siblings mount read-only (`:ro`) — writes are
+  blocked at the filesystem level, not just by policy.
+- **Credential read inside a linked sibling** — `00-secrets.json` deny rules
+  use root-anchored `//**/<path>` patterns (e.g. `Read(//**/.ssh/**)`) that
+  match at any mount depth. Credentials inside a sibling at
+  `/workspace-siblings/other-repo/.ssh/` are denied by the same rule that
+  would deny `~/.ssh/` on the primary project.
 - **Destructive commands (accident class)** — see the section below.
 
 ## Destructive-command guardrail layer (v0.2.0+)

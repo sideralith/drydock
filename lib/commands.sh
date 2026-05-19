@@ -643,12 +643,11 @@ cmd_link() {
 	local container_target
 	if [ -n "$target_arg" ]; then
 		container_target="$target_arg"
-		# SP-7: custom target rejection guard
+		# SP-7: custom target rejection guard.
+		# Append trailing / so that "/workspace" and "/workspace/sub" both
+		# match the "/workspace/"* pattern (the case word becomes "/workspace/").
 		case "$container_target/" in
 		"/workspace/"*)
-			err "rejected: container target '$container_target' shadows /workspace"
-			;;
-		"/workspace")
 			err "rejected: container target '$container_target' shadows /workspace"
 			;;
 		"/etc/"*)
@@ -664,8 +663,6 @@ cmd_link() {
 			err "rejected: container target '$container_target' shadows drydock config"
 			;;
 		esac
-		# Catch /workspace without trailing slash
-		[ "$container_target" = "/workspace" ] && err "rejected: container target shadows /workspace"
 	else
 		container_target="/workspace-siblings/$name/"
 	fi
@@ -674,8 +671,8 @@ cmd_link() {
 	local list_file
 	list_file="$(_links_list_file)"
 	if [ -f "$list_file" ]; then
-		local existing_host existing_target existing_flags existing_name
-		while IFS='|' read -r existing_host existing_target existing_flags; do
+		local existing_host existing_name
+		while IFS='|' read -r existing_host _ _; do
 			[ -z "$existing_host" ] && continue
 			existing_name="$(basename "$existing_host")"
 			if [ "$existing_name" = "$name" ] && [ "$existing_host" != "$canonical" ]; then
@@ -735,8 +732,8 @@ cmd_links() {
 
 	[ -f "$list_file" ] || return 0
 
-	local host target flags
-	while IFS='|' read -r host target flags; do
+	local host target
+	while IFS='|' read -r host target _; do
 		[ -z "$host" ] && continue
 		printf '%s -> %s\n' "$host" "$target"
 	done < "$list_file"
