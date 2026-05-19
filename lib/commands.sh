@@ -339,6 +339,13 @@ is_container_running() {
 	[ "$state" = "true" ]
 }
 
+# pre_flight_notice — non-blocking informational notice printed before starting
+# a new drydock session when other sessions for the same project are already
+# running. Counts existing drydock-<project>-* containers and prints one line
+# so the user knows concurrent sessions are active. Never refuses (R5).
+# Implemented in PR 3 (Phase 3 — UX + docs). No-op stub for PR 2 wire-in.
+pre_flight_notice() { :; }
+
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]
 	local project_dir_arg=""
@@ -364,24 +371,13 @@ cmd_run() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	# Descriptive container name (vs auto-generated hash). Intentionally does
-	# NOT include the agent name (e.g. "claude") so the same scheme works when
-	# v0.2.0 adds multi-agent support (Codex, OpenCode, pi.dev, etc.); the
-	# agent that's actually running is implicit in the cmd_run code path. Pre-
-	# clean any stopped container with the same name to avoid `run --rm --name`
-	# conflict; running containers are NOT removed (silently skipped) so a
-	# parallel session in another terminal gets a clear name-collision error
-	# instead of being silently killed.
-	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}"
-	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
-	if is_container_running "$_name"; then
-		printf 'drydock: container %s is already running.\n' "$_name" >&2
-		printf '  drydock will not kill a running session.\n' >&2
-		printf '  Attach a shell to it:  docker exec -it %s bash\n' "$_name" >&2
-		printf '  Stop it:               docker stop %s\n' "$_name" >&2
-		printf '  If two projects normalized to the same name, rename one.\n' >&2
-		return 1
-	fi
+	# Per-session container name: export_compose_env has already generated a
+	# unique DRYDOCK_SESSION_NAME (drydock-<project>-<disc>) via collision retry.
+	# No is_container_running guard needed — the discriminator guarantees each
+	# invocation gets its own unique name (R4: existing containers are never
+	# stopped or killed).
+	local _name="$DRYDOCK_SESSION_NAME"
+	pre_flight_notice
 	exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
 }
 
@@ -410,21 +406,12 @@ cmd_shell() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	# Descriptive container name (vs auto-generated hash). Distinct from
-	# cmd_run's name via the "-shell" suffix so a shell can coexist with a
-	# running main session for the same project. Pre-clean any stopped
-	# container with the same name; running ones are left so concurrent
-	# shells get a clear name-collision error.
-	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}-shell"
-	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
-	if is_container_running "$_name"; then
-		printf 'drydock: container %s is already running.\n' "$_name" >&2
-		printf '  drydock will not kill a running session.\n' >&2
-		printf '  Attach a shell to it:  docker exec -it %s bash\n' "$_name" >&2
-		printf '  Stop it:               docker stop %s\n' "$_name" >&2
-		printf '  If two projects normalized to the same name, rename one.\n' >&2
-		return 1
-	fi
+	# Per-session container name: DRYDOCK_SESSION_NAME is drydock-<project>-<disc>.
+	# Shell container appends -shell suffix for a distinct identity while sharing
+	# the same per-session config dir as a paired cmd_run session. Collision retry
+	# in export_compose_env guarantees uniqueness (R4: no existing session killed).
+	local _name="${DRYDOCK_SESSION_NAME}-shell"
+	pre_flight_notice
 	if [ "${#passthrough[@]}" -gt 0 ]; then
 		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock "${passthrough[@]}"
 	else
