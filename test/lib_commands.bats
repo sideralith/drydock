@@ -1000,6 +1000,10 @@ _setup_cmd_conflict() {
 
 	# Extract cmd_sync --exclude entries (drop engram conditional and *.bak.pre-dockerized/).
 	# Normalise: strip trailing slash so dir-entries match prune entries.
+	# bak.pre-dockerized/ is filtered because rsync needs TWO excludes for this case
+	# (.bak.pre-dockerized without slash for files, .bak.pre-dockerized/ for dirs) but
+	# find needs only ONE prune pattern (-name '*.bak.pre-dockerized').  The 1:2 asymmetry
+	# is intentional; parity is verified by the name-only form matching the prune entry.
 	local sync_excludes
 	sync_excludes=$(grep -oP "(?<=--exclude=')[^']+" "$src" \
 		| grep -v "mcp/engram.json" \
@@ -1169,6 +1173,25 @@ _setup_ensure_synced() {
 	ensure_synced
 
 	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: fresh-pruned (sessions) — only sessions file newer, cmd_sync NOT called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-sessions-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# Only a sessions file is newer — should be pruned (AS-2: state-directory exclusion)
+	mkdir -p "$HOST_CLAUDE/sessions"
+	touch -d '@2000000000' "$HOST_CLAUDE/sessions/some-session.jsonl"
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ ! -f "$sentinel" ]
 }
 
 @test "ensure_synced: fresh-pruned (cache) — only cache file newer, cmd_sync NOT called" {
