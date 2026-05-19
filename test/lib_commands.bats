@@ -1084,6 +1084,17 @@ _setup_cmd_conflict() {
 	[ -n "$sync_excludes" ]
 	[ -n "$prune_entries" ]
 	[ "$sync_excludes" = "$prune_entries" ]
+
+	# Parity guard: assert minimum entry count so a partial regex match can't
+	# pass vacuously by returning a smaller-but-equal subset of both lists.
+	# Hard-coded minimum reflects entries as of the time this guard was added;
+	# adding new excludes/prune entries is fine — this only fails if entries
+	# are silently lost (regex breakage, format change, etc.).
+	local sync_count prune_count
+	sync_count=$(echo "$sync_excludes" | wc -l)
+	prune_count=$(echo "$prune_entries" | wc -l)
+	[ "$sync_count" -ge 20 ]
+	[ "$prune_count" -ge 20 ]
 }
 
 # ── auto-sync: Phase 5 — call sites: cmd_run and cmd_shell ───────────────────
