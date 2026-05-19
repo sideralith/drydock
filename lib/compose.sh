@@ -439,6 +439,51 @@ gc_orphan_session_dirs() {
 	return 0
 }
 
+# seed_session_config_dir — create (or re-create) a per-session Claude config
+# dir and .json file by copying from the prototype ~/.claude-container/.
+# Called after ensure_synced so the prototype is fresh, and after the
+# discriminator is settled.
+#
+# Arguments:
+#   $1 — disc: the 4-char hex discriminator for this session
+#
+# Behaviour:
+#   - If a live container (run or shell) for this disc already exists in
+#     docker ps -a, return early (safe guard — never overwrite an in-use dir).
+#   - Otherwise: rm -rf the session dir (clean re-seed), cp -a the prototype
+#     dir and .json into the session-specific paths.
+#   - The .drydock-last-sync staleness marker is NOT copied (rm it from the
+#     session dir if present — prototype owns it).
+#
+# Requires: PROJECT_NAME set in caller's env. Uses DOCKER seam.
+seed_session_config_dir() {
+	local disc="$1"
+	local session_dir="$HOME/.claude-container-${disc}"
+	local session_json="$HOME/.claude-container-${disc}.json"
+	local run_name="drydock-${PROJECT_NAME}-${disc}"
+	local shell_name="drydock-${PROJECT_NAME}-${disc}-shell"
+
+	# Live-container guard: do not wipe a dir whose container is still running.
+	local _ps_out
+	_ps_out="$("$DOCKER" ps -a 2>/dev/null)" || true
+	if printf '%s' "$_ps_out" | grep -qF "$run_name"; then
+		return 0
+	fi
+	if printf '%s' "$_ps_out" | grep -qF "$shell_name"; then
+		return 0
+	fi
+
+	# Clean re-seed: remove stale session dir.
+	rm -rf "$session_dir"
+
+	# Copy prototype dir and .json into session-specific paths.
+	cp -a "$HOME/.claude-container" "$session_dir"
+	cp -a "$HOME/.claude-container.json" "$session_json"
+
+	# Remove the staleness marker — it belongs to the prototype, not sessions.
+	rm -f "$session_dir/.drydock-last-sync"
+}
+
 image_exists() {
 	"$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1
 }
