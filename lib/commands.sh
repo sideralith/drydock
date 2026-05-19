@@ -793,6 +793,11 @@ cmd_unlink() {
 	local list_file
 	list_file="$(_links_list_file)"
 
+	# R3-FIX-7(b): opportunistically remove any stale .tmp[0-9]* files left by
+	# a previous cmd_unlink that was SIGKILL'd or hit set -e before cleanup.
+	# 2>/dev/null || true: silently no-op when no stale files exist.
+	rm -f "${list_file}".tmp[0-9]* 2>/dev/null || true
+
 	# Existence check anchored to first field: $1 == canonical (awk -F'|').
 	# grep -F "${canonical}|" would match the literal string anywhere on the
 	# line, including inside the target column — silent deletion of the wrong
@@ -803,15 +808,16 @@ cmd_unlink() {
 
 	# Remove lines whose first field equals canonical (anchored to host column).
 	# awk exits 0 even when no output lines remain — set -e safe.
-	# R2-FIX-7: trap guarantees the .tmp file is cleaned up if mv fails under
-	# set -e; trap - RETURN clears it after a successful mv so it's a no-op
-	# on the happy path.
+	# R3-FIX-1: RETURN trap does NOT fire when set -e triggers a function exit
+	# (verified empirically). Use explicit error-path cleanup instead: if mv
+	# fails, rm the .tmp and call err. No shell-level EXIT trap is touched.
 	local tmp_file
 	tmp_file="${list_file}.tmp$$"
-	trap 'rm -f "$tmp_file"' RETURN
 	awk -F'|' -v c="$canonical" '$1!=c' "$list_file" > "$tmp_file"
-	mv "$tmp_file" "$list_file"
-	trap - RETURN
+	if ! mv "$tmp_file" "$list_file"; then
+		rm -f "$tmp_file"
+		err "failed to rewrite link list after unlink"
+	fi
 	ok "unlinked: $canonical"
 }
 

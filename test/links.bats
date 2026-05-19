@@ -872,3 +872,68 @@ _links_setup() {
 		[ "$status" -eq 0 ]
 	)
 }
+
+# ── R3-FIX-1: RETURN trap broken — replace with explicit cleanup ──────────────
+
+@test "cmd_unlink: R3-FIX-1 no stale .tmp file left when mv fails" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+	)
+
+	# Simulate mv failure by overriding mv as a function in the subprocess.
+	# SC2329 info: shellcheck cannot see the call inside cmd_unlink which is
+	# sourced — mv() is looked up via Bash name resolution at call time.
+	(
+		cd "$PROJECT_DIR"
+		# shellcheck disable=SC2329
+		mv() { return 1; }
+		export -f mv
+		# cmd_unlink must exit non-zero (mv failed → err or return 1)
+		run cmd_unlink "$sibling_dir"
+		[ "$status" -ne 0 ]
+	)
+
+	# No .tmp* file must remain regardless of how unlink failed
+	local tmp_count
+	tmp_count="$(find "$FAKE_HOME/.config/drydock/links/" -name "*.tmp*" 2>/dev/null | wc -l || echo 0)"
+	[ "$tmp_count" -eq 0 ]
+}
+
+# ── R3-FIX-7: stale .tmp files opportunistically cleaned at top of cmd_unlink ─
+
+@test "cmd_unlink: R3-FIX-7 pre-existing stale .tmp file is cleaned up on next successful unlink" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+	)
+
+	# Plant a stale .tmp file (simulating a previous SIGKILL'd unlink)
+	touch "${list_file}.tmp12345"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_unlink "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Stale .tmp file must be gone after the successful unlink
+	local tmp_count
+	tmp_count="$(find "$FAKE_HOME/.config/drydock/links/" -name "*.tmp*" 2>/dev/null | wc -l || echo 0)"
+	[ "$tmp_count" -eq 0 ]
+}
