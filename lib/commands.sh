@@ -696,11 +696,13 @@ cmd_link() {
 			err "rejected: container target '$container_target' shadows the drydock hooks RO mount (INV-3)"
 		fi
 		# (c) Reject targets whose first path component is a system directory.
+		# NOTE: 'home' is intentionally NOT in this list — /home/<user>/git/foo is
+		# the host-path-mirror use case; ancestor-of-$HOME is handled by (f) below.
 		local _first_comp
 		_first_comp="${container_target#/}"
 		_first_comp="${_first_comp%%/*}"
 		case "$_first_comp" in
-		etc|bin|sbin|usr|lib|lib32|lib64|boot|root|opt|proc|sys|dev|run|var)
+		etc|bin|sbin|usr|lib|lib32|lib64|boot|root|opt|proc|sys|dev|run|var|tmp)
 			err "rejected: container target '$container_target' is under a system directory (/$_first_comp)"
 			;;
 		esac
@@ -720,6 +722,19 @@ cmd_link() {
 			err "rejected: container target '$container_target' shadows drydock config"
 			;;
 		esac
+		# (f) Reject $HOME itself and ancestors of $HOME as custom target.
+		# A mount over $HOME or /home shadows the entire home directory.
+		# NOTE: targets under $HOME (e.g. /home/<user>/git/foo) are NOT rejected —
+		# that is the host-path-mirror use case.
+		if [ "$container_target" = "$HOME" ] || [[ "$HOME/" == "$container_target/"* ]]; then
+			err "rejected: container target '$container_target' shadows \$HOME or an ancestor of \$HOME"
+		fi
+		# (g) Reject /workspace-siblings bare parent — a mount over it would shadow
+		# all default-target siblings. A target under it (e.g. /workspace-siblings/foo)
+		# is acceptable (functionally equivalent to a default target).
+		if [ "$container_target" = "/workspace-siblings" ] || [ "$container_target" = "/workspace-siblings/" ]; then
+			err "rejected: container target '$container_target' shadows the /workspace-siblings parent directory"
+		fi
 	else
 		container_target="/workspace-siblings/$name/"
 	fi

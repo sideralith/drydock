@@ -530,6 +530,116 @@ _links_setup() {
 	)
 }
 
+# ── R2-FIX-1: custom target $HOME and $HOME ancestors rejected ───────────────
+
+@test "cmd_link: R2-FIX-1 rejects custom target equal to \$HOME" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "$FAKE_HOME"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"shadows"* ]] || [[ "$output" == *"HOME"* ]] || [[ "$output" == *"ancestor"* ]]
+	)
+}
+
+@test "cmd_link: R2-FIX-1 rejects custom target that is an ancestor of \$HOME" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	# Parent of FAKE_HOME is an ancestor of $HOME
+	local ancestor
+	ancestor="$(dirname "$FAKE_HOME")"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "$ancestor"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"shadows"* ]] || [[ "$output" == *"HOME"* ]] || [[ "$output" == *"ancestor"* ]]
+	)
+}
+
+@test "cmd_link: R2-FIX-1/2 accepts host-path-mirror custom target under \$HOME (maintainer use case)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	# A target UNDER $HOME (e.g. /home/<user>/git/sibling) must be accepted —
+	# this is the host-path-mirror use case the maintainer explicitly requires.
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "$FAKE_HOME/git/sibling"
+		[ "$status" -eq 0 ]
+	)
+}
+
+# ── R2-FIX-2: /tmp missing from system-dir denylist ──────────────────────────
+
+@test "cmd_link: R2-FIX-2 rejects custom target /tmp (covers container tmpfs)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/tmp/something"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"system"* ]] || [[ "$output" == *"/tmp"* ]]
+	)
+}
+
+# ── R2-FIX-3: /workspace-siblings root rejected as custom target ──────────────
+
+@test "cmd_link: R2-FIX-3 rejects custom target /workspace-siblings (bare parent)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/workspace-siblings"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"workspace-siblings"* ]]
+	)
+}
+
+@test "cmd_link: R2-FIX-3 rejects custom target /workspace-siblings/ (bare parent with trailing slash)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/workspace-siblings/"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"workspace-siblings"* ]]
+	)
+}
+
+@test "cmd_link: R2-FIX-3 accepts custom target under /workspace-siblings/foo" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	# A target UNDER /workspace-siblings (e.g. /workspace-siblings/foo) must be
+	# accepted — it is functionally equivalent to a default target.
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/workspace-siblings/foo"
+		[ "$status" -eq 0 ]
+	)
+}
+
 @test "cmd_link: FIX-8 link succeeds when list has a malformed line with empty target" {
 	_links_setup
 
