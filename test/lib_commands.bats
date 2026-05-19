@@ -1152,8 +1152,9 @@ _setup_cmd_conflict() {
 	mkdir -p "$CONTAINER_CLAUDE"
 	touch "$CONTAINER_CLAUDE_JSON"
 
-	local sentinel="$BATS_TEST_TMPDIR/ensure-synced-run-$$"
-	ensure_synced() { touch "$sentinel"; }
+	local seq_log="$BATS_TEST_TMPDIR/seq-run-$$"
+	ensure_synced() { echo "ensure_synced" >>"$seq_log"; }
+	export_compose_env() { echo "export_compose_env" >>"$seq_log"; }
 
 	local project_dir="$BATS_TEST_TMPDIR/proj-run-$$"
 	mkdir -p "$project_dir"
@@ -1164,7 +1165,8 @@ _setup_cmd_conflict() {
 
 	run cmd_run "$project_dir"
 
-	[ -f "$sentinel" ]
+	[ -f "$seq_log" ]
+	[ "$(head -1 "$seq_log")" = "ensure_synced" ]
 }
 
 @test "cmd_shell: calls ensure_synced before export_compose_env" {
@@ -1182,8 +1184,9 @@ _setup_cmd_conflict() {
 	mkdir -p "$CONTAINER_CLAUDE"
 	touch "$CONTAINER_CLAUDE_JSON"
 
-	local sentinel="$BATS_TEST_TMPDIR/ensure-synced-shell-$$"
-	ensure_synced() { touch "$sentinel"; }
+	local seq_log="$BATS_TEST_TMPDIR/seq-shell-$$"
+	ensure_synced() { echo "ensure_synced" >>"$seq_log"; }
+	export_compose_env() { echo "export_compose_env" >>"$seq_log"; }
 
 	local project_dir="$BATS_TEST_TMPDIR/proj-shell-$$"
 	mkdir -p "$project_dir"
@@ -1194,7 +1197,8 @@ _setup_cmd_conflict() {
 
 	run cmd_shell "$project_dir"
 
-	[ -f "$sentinel" ]
+	[ -f "$seq_log" ]
+	[ "$(head -1 "$seq_log")" = "ensure_synced" ]
 }
 
 # ── auto-sync: Phase 4 — ensure_synced helper ────────────────────────────────
@@ -1639,6 +1643,7 @@ _setup_ensure_synced() {
 	export MOCK_DOCKER_EXIT=1
 
 	run cmd_sync
+	[ "$status" -ne 0 ]
 	[ ! -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
 	unset MOCK_DOCKER_EXIT
 }
