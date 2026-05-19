@@ -40,9 +40,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 
 ### INV-2: Container State Split
 
-- **Rule**: Container mounts MUST point at `~/.claude-container/`, `~/.claude-container.json`,
-  and `~/.engram-container/` — never at the host's `~/.claude/`, `~/.claude.json`, or
-  `~/.engram/`.
+- **Rule**: Container mounts MUST point at container-specific state — the per-session
+  `~/.claude-container-<disc>/` directory and `~/.claude-container-<disc>.json` file (each
+  seeded from the `~/.claude-container/` prototype), and `~/.engram-container/` — never at
+  the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`.
 - **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
   Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
   when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).
