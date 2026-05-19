@@ -643,15 +643,36 @@ cmd_link() {
 	local container_target
 	if [ -n "$target_arg" ]; then
 		container_target="$target_arg"
-		# SP-7: custom target rejection guard.
-		# Append trailing / so that "/workspace" and "/workspace/sub" both
-		# match the "/workspace/"* pattern (the case word becomes "/workspace/").
+		# SP-7: custom target rejection guard (FIX #2 — replaces incomplete denylist).
+		# (a) Must be an absolute path.
+		if [[ "$container_target" != /* ]]; then
+			err "rejected: container target '$container_target' must be an absolute path"
+		fi
+		# (b) Reject root /.
+		if [ "$container_target" = "/" ]; then
+			err "rejected: container target '/' is the filesystem root"
+		fi
+		# (d) Explicitly reject the RO hooks mount path (INV-3): /opt/drydock/hooks.
+		# Checked BEFORE the generic /opt system-dir reject so the error message
+		# names INV-3 specifically. Bind-mounted :ro per docker-compose.yml line 84;
+		# a shadowing sibling mount would silently bypass the read-only guardrail.
+		if [[ "$container_target/" == "/opt/drydock/hooks/"* ]] || [ "$container_target" = "/opt/drydock/hooks" ]; then
+			err "rejected: container target '$container_target' shadows the drydock hooks RO mount (INV-3)"
+		fi
+		# (c) Reject targets whose first path component is a system directory.
+		local _first_comp
+		_first_comp="${container_target#/}"
+		_first_comp="${_first_comp%%/*}"
+		case "$_first_comp" in
+		etc|bin|sbin|usr|lib|lib32|lib64|boot|root|opt|proc|sys|dev|run|var)
+			err "rejected: container target '$container_target' is under a system directory (/$_first_comp)"
+			;;
+		esac
+		# (e) Reject paths that shadow /workspace or drydock-managed home dirs.
+		# Append trailing / so "/workspace" and "/workspace/sub" both match.
 		case "$container_target/" in
 		"/workspace/"*)
 			err "rejected: container target '$container_target' shadows /workspace"
-			;;
-		"/etc/"*)
-			err "rejected: container target '$container_target' shadows /etc"
 			;;
 		"$HOME/.claude"*)
 			err "rejected: container target '$container_target' shadows container state"

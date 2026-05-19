@@ -216,6 +216,140 @@ _links_setup() {
 	)
 }
 
+# ── FIX #2: custom target robust validation ───────────────────────────────────
+
+@test "cmd_link: FIX-2 rejects relative custom target (not absolute path)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "relative/path"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"absolute"* ]]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target / (root)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target under /proc" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/proc/self"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target under /sys" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/sys/class"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target under /dev" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/dev/null"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target under /run" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/run/lock"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target under /var" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/var/tmp"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target under /opt/drydock/hooks (INV-3 bypass)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/opt/drydock/hooks"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"INV-3"* ]]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target \$HOME/.engram-container (missing guard)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "$FAKE_HOME/.engram-container"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: FIX-2 rejects custom target \$HOME/.config/drydock (missing guard)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "$FAKE_HOME/.config/drydock"
+		[ "$status" -ne 0 ]
+	)
+}
+
 @test "cmd_link: SP-7 rejects custom target under /workspace" {
 	_links_setup
 
