@@ -917,9 +917,9 @@ STUB
 @test "gc_orphan_session_dirs: prunes orphan session dir when no container exists" {
 	local fake_home="$BATS_TEST_TMPDIR/gc-home-orphan"
 	mkdir -p "$fake_home"
-	# Create an orphan session dir + sibling json
-	mkdir -p "$fake_home/.claude-container-dead1"
-	touch "$fake_home/.claude-container-dead1.json"
+	# Create an orphan session dir + sibling json (4-char hex disc matches generator shape)
+	mkdir -p "$fake_home/.claude-container-d1d1"
+	touch "$fake_home/.claude-container-d1d1.json"
 	HOME="$fake_home"
 	export PROJECT_NAME="myproject"
 	# Docker stub: ps -a returns empty (no matching container)
@@ -927,21 +927,22 @@ STUB
 	stub="$(_make_docker_ps_stub "")"
 	export DOCKER="$stub"
 	gc_orphan_session_dirs
-	[ ! -d "$fake_home/.claude-container-dead1" ]
+	[ ! -d "$fake_home/.claude-container-d1d1" ]
 }
 
 @test "gc_orphan_session_dirs: prunes sibling .json alongside orphan dir" {
 	local fake_home="$BATS_TEST_TMPDIR/gc-home-json"
 	mkdir -p "$fake_home"
-	mkdir -p "$fake_home/.claude-container-dead2"
-	touch "$fake_home/.claude-container-dead2.json"
+	# 4-char hex disc so it passes the generator-shape validation guard.
+	mkdir -p "$fake_home/.claude-container-d2d2"
+	touch "$fake_home/.claude-container-d2d2.json"
 	HOME="$fake_home"
 	export PROJECT_NAME="myproject"
 	local stub
 	stub="$(_make_docker_ps_stub "")"
 	export DOCKER="$stub"
 	gc_orphan_session_dirs
-	[ ! -f "$fake_home/.claude-container-dead2.json" ]
+	[ ! -f "$fake_home/.claude-container-d2d2.json" ]
 }
 
 @test "gc_orphan_session_dirs: does NOT prune prototype ~/.claude-container/ (no discriminator suffix)" {
