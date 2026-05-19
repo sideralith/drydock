@@ -1057,6 +1057,14 @@ _setup_cmd_conflict() {
 	cmd_sync_body=$(sed -n '/^cmd_sync()/,/^}/p' "$src")
 	ensure_synced_body=$(sed -n '/^ensure_synced()/,/^}/p' "$src")
 
+	# Strip comment lines from both bodies BEFORE applying the extraction regexes.
+	# A doc comment that contains an example -path '*/sessions' or --exclude='foo/'
+	# pattern would otherwise inject a phantom entry into the extracted list and
+	# cause a spurious parity failure.  grep -v '^[[:space:]]*#' drops any line
+	# whose first non-whitespace character is '#'.
+	cmd_sync_body=$(echo "$cmd_sync_body" | grep -v '^[[:space:]]*#')
+	ensure_synced_body=$(echo "$ensure_synced_body" | grep -v '^[[:space:]]*#')
+
 	# Extract cmd_sync --exclude entries (drop engram conditional and *.bak.pre-dockerized/).
 	# Normalise: strip trailing slash so dir-entries match prune entries.
 	# bak.pre-dockerized/ is filtered because rsync needs TWO excludes for this case
