@@ -986,6 +986,68 @@ _setup_cmd_conflict() {
 	[[ "$output" != *"already running"* ]]
 }
 
+# ── auto-sync: Phase 5 — call sites: cmd_run and cmd_shell ───────────────────
+
+@test "cmd_run: calls ensure_synced before export_compose_env" {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local sentinel="$BATS_TEST_TMPDIR/ensure-synced-run-$$"
+	ensure_synced() { touch "$sentinel"; }
+
+	local project_dir="$BATS_TEST_TMPDIR/proj-run-$$"
+	mkdir -p "$project_dir"
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-run-sync-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_run "$project_dir"
+
+	[ -f "$sentinel" ]
+}
+
+@test "cmd_shell: calls ensure_synced before export_compose_env" {
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local sentinel="$BATS_TEST_TMPDIR/ensure-synced-shell-$$"
+	ensure_synced() { touch "$sentinel"; }
+
+	local project_dir="$BATS_TEST_TMPDIR/proj-shell-$$"
+	mkdir -p "$project_dir"
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-shell-sync-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_shell "$project_dir"
+
+	[ -f "$sentinel" ]
+}
+
 # ── auto-sync: Phase 4 — ensure_synced helper ────────────────────────────────
 # Helper: build fake-HOME tree suitable for ensure_synced mtime tests.
 # Creates HOST_CLAUDE, HOST_CLAUDE_JSON, and a minimal CONTAINER_CLAUDE.

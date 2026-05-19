@@ -313,6 +313,7 @@ cmd_run() {
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
+	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
@@ -358,6 +359,7 @@ cmd_shell() {
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
+	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
