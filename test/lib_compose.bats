@@ -850,3 +850,237 @@ MI
 	[ "$output" != "UNSET" ]
 	[ -n "$output" ]
 }
+
+# ── gc_orphan_session_dirs (concurrent-sessions, PR 1 Foundation) ─────────────
+# Uses a fake HOME (BATS_TEST_TMPDIR/gc-fakehome-*) and a per-test docker stub
+# written to BATS_TEST_TMPDIR so docker ps -a output is controllable.
+# PROJECT_NAME must be exported by the test (not via export_compose_env).
+
+# Helper: write a docker stub that emits $1 on stdout for any "ps" sub-command.
+_make_docker_ps_stub() {
+	local stub_file="$BATS_TEST_TMPDIR/docker-ps-stub-$$"
+	local ps_output="$1"
+	cat >"$stub_file" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "\${DOCKER_CALL_LOG:?}"
+if [ "\${1:-}" = "ps" ]; then
+	printf '%s\n' '$ps_output'
+fi
+exit 0
+STUB
+	chmod +x "$stub_file"
+	printf '%s' "$stub_file"
+}
+
+@test "gc_orphan_session_dirs: prunes orphan session dir when no container exists" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-orphan"
+	mkdir -p "$fake_home"
+	# Create an orphan session dir + sibling json
+	mkdir -p "$fake_home/.claude-container-dead1"
+	touch "$fake_home/.claude-container-dead1.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a returns empty (no matching container)
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ ! -d "$fake_home/.claude-container-dead1" ]
+}
+
+@test "gc_orphan_session_dirs: prunes sibling .json alongside orphan dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-json"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-dead2"
+	touch "$fake_home/.claude-container-dead2.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ ! -f "$fake_home/.claude-container-dead2.json" ]
+}
+
+@test "gc_orphan_session_dirs: does NOT prune prototype ~/.claude-container/ (no discriminator suffix)" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-proto"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container" ]
+}
+
+@test "gc_orphan_session_dirs: does NOT prune dir when run container is live" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-live-run"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-a1b2"
+	touch "$fake_home/.claude-container-a1b2.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a shows the run container as live
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-a1b2")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-a1b2" ]
+}
+
+@test "gc_orphan_session_dirs: does NOT prune dir when shell container is live" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-live-shell"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-c3d4"
+	touch "$fake_home/.claude-container-c3d4.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a shows the shell container as live
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-c3d4-shell")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ -d "$fake_home/.claude-container-c3d4" ]
+}
+
+@test "gc_orphan_session_dirs: is idempotent — second call on clean state is a no-op" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-idempotent"
+	mkdir -p "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	# First call on empty HOME — no dirs to prune
+	gc_orphan_session_dirs
+	# Second call — still no error
+	gc_orphan_session_dirs
+	# No .claude-container-* dirs appeared
+	local count
+	count=0
+	for d in "$fake_home"/.claude-container-?*/; do
+		[ -d "$d" ] && count=$((count + 1))
+	done
+	[ "$count" -eq 0 ]
+}
+
+# ── seed_session_config_dir (concurrent-sessions, PR 1 Foundation) ────────────
+# Uses a fake HOME with a pre-populated prototype ~/.claude-container/ and
+# ~/.claude-container.json. Per-test docker stubs control liveness checks.
+
+# Helper: populate prototype dirs in a fake HOME
+_make_prototype() {
+	local fake_home="$1"
+	mkdir -p "$fake_home/.claude-container/skills"
+	printf 'proto-settings' >"$fake_home/.claude-container/settings.json"
+	printf 'proto-marker' >"$fake_home/.claude-container/.drydock-last-sync"
+	printf 'proto-json' >"$fake_home/.claude-container.json"
+}
+
+@test "seed_session_config_dir: fresh seed creates session dir from prototype" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-fresh"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "abcd"
+	[ -d "$fake_home/.claude-container-abcd" ]
+}
+
+@test "seed_session_config_dir: fresh seed copies prototype .json sibling" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-json"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "abcd"
+	[ -f "$fake_home/.claude-container-abcd.json" ]
+}
+
+@test "seed_session_config_dir: session dir contains prototype files" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-content"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "ef01"
+	[ -f "$fake_home/.claude-container-ef01/settings.json" ]
+	content="$(cat "$fake_home/.claude-container-ef01/settings.json")"
+	[ "$content" = "proto-settings" ]
+}
+
+@test "seed_session_config_dir: .drydock-last-sync marker NOT copied into session dir" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-nosync"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "2345"
+	[ ! -f "$fake_home/.claude-container-2345/.drydock-last-sync" ]
+}
+
+@test "seed_session_config_dir: re-seed safety — safe to call when no live container" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-reseed"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	# Pre-create session dir with stale content
+	mkdir -p "$fake_home/.claude-container-6789"
+	printf 'stale' >"$fake_home/.claude-container-6789/old.txt"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "6789"
+	# Stale file gone, prototype content present
+	[ ! -f "$fake_home/.claude-container-6789/old.txt" ]
+	[ -f "$fake_home/.claude-container-6789/settings.json" ]
+}
+
+@test "seed_session_config_dir: live-container guard — does NOT reseed when run container is live" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-live-run"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	# Pre-create session dir with sentinel content
+	mkdir -p "$fake_home/.claude-container-cafe"
+	printf 'live-content' >"$fake_home/.claude-container-cafe/live.txt"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: run container is live
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-cafe")"
+	export DOCKER="$stub"
+	seed_session_config_dir "cafe"
+	# Should NOT have wiped the live dir
+	[ -f "$fake_home/.claude-container-cafe/live.txt" ]
+}
+
+@test "seed_session_config_dir: live-container guard — does NOT reseed when shell container is live" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-live-shell"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	mkdir -p "$fake_home/.claude-container-babe"
+	printf 'shell-content' >"$fake_home/.claude-container-babe/shell.txt"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: shell container is live
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-babe-shell")"
+	export DOCKER="$stub"
+	seed_session_config_dir "babe"
+	[ -f "$fake_home/.claude-container-babe/shell.txt" ]
+}
