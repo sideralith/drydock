@@ -1045,7 +1045,8 @@ _setup_cmd_conflict() {
 # path causes unnecessary Docker cold-starts on the happy path).
 #
 # Approach: grep the source file for the two lists, normalize to a canonical
-# form, and compare. The engram conditional entry is verified separately.
+# form, and compare. The engram conditional entry is verified structurally in
+# the next test ("parity: engram conditional entry matches between cmd_sync and ensure_synced").
 
 @test "parity: ensure_synced prune paths match cmd_sync rsync excludes" {
 	local src="$DRYDOCK_HOME/lib/commands.sh"
@@ -1095,6 +1096,35 @@ _setup_cmd_conflict() {
 	prune_count=$(echo "$prune_entries" | wc -l)
 	[ "$sync_count" -ge 20 ]
 	[ "$prune_count" -ge 20 ]
+}
+
+@test "parity: engram conditional entry matches between cmd_sync and ensure_synced" {
+	local src="$DRYDOCK_HOME/lib/commands.sh"
+
+	# Scope each extraction to its own function body, consistent with the
+	# main parity test above.
+	local cmd_sync_body ensure_synced_body
+	cmd_sync_body=$(sed -n '/^cmd_sync()/,/^}/p' "$src")
+	ensure_synced_body=$(sed -n '/^ensure_synced()/,/^}/p' "$src")
+
+	# Extract the bare path from cmd_sync's _engram_exclude assignment.
+	# Matches: _engram_exclude="--exclude=mcp/engram.json"
+	local sync_engram_path
+	sync_engram_path=$(echo "$cmd_sync_body" \
+		| grep -oP '(?<=--exclude=)mcp/engram\.json' \
+		| head -1)
+
+	# Extract the bare path from ensure_synced's engram_prune construction.
+	# Matches: engram_prune=(-o -path '*/mcp/engram.json')
+	local prune_engram_path
+	prune_engram_path=$(echo "$ensure_synced_body" \
+		| grep -oP '(?<=-path \x27\*/)mcp/engram\.json(?=\x27)' \
+		| head -1)
+
+	# Both must resolve to the same bare path.
+	[ -n "$sync_engram_path" ]
+	[ -n "$prune_engram_path" ]
+	[ "$sync_engram_path" = "$prune_engram_path" ]
 }
 
 # ── auto-sync: Phase 5 — call sites: cmd_run and cmd_shell ───────────────────
