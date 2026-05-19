@@ -1352,3 +1352,57 @@ _setup_wiring_home() {
 	# GC should have pruned the orphan dir before the disc was assigned.
 	[ ! -d "$fake_home/.claude-container-dead" ]
 }
+
+# ── Concurrent-sessions PR 2 Slice 2 fixes ────────────────────────────────────
+
+# RED — fix #1 (CRITICAL): a live *-shell container with disc X forces collision
+# retry; the collision loop was asymmetric and only matched run containers.
+@test "export_compose_env: collision retry when live shell container holds disc" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-shell-retry-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Discriminator fn emits "a1b2" (collides with shell container), then "c3d4" (free).
+	local call_count_file="$BATS_TEST_TMPDIR/disc-shell-count-$$"
+	printf '0' >"$call_count_file"
+	_seq_disc_shell() {
+		local n
+		n="$(cat "$call_count_file")"
+		printf '%s' "$((n + 1))" >"$call_count_file"
+		case "$n" in
+			0) printf 'a1b2' ;;
+			*) printf 'c3d4' ;;
+		esac
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc_shell
+	# Stateful stub: gc pre-check (empty), then collision check sees -shell, then free.
+	#   call 0 (gc):             "" — no orphans
+	#   call 1 (check "a1b2"):   "drydock-myproject-a1b2-shell" — collision!
+	#   call 2 (check "c3d4"):   "" — c3d4 is free, break
+	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-shell-$$"
+	printf '0' >"$counter_file"
+	local stub
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "" "drydock-myproject-a1b2-shell" "")"
+	export DOCKER="$stub"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-shell-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# Must have retried — final disc is c3d4, not a1b2.
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-c3d4" ]]
+}
+
+# RED — fix #2 (WARNING): GC must NOT prune dirs whose discriminator suffix does
+# not match the generator's shape ^[0-9a-f]{4}$  (e.g. "backup").
+@test "gc_orphan_session_dirs: does NOT prune dir with non-hex discriminator suffix" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-backup"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-backup"
+	touch "$fake_home/.claude-container-backup.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Must still exist — "backup" is not a valid drydock discriminator.
+	[ -d "$fake_home/.claude-container-backup" ]
+}
