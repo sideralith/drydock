@@ -134,9 +134,11 @@ sync only when the container copy is stale. Escape hatch: `DRYDOCK_SKIP_AUTOSYNC
 **Invariants touched.** INV-2 — auto-sync must move config only, never the
 SQLite-bound state the split exists to protect.
 
-**Open questions.** None major. A read-only bind-mount of `settings.json` was
-considered and rejected pending an empirical test of whether Claude Code writes
-to that file.
+**Open questions.** None — resolved. A read-only bind-mount of `settings.json`
+was considered as an alternative delivery mechanism and dropped: auto-sync's
+copy model supersedes it, and a bind-mount would reintroduce a host/container
+write-back concern (INV-2) that the copy model avoids — the container's copy is
+the container's, regardless of whether Claude Code writes to it.
 
 **Provenance.** engram #1055.
 
