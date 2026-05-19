@@ -30,6 +30,14 @@ Commands:
   doctor              Detailed diagnostics
   setup               (advanced) One-time host setup — auto-triggered on first
                         run/build/sync if missing; you rarely call this explicitly
+  link [PATH] [CONTAINER-PATH]
+                      Mount a sibling project read-only inside the container.
+                        PATH: host directory to mount (required).
+                        CONTAINER-PATH: in-container mount target (optional;
+                        default: /workspace-siblings/<basename>/).
+                        RW links not yet implemented (--rw errors).
+  unlink PATH         Remove a sibling mount from the project list.
+  links               Show all siblings configured for the current project.
   version             Show drydock version
   help                Show this help
 
@@ -39,6 +47,10 @@ Examples:
   drydock run -- --resume "my-session"         # resume a session
   drydock init ~/git/newproject                # create settings.json stub
   drydock build                                # rebuild image
+  drydock link ~/git/shared-lib                # mount sibling read-only
+  drydock link ~/git/shared-lib /opt/mylib     # mount at custom path
+  drydock unlink ~/git/shared-lib              # remove sibling
+  drydock links                                # list current project's siblings
 
 DRYDOCK_HOME=$DRYDOCK_HOME
 EOF
