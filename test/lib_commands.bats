@@ -998,6 +998,12 @@ _setup_cmd_conflict() {
 @test "parity: ensure_synced prune paths match cmd_sync rsync excludes" {
 	local src="$DRYDOCK_HOME/lib/commands.sh"
 
+	# Scope each extraction to its own function body to prevent unrelated
+	# rsync/find calls elsewhere in the file from masking real drift.
+	local cmd_sync_body ensure_synced_body
+	cmd_sync_body=$(sed -n '/^cmd_sync()/,/^}/p' "$src")
+	ensure_synced_body=$(sed -n '/^ensure_synced()/,/^}/p' "$src")
+
 	# Extract cmd_sync --exclude entries (drop engram conditional and *.bak.pre-dockerized/).
 	# Normalise: strip trailing slash so dir-entries match prune entries.
 	# bak.pre-dockerized/ is filtered because rsync needs TWO excludes for this case
@@ -1005,19 +1011,21 @@ _setup_cmd_conflict() {
 	# find needs only ONE prune pattern (-name '*.bak.pre-dockerized').  The 1:2 asymmetry
 	# is intentional; parity is verified by the name-only form matching the prune entry.
 	local sync_excludes
-	sync_excludes=$(grep -oP "(?<=--exclude=')[^']+" "$src" \
+	sync_excludes=$(echo "$cmd_sync_body" \
+		| grep -oP "(?<=--exclude=')[^']+" \
 		| grep -v "mcp/engram.json" \
 		| grep -v "bak.pre-dockerized/" \
 		| sed 's|/$||' \
 		| sort)
 
 	# Extract ensure_synced prune -path and -name entries (drop engram conditional).
-	# -path '*/X/*' → X   -name 'Y' → Y  (trailing /* stripped, no trailing slash)
+	# -path '*/X' → X   -name 'Y' → Y  (no trailing slash in either case)
 	local prune_entries
-	prune_entries=$({ grep -oP "(?<=-path '\*/)([^']+)(?=')" "$src" \
-		| grep -v "mcp/engram.json" \
-		| sed 's|/\*$||'; \
-		grep -oP "(?<=-name ')([^']+)(?=')" "$src" \
+	prune_entries=$({ echo "$ensure_synced_body" \
+		| grep -oP "(?<=-path '\*/)([^']+)(?=')" \
+		| grep -v "mcp/engram.json"; \
+		echo "$ensure_synced_body" \
+		| grep -oP "(?<=-name ')([^']+)(?=')" \
 		| grep -v "mcp/engram.json"; } | sort)
 
 	# Both lists must be non-empty and identical.
@@ -1249,6 +1257,72 @@ _setup_ensure_synced() {
 	touch -d '@2000000000' "$HOST_CLAUDE/mcp/engram.json"
 	touch -d '@500000000' "$HOST_CLAUDE_JSON"
 
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+# ── ensure_synced: non-fatal cmd_sync failure (FIX 3) ────────────────────────
+
+@test "ensure_synced: cmd_sync fails — ensure_synced returns 0 (non-fatal)" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	# cmd_sync always fails.
+	cmd_sync() { return 1; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	run ensure_synced
+	[ "$status" -eq 0 ]
+}
+
+@test "ensure_synced: absent marker + cmd_sync fails — ensure_synced returns 0 (non-fatal)" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	# cmd_sync always fails.
+	cmd_sync() { return 1; }
+
+	rm -f "$CONTAINER_CLAUDE/.drydock-last-sync"
+
+	run ensure_synced
+	[ "$status" -eq 0 ]
+}
+
+# ── ensure_synced: absent HOST_CLAUDE_JSON (FIX 4) ───────────────────────────
+
+@test "ensure_synced: HOST_CLAUDE_JSON absent — newer file in HOST_CLAUDE still triggers cmd_sync" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-es-fix4-$$"
+	mkdir -p "$fakehome/.claude"
+	# Intentionally NO .claude.json — HOST_CLAUDE_JSON will not exist.
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	engram_usable() { return 1; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-no-json-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	# HOST_CLAUDE_JSON does not exist — find must not fail, sync must still trigger.
+	[ ! -f "$HOST_CLAUDE_JSON" ]
+
+	# Call directly (not via `run`) so set -euo pipefail is active — this is the
+	# failure mode: under pipefail, find failing on the missing path causes the
+	# condition to be false and cmd_sync is skipped.
 	ensure_synced
 
 	[ -f "$sentinel" ]
