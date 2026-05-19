@@ -214,8 +214,11 @@ cmd_sync() {
 		--exclude='scheduled_tasks.lock' \
 		--exclude='*.bak.pre-dockerized' \
 		--exclude='*.bak.pre-dockerized/' \
+		--exclude='.credentials.json' \
+		--exclude='themes/' \
+		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
-		/src/ /dst/
+		/src/ /dst/ || return $?
 	# Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
 	# MCP filter: when engram is not usable, strip the engram MCP server entry
 	# so Claude Code in the container sees no startup error.
@@ -234,6 +237,12 @@ cmd_sync() {
 		ok "$CONTAINER_CLAUDE_JSON refreshed from host"
 	fi
 	ok "Sync done"
+	# Stamp last-sync marker AFTER both rsync and the JSON refresh succeed.
+	# Under set -euo pipefail an earlier touch would leave a stale-seeming marker
+	# if the JSON step failed. ensure_synced reads this marker to detect freshness.
+	# NOTE: ensure_prereqs / ensure_image are also called by ensure_synced before
+	# delegating here — that double call is intentional (idempotent; see design).
+	touch "$CONTAINER_CLAUDE/.drydock-last-sync"
 }
 
 # is_container_running — return 0 iff the named container is currently running.

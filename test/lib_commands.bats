@@ -986,6 +986,142 @@ _setup_cmd_conflict() {
 	[[ "$output" != *"already running"* ]]
 }
 
+# ── auto-sync: Phase 2 — rsync excludes + marker in cmd_sync ─────────────────
+
+@test "cmd_sync: rsync args include --exclude='.credentials.json'" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-excl-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--exclude=.credentials.json"* ]]
+}
+
+@test "cmd_sync: rsync args include --exclude=themes/" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-excl-themes-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--exclude=themes/"* ]]
+}
+
+@test "cmd_sync: rsync args include --exclude=.drydock-last-sync" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-excl-marker-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"--exclude=.drydock-last-sync"* ]]
+}
+
+@test "cmd_sync: marker .drydock-last-sync created after successful sync" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-marker-ok-$$.log"
+	touch "$DOCKER_CALL_LOG"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	[ -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+}
+
+@test "cmd_sync: marker .drydock-last-sync NOT created when rsync fails" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/sync-marker-fail-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export MOCK_DOCKER_EXIT=1
+
+	run cmd_sync
+	[ ! -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+	unset MOCK_DOCKER_EXIT
+}
+
 # ── auto-sync: Phase 1 — DRYDOCK_SKIP_AUTOSYNC seam (lib/paths.sh) ──────────
 
 @test "paths.sh: DRYDOCK_SKIP_AUTOSYNC defaults to '0' when unset" {
