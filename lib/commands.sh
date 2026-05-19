@@ -272,6 +272,12 @@ ensure_synced() {
 		return 0
 	fi
 	# Engram-conditional prune entry: mirrors _engram_exclude in cmd_sync.
+	# Deliberate asymmetry: find uses -path '*/mcp/engram.json' (no trailing slash)
+	# while rsync uses --exclude='mcp/engram.json' (also no trailing slash, but
+	# rsync interprets it as a file pattern).  Claude Code only ever creates these
+	# names as directories, so a hypothetical bare file with this name is the only
+	# case where the two forms would diverge — not a real scenario in ~/.claude/.
+	# -type d is intentionally omitted to avoid complicating the compound expression.
 	local -a engram_prune=()
 	if ! engram_usable; then
 		engram_prune=(-o -path '*/mcp/engram.json')
