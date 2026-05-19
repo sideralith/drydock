@@ -421,14 +421,15 @@ gc_orphan_session_dirs() {
 		# Extract disc: remove prefix "$HOME/.claude-container-" and trailing "/".
 		_disc="${_dir#"$HOME"/.claude-container-}"
 		_disc="${_disc%/}"
-		# Derive both container names.
-		_run_name="drydock-${PROJECT_NAME}-${_disc}"
-		_shell_name="drydock-${PROJECT_NAME}-${_disc}-shell"
-		# If either container exists in ps -a, protect this dir.
-		if printf '%s' "$_ps_out" | grep -qF "$_run_name"; then
+		# Project-agnostic liveness check: protect the dir if ANY
+		# drydock-*-<disc> or drydock-*-<disc>-shell container exists,
+		# regardless of which project owns it.  Anchored on the right with
+		# ($|[[:space:]]) so a disc "a1b2" does not match "drydock-p-a1b2-shell"
+		# via the run-disc pattern (the -shell suffix is checked separately).
+		if printf '%s' "$_ps_out" | grep -qE "drydock-[^[:space:]]+-${_disc}($|[[:space:]])"; then
 			continue
 		fi
-		if printf '%s' "$_ps_out" | grep -qF "$_shell_name"; then
+		if printf '%s' "$_ps_out" | grep -qE "drydock-[^[:space:]]+-${_disc}-shell($|[[:space:]])"; then
 			continue
 		fi
 		# Orphan — prune dir and sibling .json.
@@ -460,16 +461,16 @@ seed_session_config_dir() {
 	local disc="$1"
 	local session_dir="$HOME/.claude-container-${disc}"
 	local session_json="$HOME/.claude-container-${disc}.json"
-	local run_name="drydock-${PROJECT_NAME}-${disc}"
-	local shell_name="drydock-${PROJECT_NAME}-${disc}-shell"
-
-	# Live-container guard: do not wipe a dir whose container is still running.
+	# Live-container guard: project-agnostic — match ANY drydock-*-<disc> or
+	# drydock-*-<disc>-shell container, regardless of which project owns it.
+	# This prevents a cross-project invocation from re-seeding a live session dir
+	# whose discriminator happens to match the current invocation's disc.
 	local _ps_out
 	_ps_out="$("$DOCKER" ps -a 2>/dev/null)" || true
-	if printf '%s' "$_ps_out" | grep -qF "$run_name"; then
+	if printf '%s' "$_ps_out" | grep -qE "drydock-[^[:space:]]+-${disc}($|[[:space:]])"; then
 		return 0
 	fi
-	if printf '%s' "$_ps_out" | grep -qF "$shell_name"; then
+	if printf '%s' "$_ps_out" | grep -qE "drydock-[^[:space:]]+-${disc}-shell($|[[:space:]])"; then
 		return 0
 	fi
 
