@@ -40,6 +40,27 @@ MOUNTS
   export MOUNTINFO_FILE=/dev/null
   # Hermetic SUBMOUNT_OVERLAY so compose_files doesn't write to /tmp.
   export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount.yml"
+
+  # Default DOCKER stub: returns empty for "ps" sub-commands so export_compose_env
+  # GC/collision-check/seed calls are safe for tests that don't stub DOCKER.
+  local _default_docker_stub="$BATS_TEST_TMPDIR/default-docker-stub-$$"
+  cat >"$_default_docker_stub" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then printf ''; fi
+exit 0
+STUB
+  chmod +x "$_default_docker_stub"
+  export DOCKER="$_default_docker_stub"
+
+  # Default discriminator stub: emit "dflt" for predictable test output.
+  _default_disc() { printf 'dflt'; }
+  export DRYDOCK_DISCRIMINATOR_FN=_default_disc
+
+  # Default fake HOME with prototype dirs for export_compose_env calls.
+  local _default_home="$BATS_TEST_TMPDIR/default-home-$$"
+  mkdir -p "$_default_home/.claude-container"
+  touch "$_default_home/.claude-container.json"
+  export HOME="$_default_home"
 }
 
 # ── compose_files tests ──────────────────────────────────────────────────────

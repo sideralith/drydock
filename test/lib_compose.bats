@@ -49,6 +49,30 @@ MOUNTS
 	# Hermetic seam: unrelated ssh/gpg/engram tests must not be perturbed by the
 	# host machine having real submounts under $TEST_PROJECT_DIR.
 	export MOUNTINFO_FILE=/dev/null
+
+	# Default DOCKER stub: returns empty for "ps" sub-commands so export_compose_env
+	# GC/collision-check/seed calls are safe for tests that don't stub DOCKER.
+	local _default_docker_stub="$BATS_TEST_TMPDIR/default-docker-stub-$$"
+	cat >"$_default_docker_stub" <<'STUB'
+#!/usr/bin/env bash
+printf '' >> "${DOCKER_CALL_LOG:-/dev/null}"
+if [ "${1:-}" = "ps" ]; then printf ''; fi
+exit 0
+STUB
+	chmod +x "$_default_docker_stub"
+	export DOCKER="$_default_docker_stub"
+
+	# Default discriminator stub: emit "dflt" so export_compose_env tests that
+	# don't care about the disc value get a stable, predictable result.
+	_default_disc() { printf 'dflt'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_default_disc
+
+	# Default fake HOME with prototype dirs for export_compose_env calls.
+	# Tests that need a specific HOME override it inline.
+	local _default_home="$BATS_TEST_TMPDIR/default-home-$$"
+	mkdir -p "$_default_home/.claude-container"
+	touch "$_default_home/.claude-container.json"
+	export HOME="$_default_home"
 }
 
 # ── compose_files / generate_submount_overlay ─────────────────────────────────
@@ -204,22 +228,28 @@ MOUNTS
 }
 
 @test "export_compose_env: deploy key present — sets DRYDOCK_SSH_DEPLOY_KEY" {
-	HOME="$BATS_TEST_TMPDIR/fakehome"
+	HOME="$BATS_TEST_TMPDIR/fakehome-dk-$$"
 	mkdir -p "$HOME/.config/drydock/keys"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	: >"$HOME/.config/drydock/keys/myproject_deploy"
 	export_compose_env "$TEST_PROJECT_DIR"
 	[ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/myproject_deploy" ]
 }
 
 @test "export_compose_env: no deploy key — DRYDOCK_SSH_DEPLOY_KEY unset" {
-	HOME="$BATS_TEST_TMPDIR/fakehome"
+	HOME="$BATS_TEST_TMPDIR/fakehome-nodk-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	export_compose_env "$TEST_PROJECT_DIR"
 	[ -z "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]
 }
 
 @test "export_compose_env: signing dir with a key — sets DRYDOCK_GPG_SIGNINGKEY" {
 	command -v gpg >/dev/null 2>&1 || skip "gpg not installed"
-	HOME="$BATS_TEST_TMPDIR/fakehome"
+	HOME="$BATS_TEST_TMPDIR/fakehome-gpg-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	mkdir -p "$HOME/.config/drydock/signing"
 	chmod 700 "$HOME/.config/drydock/signing"
 	GNUPGHOME="$HOME/.config/drydock/signing" gpg --batch --pinentry-mode loopback --passphrase '' \
@@ -1258,11 +1288,11 @@ _setup_wiring_home() {
 	[ "$DRYDOCK_SESSION_NAME" = "drydock-myproject-test" ]
 }
 
-@test "export_compose_env: collision retry uses next disc when first collides" {
+@test "export_compose_env: collision retry uses next disc when first two collide" {
 	local fake_home="$BATS_TEST_TMPDIR/wire-home-retry-$$"
 	_setup_wiring_home "$fake_home"
 	export HOME="$fake_home"
-	# Discriminator fn emits "aaaa" first, "aaaa" again (collision), then "bbbb".
+	# Discriminator fn emits "aaaa" twice (both collide), then "bbbb" (free).
 	local call_count_file="$BATS_TEST_TMPDIR/disc-call-count-$$"
 	printf '0' >"$call_count_file"
 	_seq_disc() {
@@ -1276,12 +1306,17 @@ _setup_wiring_home() {
 		esac
 	}
 	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc
-	# Stateful stub: first ps call returns "drydock-myproject-aaaa" (collision),
-	# subsequent calls return empty (no collision).
+	# Stateful stub sequence: gc_orphan_session_dirs calls docker ps -a once at
+	# entry (even with no orphan dirs to process); the collision loop then makes
+	# additional ps calls. Responses in order:
+	#   call 0 (gc pre-check):           "" — no orphans, gc does nothing
+	#   call 1 (collision check: "aaaa"): "drydock-myproject-aaaa" — collision!
+	#   call 2 (collision check: "aaaa"): "drydock-myproject-aaaa" — still collides
+	#   call 3 (collision check: "bbbb"): "" — bbbb is free, break
 	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-retry-$$"
 	printf '0' >"$counter_file"
 	local stub
-	stub="$(_make_docker_ps_seq_stub "$counter_file" "drydock-myproject-aaaa" "")"
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "" "drydock-myproject-aaaa" "drydock-myproject-aaaa" "")"
 	export DOCKER="$stub"
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-retry-$$.log"
 	touch "$DOCKER_CALL_LOG"

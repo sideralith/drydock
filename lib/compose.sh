@@ -284,7 +284,46 @@ export_compose_env() {
 	USER_NAME="$(id -un)"
 	export HOST_DOCKER_GID
 	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
-	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
+
+	# ── Per-session identity: discriminator + session dirs ────────────────────
+	# Order: GC orphans → generate discriminator (collision retry) → seed dir.
+	# GC must run first so orphan dirs don't pollute the collision check.
+	gc_orphan_session_dirs
+
+	# Collision retry: generate a discriminator and verify it is free.
+	# A "free" disc means no drydock-*-<disc> or drydock-*-<disc>-shell
+	# container exists in docker ps -a. On a collision: remove the stopped
+	# container for the CURRENT project+disc (belt-and-suspenders cleanup), then
+	# retry with a fresh disc. R4 (no-kill): running containers are never stopped —
+	# a collision with a running container forces a retry with a new disc.
+	local _disc _session_name _ps_out _max_retries=5 _attempt=0
+	while true; do
+		_attempt=$((_attempt + 1))
+		if [ "$_attempt" -gt "$_max_retries" ]; then
+			err "drydock: could not find a free session discriminator after ${_max_retries} attempts — too many concurrent sessions?"
+		fi
+		_disc="$("$DRYDOCK_DISCRIMINATOR_FN")"
+		_session_name="drydock-${PROJECT_NAME}-${_disc}"
+		_ps_out="$("$DOCKER" ps -a 2>/dev/null)" || true
+		# Check if any container (any project) already uses this disc.
+		if printf '%s' "$_ps_out" | grep -qE "drydock-[^[:space:]]+-${_disc}($|[[:space:]])"; then
+			# Remove the stopped container for THIS project+disc if present.
+			# Silently skips if it belongs to another project or is still running.
+			"$DOCKER" rm "${_session_name}" >/dev/null 2>&1 || true
+			# Always retry with a fresh disc to guarantee uniqueness.
+			continue
+		fi
+		break
+	done
+
+	export DRYDOCK_DISCRIMINATOR="$_disc"
+	export DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-${_disc}"
+	export DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-${_disc}.json"
+	export DRYDOCK_SESSION_NAME="$_session_name"
+	export COMPOSE_PROJECT_NAME="$_session_name"
+
+	# Seed the per-session config dir from the freshly-synced prototype.
+	seed_session_config_dir "$_disc"
 
 	# ── drydock container identity markers (issue #8, Slice A) ───────────────
 	# Forwarded into the container via the environment: block so Claude can
@@ -473,6 +512,12 @@ seed_session_config_dir() {
 	if printf '%s' "$_ps_out" | grep -qE "drydock-[^[:space:]]+-${disc}-shell($|[[:space:]])"; then
 		return 0
 	fi
+
+	# If the prototype does not exist yet, skip seeding.
+	# In production, ensure_runtime_dirs always creates it before export_compose_env
+	# is called. Tests that bypass ensure_runtime_dirs may land here without a
+	# prototype; returning early is safe (no dir to copy = no corruption).
+	[ -d "$HOME/.claude-container" ] || return 0
 
 	# Clean re-seed: remove stale session dir.
 	rm -rf "$session_dir"
