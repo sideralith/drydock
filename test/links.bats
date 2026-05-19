@@ -255,6 +255,24 @@ _links_setup() {
 	)
 }
 
+@test "cmd_link: FIX-3 rejects duplicate container target from two different host paths" {
+	_links_setup
+
+	local sibling_a="$BATS_TEST_TMPDIR/repo-a"
+	local sibling_b="$BATS_TEST_TMPDIR/repo-b"
+	mkdir -p "$sibling_a" "$sibling_b"
+
+	(
+		cd "$PROJECT_DIR"
+		# First link with an explicit custom target
+		cmd_link "$sibling_a" "/custom/target"
+		# Second link to same container target — should fail
+		run cmd_link "$sibling_b" "/custom/target"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"container target"* ]]
+	)
+}
+
 @test "cmd_link: ADR-5 basename collision rejects with error naming both paths" {
 	_links_setup
 

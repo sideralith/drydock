@@ -667,12 +667,12 @@ cmd_link() {
 		container_target="/workspace-siblings/$name/"
 	fi
 
-	# ADR-5: basename collision check against existing list entries
+	# ADR-5: basename collision check + container-target uniqueness check
 	local list_file
 	list_file="$(_links_list_file)"
 	if [ -f "$list_file" ]; then
-		local existing_host existing_name
-		while IFS='|' read -r existing_host _ _; do
+		local existing_host existing_target existing_name
+		while IFS='|' read -r existing_host existing_target _; do
 			[ -z "$existing_host" ] && continue
 			existing_name="$(basename "$existing_host")"
 			if [ "$existing_name" = "$name" ] && [ "$existing_host" != "$canonical" ]; then
@@ -682,6 +682,11 @@ cmd_link() {
 			if [ "$existing_host" = "$canonical" ]; then
 				note "already linked: $canonical"
 				return 0
+			fi
+			# FIX #3: container target uniqueness — two entries sharing the same
+			# container target would cause Docker Compose to silently keep only one.
+			if [ -n "$existing_target" ] && [ "$existing_target" = "$container_target" ]; then
+				err "container target collision: '$container_target' is already used by '$existing_host'"
 			fi
 		done < "$list_file"
 	fi
