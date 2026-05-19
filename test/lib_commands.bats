@@ -1716,3 +1716,86 @@ _setup_ensure_synced() {
 	rm -rf "$tmpdir"
 }
 
+# ── cmd_run / cmd_shell name tests (concurrent-sessions, PR 2 Wire-in) ────────
+# Task 2.6: verify cmd_run uses DRYDOCK_SESSION_NAME for --name, and cmd_shell
+# appends -shell suffix. No existing container is killed or stopped (R4).
+#
+# Helper: set up a hermetic env for cmd_run/cmd_shell tests with disc stub.
+_setup_cmd_name_test() {
+	local fakehome="$BATS_TEST_TMPDIR/cmd-name-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	# Stub ensure_* to prevent side effects.
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	ensure_synced() { :; }
+
+	# Pin the discriminator to "abcd" for predictable assertions.
+	_fixed_disc() { printf 'abcd'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+
+	# DOCKER: returns empty for ps (no containers = no collisions).
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-name-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	# Project dir for the test.
+	local project_dir="$BATS_TEST_TMPDIR/cmd-name-proj-$$"
+	mkdir -p "$project_dir"
+	printf '%s' "$project_dir"
+}
+
+@test "cmd_run: container --name uses DRYDOCK_SESSION_NAME (drydock-<proj>-<disc>)" {
+	local project_dir
+	project_dir="$(_setup_cmd_name_test)"
+	# Override exec to capture the compose run args instead of replacing process.
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_run "$project_dir"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# The --name arg must be drydock-<project>-abcd (discriminator suffix).
+	[[ "$log" == *"--name drydock-cmd-name-proj-"*"-abcd"* ]]
+}
+
+@test "cmd_shell: container --name uses DRYDOCK_SESSION_NAME with -shell suffix" {
+	local project_dir
+	project_dir="$(_setup_cmd_name_test)"
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_shell "$project_dir"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# The --name arg must be drydock-<project>-abcd-shell.
+	[[ "$log" == *"--name drydock-cmd-name-proj-"*"-abcd-shell"* ]]
+}
+
+@test "cmd_run: does NOT stop or kill an existing container (R4 no-kill)" {
+	local project_dir
+	project_dir="$(_setup_cmd_name_test)"
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_run "$project_dir"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# No "stop" or "kill" subcommand must appear in docker call log.
+	[[ "$log" != *" stop "* ]]
+	[[ "$log" != *" kill "* ]]
+}
+
+@test "cmd_shell: does NOT stop or kill an existing container (R4 no-kill)" {
+	local project_dir
+	project_dir="$(_setup_cmd_name_test)"
+	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	run cmd_shell "$project_dir"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" != *" stop "* ]]
+	[[ "$log" != *" kill "* ]]
+}
