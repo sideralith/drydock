@@ -63,6 +63,15 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   macOS virtiofs, or a bind-mount crossing the Docker Desktop VM boundary. On a native filesystem
   with working `fcntl` locks, multiple sessions are safe; the cross-VM-boundary mount is what breaks
   the lock guarantee. (The engram DB lock semantics are governed in detail by INV-5.)
+  **Container-vs-container (v0.2.0+).** Concurrent same-project sessions introduce a second
+  consumer class: container-vs-container alongside host-vs-container. Two drydock containers
+  running concurrently for the same project engage INV-2 for exactly the same reasons as reasons
+  (1) and (2) above — `~/.claude.json` last-writer-wins clobber and the OAuth token refresh race
+  apply equally when both writers are containers. The mechanism that keeps INV-2 satisfied in this
+  case is per-session config isolation: each invocation mounts its own `~/.claude-container-<disc>/`
+  directory and `~/.claude-container-<disc>.json` file (where `<disc>` is a 4-character random hex
+  discriminator). No two concurrent containers ever share a `~/.claude*` source path with write
+  access, so neither failure mode can occur between sessions.
 - **Consequence of violating**: Sharing host `~/.claude/`, `~/.claude.json`, and `~/.engram/` with
   the container produces silent failure across all four reasons: concurrent sessions clobber
   `~/.claude.json` writes (last-writer-wins, lost config — no error); trigger an OAuth lockout
