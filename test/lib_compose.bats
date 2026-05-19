@@ -1391,7 +1391,109 @@ _setup_wiring_home() {
 	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-c3d4" ]]
 }
 
-# RED — fix #2 (WARNING): GC must NOT prune dirs whose discriminator suffix does
+# ── generate_links_overlay ────────────────────────────────────────────────────
+
+@test "generate_links_overlay: empty/absent list → overlay file NOT written" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-empty"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-empty.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ ! -f "$LINKS_OVERLAY" ]
+}
+
+@test "generate_links_overlay: two entries → overlay has 2 :ro volume lines; no environment: block" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-two"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	# Create the list file for myproject
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	printf '/host/path/repo-a|/workspace-siblings/repo-a/|\n' > "$list_dir/myproject.list"
+	printf '/host/path/repo-b|/custom/target|\n' >> "$list_dir/myproject.list"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-two.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ -f "$LINKS_OVERLAY" ]
+	grep -q '^services:' "$LINKS_OVERLAY"
+	grep -q '^  drydock:' "$LINKS_OVERLAY"
+	grep -q '^    volumes:' "$LINKS_OVERLAY"
+	grep -qF '"/host/path/repo-a:/workspace-siblings/repo-a/:ro"' "$LINKS_OVERLAY"
+	grep -qF '"/host/path/repo-b:/custom/target:ro"' "$LINKS_OVERLAY"
+	# NO environment: block (simpler than submounts — D4)
+	! grep -q 'environment:' "$LINKS_OVERLAY"
+}
+
+@test "generate_links_overlay: custom container target honored in volume line" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-custom"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	printf '/host/path/mylib|/opt/mylib|\n' > "$list_dir/myproject.list"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-custom.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ -f "$LINKS_OVERLAY" ]
+	grep -qF '"/host/path/mylib:/opt/mylib:ro"' "$LINKS_OVERLAY"
+}
+
+# ── T12-RED: compose_files wiring ─────────────────────────────────────────────
+
+@test "compose_files: LINKS_OVERLAY present and non-empty → included after submount, before hardening" {
+	local fake_home="$BATS_TEST_TMPDIR/cf-home-links"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	printf '/host/repo-a|/workspace-siblings/repo-a/|\n' > "$list_dir/myproject.list"
+
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount-links-test.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-test.yml"
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+
+	# Must include LINKS_OVERLAY
+	[[ "$output" == *"$LINKS_OVERLAY"* ]]
+
+	# LINKS_OVERLAY must appear after base and before COMPOSE_HARDENING
+	local base_pos links_pos hardening_pos
+	base_pos=$(printf '%s\n' "$output" | grep -n "docker-compose.yml" | head -1 | cut -d: -f1)
+	links_pos=$(printf '%s\n' "$output" | grep -n "links-test.yml" | head -1 | cut -d: -f1)
+	hardening_pos=$(printf '%s\n' "$output" | grep -n "hardening" | head -1 | cut -d: -f1)
+	[ "$base_pos" -lt "$links_pos" ]
+	[ "$links_pos" -lt "$hardening_pos" ]
+}
+
+@test "compose_files: absent links list → LINKS_OVERLAY NOT included" {
+	local fake_home="$BATS_TEST_TMPDIR/cf-home-nolinks"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+	# No list file created
+
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount-nolinks-test.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-nolinks-test.yml"
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+
+	[[ "$output" != *"links-nolinks-test.yml"* ]]
+}
+
+# ── RED — fix #2 (WARNING): GC must NOT prune dirs whose discriminator suffix does
 # not match the generator's shape ^[0-9a-f]{4}$  (e.g. "backup").
 @test "gc_orphan_session_dirs: does NOT prune dir with non-hex discriminator suffix" {
 	local fake_home="$BATS_TEST_TMPDIR/gc-home-backup"

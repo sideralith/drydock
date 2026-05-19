@@ -222,6 +222,42 @@ generate_submount_overlay() {
 	} >"$SUBMOUNT_OVERLAY"
 }
 
+# generate_links_overlay — write a compose overlay for sibling mounts from the
+# project's link list (~/.config/drydock/links/<project>.list).
+# If the list is absent or empty, do NOT create the file.
+# Overlay shape (simpler than submounts — no environment: block, D4):
+#   services:
+#     drydock:
+#       volumes:
+#         - "<host>:<target>:ro"
+generate_links_overlay() {
+	local project_dir="$1"
+	[ -n "${LINKS_OVERLAY:-}" ] || return 0
+
+	local proj_name
+	proj_name="$(sanitize_project_name "$(basename "$project_dir")")"
+	local list_file="$HOME/.config/drydock/links/${proj_name}.list"
+
+	[ -f "$list_file" ] || return 0
+
+	local body=""
+	local host target flags
+	while IFS='|' read -r host target flags; do
+		[ -z "$host" ] && continue
+		body+=$(printf '      - "%s:%s:ro"\n' "$host" "$target")
+		body+=$'\n'
+	done < "$list_file"
+
+	[ -n "$body" ] || return 0
+
+	{
+		printf 'services:\n'
+		printf '  drydock:\n'
+		printf '    volumes:\n'
+		printf '%s' "$body"
+	} > "$LINKS_OVERLAY"
+}
+
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
 	local project_dir="$1"
@@ -229,6 +265,10 @@ compose_files() {
 	generate_submount_overlay "$project_dir"
 	if [ -f "${SUBMOUNT_OVERLAY:-}" ] && [ -s "${SUBMOUNT_OVERLAY:-}" ]; then
 		printf '%s\n' "-f" "$SUBMOUNT_OVERLAY"
+	fi
+	generate_links_overlay "$project_dir"
+	if [ -f "${LINKS_OVERLAY:-}" ] && [ -s "${LINKS_OVERLAY:-}" ]; then
+		printf '%s\n' "-f" "$LINKS_OVERLAY"
 	fi
 	# Container hardening defaults (cap_drop, no-new-privileges, tmpfs /tmp).
 	# Suppressed ONLY when DRYDOCK_NO_HARDENING is set to the literal value "1"
