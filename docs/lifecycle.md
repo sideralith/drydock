@@ -9,10 +9,10 @@ right place for each action.
 | Action | Writes to | Shared host ↔ container? |
 |---|---|---|
 | Update binaries: `gentle-ai`, `claude`, `engram`, `gga`, `uv`, `node` | `~/.local/` | **YES** — mount RW |
-| `/plugin install <x>` inside Claude | `~/.claude/plugins/` | **NO** — separate (`~/.claude-container/plugins/`) |
+| `/plugin install <x>` inside Claude | `~/.claude/plugins/` | **NO** — separate (`~/.claude-container-<disc>/plugins/`, per-session) |
 | Create/edit skill in `~/.claude/skills/` | `~/.claude/skills/` | **NO** — separate |
 | Edit `~/.claude/CLAUDE.md` or `settings.json` (global) | `~/.claude/` | **NO** — separate |
-| Onboarding flags, "seen hints", project registry, MCP servers, OAuth | `~/.claude.json` | **NO** — separate (`~/.claude-container.json`) |
+| Onboarding flags, "seen hints", project registry, MCP servers, OAuth | `~/.claude.json` | **NO** — separate (`~/.claude-container-<disc>.json`, per-session) |
 | Edit `~/.claude/hooks/` | blocked from container (RO overlay) | host-only |
 | drydock guardrail policy (`permissions.deny` git + OS safety, `hooks.SessionStart`, `hooks.PreToolUse` destructive-command hook) | image-baked managed-settings (`/etc/claude-code/managed-settings.d/`) — update via `drydock build` | N/A — applied at highest precedence, not overridable from project `settings.json` |
 | Edits to `.claude/settings.json` of a project | repo at `$PROJECT_DIR` | **YES** — same mount |
@@ -41,8 +41,10 @@ causes skew).
 
 ### Plugins from Claude (`/plugin install foo`)
 
-- **From container**: stays only in `~/.claude-container/plugins/`. Host
-  doesn't know. Perfect for trying plugins without committing to them.
+- **From container**: stays only in `~/.claude-container-<disc>/plugins/`
+  (the per-session dir). Host doesn't know. The per-session dir is discarded
+  when GC'd by `gc_orphan_session_dirs` — container-installed plugins do NOT
+  persist across sessions unless promoted to the host.
 - **From host**: stays only in `~/.claude/plugins/`. Container doesn't see it
   until `drydock sync`.
 - **No automatic promote**. If a plugin you tested in the container convinces
@@ -66,5 +68,8 @@ export/import recipe (host and container DBs do not auto-sync).
   host, container picks up.
 - **`~/.claude/`, `~/.claude.json`, `~/.engram/`** = **isolated workspace**.
   The container is a **reversible playground**; the host is **canonical**.
+  For Claude config specifically, "reversible" now means "discarded on session
+  end" — each session gets its own per-session dir, reaped by
+  `gc_orphan_session_dirs` after the session exits.
 - When in doubt: change on host, then `drydock sync`, then restart the
   container session.

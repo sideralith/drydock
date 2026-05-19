@@ -60,7 +60,10 @@ If you later install engram, the next `drydock run` picks it up automatically
 
 By default, drydock gives the container its own engram DB (`~/.engram-container/`,
 isolated mode). This prevents SQLite lock contention between a host session and
-a container session.
+a container session. Concurrent drydock sessions for the same project share the
+one isolated `~/.engram-container/` DB; on native Linux this is safe (reliable
+`fcntl` locks — SQLite WAL handles concurrency); on WSL2 and macOS the same
+unreliable-lock caveat as INV-5 applies.
 
 **Opt-in to shared mode** (host and container share one DB):
 

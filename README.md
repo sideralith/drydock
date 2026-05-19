@@ -27,7 +27,8 @@ Debian 12 slim container that:
 - **RO-overlays the agent's hooks, image-bakes its deny policy** — it can't self-edit either its hook scripts or its git/OS destructive-command guardrails.
 - **Splits memory and config** — the container gets its own `~/.claude/` +
   `~/.claude.json` siblings, so concurrent host sessions on other projects don't
-  race. If you use the optional [engram](docs/engram.md) memory server, it gets
+  race; and each concurrent session for the same project gets its own siblings
+  too. If you use the optional [engram](docs/engram.md) memory server, it gets
   an isolated container DB too.
 - **Bind-mounts the Docker socket (DooD)** — the containerized agent talks to
   your host Docker daemon, so it can bring your project's stack up, `docker exec`
@@ -96,9 +97,12 @@ and creates the symlink, then stops. Run `drydock build` and add
 cd <project> && drydock   # launches Claude Code in this project, sandboxed
 ```
 
-Host-side runtime state (`~/.engram-container/`, `~/.claude-container/`,
-`~/.claude-container.json`) is auto-created on first run. You never call
-`drydock setup` directly unless you want to.
+Host-side runtime state is auto-created on first run: `~/.engram-container/`
+(engram DB, optional), `~/.claude-container/` + `~/.claude-container.json`
+(the per-session config **prototype**), and a per-session
+`~/.claude-container-<disc>/` + `~/.claude-container-<disc>.json` pair (the
+live bind-mount sources for this run, seeded from the prototype). You never
+call `drydock setup` directly unless you want to.
 
 ## Usage
 
@@ -190,8 +194,9 @@ The container runs the Claude CLI, your plugins/skills, and — optionally — t
 engram MCP server (see [docs/engram.md](docs/engram.md)), with the Docker socket
 bind-mounted (Docker-out-of-Docker — talks to the host's daemon, no nested
 daemon). Host config lives in two places (`~/.claude/` directory and
-`~/.claude.json` file); drydock mounts container-specific siblings of both, the
-project tree, and the docker socket. Hooks are RO. The image is universal — only
+`~/.claude.json` file); drydock mounts per-session container-specific siblings
+of both (seeded from a shared prototype each run), the project tree, and the
+docker socket. Hooks are RO. The image is universal — only
 env vars (`PROJECT_DIR` etc.) change per project; a dynamically-generated overlay
 propagates sub-mounts under `$PROJECT_DIR`.
 
