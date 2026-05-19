@@ -691,7 +691,13 @@ cmd_link() {
 	# Compute container target (default or custom)
 	local container_target
 	if [ -n "$target_arg" ]; then
-		container_target="$target_arg"
+		# R3-FIX-3: strip trailing slash before ALL validation. Docker treats
+		# /foo and /foo/ as the same mount target; storing them as different
+		# strings causes the collision check to miss entries that mount to the
+		# same effective path. A single root "/" is exempt — removing its slash
+		# yields "" which is wrong; the root-reject check (b) fires first anyway.
+		container_target="${target_arg%/}"
+		[ -z "$container_target" ] && container_target="/"
 		# SP-7: custom target rejection guard (FIX #2 — replaces incomplete denylist).
 		# (a) Must be an absolute path.
 		if [[ "$container_target" != /* ]]; then
@@ -770,14 +776,15 @@ cmd_link() {
 			err "rejected: container target '$container_target' shadows the /workspace-siblings parent directory"
 		fi
 	else
-		container_target="/workspace-siblings/$name/"
+		# R3-FIX-3: no trailing slash — consistent with normalized custom targets.
+		container_target="/workspace-siblings/$name"
 	fi
 
 	# ADR-5: basename collision check + container-target uniqueness check
 	local list_file
 	list_file="$(_links_list_file)"
 	if [ -f "$list_file" ]; then
-		local existing_host existing_target existing_name
+		local existing_host existing_target existing_name existing_target_norm
 		while IFS='|' read -r existing_host existing_target _; do
 			[ -z "$existing_host" ] && continue
 			existing_name="$(basename "$existing_host")"
@@ -791,7 +798,10 @@ cmd_link() {
 			fi
 			# FIX #3: container target uniqueness — two entries sharing the same
 			# container target would cause Docker Compose to silently keep only one.
-			if [ -n "$existing_target" ] && [ "$existing_target" = "$container_target" ]; then
+			# R3-FIX-3: normalize existing_target by stripping trailing slash so
+			# that old entries written with a slash still collide correctly.
+			existing_target_norm="${existing_target%/}"
+			if [ -n "$existing_target_norm" ] && [ "$existing_target_norm" = "$container_target" ]; then
 				err "container target collision: '$container_target' is already used by '$existing_host'"
 			fi
 		done < "$list_file"

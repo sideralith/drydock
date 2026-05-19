@@ -42,8 +42,9 @@ _links_setup() {
 	)
 
 	[ -f "$list_file" ]
-	# Entry: realpath(sibling_dir)|/workspace-siblings/sibling-repo/|
-	grep -qF "$(realpath "$sibling_dir")|/workspace-siblings/sibling-repo/|" "$list_file"
+	# R3-FIX-3: default target is stored WITHOUT trailing slash.
+	# Entry: realpath(sibling_dir)|/workspace-siblings/sibling-repo|
+	grep -qF "$(realpath "$sibling_dir")|/workspace-siblings/sibling-repo|" "$list_file"
 }
 
 @test "cmd_link: SP-1 idempotent — linking same path twice produces exactly one entry" {
@@ -1043,5 +1044,66 @@ _links_setup() {
 		run cmd_link "$sibling_dir" "$real_home/.claude-data"
 		[ "$status" -ne 0 ]
 		[[ "$output" == *"shadows"* ]]
+	)
+}
+
+# ── R3-FIX-3: trailing-slash mismatch hides container-target collisions ───────
+
+@test "cmd_link: R3-FIX-3 custom target stored without trailing slash" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "/custom/mount/"
+		[ "$status" -eq 0 ]
+	)
+
+	# Must be stored WITHOUT trailing slash
+	grep -qF "$(realpath "$sibling_dir")|/custom/mount|" "$list_file"
+	run ! grep -qF "$(realpath "$sibling_dir")|/custom/mount/|" "$list_file"
+}
+
+@test "cmd_link: R3-FIX-3 default target stored without trailing slash" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Default target must be stored WITHOUT trailing slash
+	grep -qF "$(realpath "$sibling_dir")|/workspace-siblings/sibling-repo|" "$list_file"
+	run ! grep -qF "$(realpath "$sibling_dir")|/workspace-siblings/sibling-repo/|" "$list_file"
+}
+
+@test "cmd_link: R3-FIX-3 collision detected when one entry uses trailing slash and new entry does not" {
+	_links_setup
+
+	local sibling_a="$BATS_TEST_TMPDIR/repo-a"
+	local sibling_b="$BATS_TEST_TMPDIR/repo-b"
+	mkdir -p "$sibling_a" "$sibling_b"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	# Plant an entry with trailing slash (as if written by old code)
+	printf '%s|/custom/target/|\n' "$(realpath "$sibling_a")" >> "$list_file"
+
+	(
+		cd "$PROJECT_DIR"
+		# This should detect collision with /custom/target/ after normalization
+		run cmd_link "$sibling_b" "/custom/target"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"collision"* ]]
 	)
 }
