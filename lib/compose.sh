@@ -342,7 +342,7 @@ export_compose_env() {
 		if [ -f "$_sentinel" ]; then
 			if host_fs_locks_unreliable && [ "${DRYDOCK_ENGRAM_SHARED:-}" != "force" ]; then
 				export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
-				warn "shared engram DB requested but bind-mount POSIX locks unreliable on this host (WSL2 9P / macOS virtiofs) — using isolated DB instead; run 'engram sync --import' to bridge, or set DRYDOCK_ENGRAM_SHARED=force to override (risks SQLite WAL corruption)"
+				warn "shared engram DB requested but bind-mount POSIX locks unreliable on this host (WSL2 9P / macOS virtiofs) — using isolated DB instead; see docs/engram.md to consolidate host and container memory, or set DRYDOCK_ENGRAM_SHARED=force to override (risks SQLite WAL corruption)"
 			else
 				export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram"
 				if host_fs_locks_unreliable; then
