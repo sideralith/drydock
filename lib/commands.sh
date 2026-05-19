@@ -803,10 +803,15 @@ cmd_unlink() {
 
 	# Remove lines whose first field equals canonical (anchored to host column).
 	# awk exits 0 even when no output lines remain — set -e safe.
+	# R2-FIX-7: trap guarantees the .tmp file is cleaned up if mv fails under
+	# set -e; trap - RETURN clears it after a successful mv so it's a no-op
+	# on the happy path.
 	local tmp_file
 	tmp_file="${list_file}.tmp$$"
+	trap 'rm -f "$tmp_file"' RETURN
 	awk -F'|' -v c="$canonical" '$1!=c' "$list_file" > "$tmp_file"
 	mv "$tmp_file" "$list_file"
+	trap - RETURN
 	ok "unlinked: $canonical"
 }
 

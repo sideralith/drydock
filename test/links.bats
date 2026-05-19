@@ -807,6 +807,29 @@ _links_setup() {
 	[ ! -f "$list_file" ] || [ ! -s "$list_file" ]
 }
 
+# ── R2-FIX-7: cmd_unlink leaves no stale .tmp file after successful unlink ────
+
+@test "cmd_unlink: R2-FIX-7 no stale .tmp file left after successful unlink" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+		run cmd_unlink "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# No .tmp* file must exist alongside the list file
+	local tmp_count
+	tmp_count="$(ls "$FAKE_HOME/.config/drydock/links/"*.tmp* 2>/dev/null | wc -l || echo 0)"
+	[ "$tmp_count" -eq 0 ]
+}
+
 # ── T8-RED: cmd_links ─────────────────────────────────────────────────────────
 
 @test "cmd_links: SP-5 shows two entries — stdout contains host paths and targets" {
