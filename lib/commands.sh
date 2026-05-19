@@ -87,12 +87,16 @@ cmd_setup() {
 		for excluded in sessions projects file-history shell-snapshots paste-cache cache backups telemetry ide session-env downloads uploads plans tasks themes; do
 			rm -rf "${CONTAINER_CLAUDE:?}/$excluded"
 		done
-		rm -f "$CONTAINER_CLAUDE/.last-cleanup" "$CONTAINER_CLAUDE/scheduled_tasks.lock" "$CONTAINER_CLAUDE/.credentials.json"
+		rm -f "$CONTAINER_CLAUDE/.last-cleanup" "$CONTAINER_CLAUDE/scheduled_tasks.lock"
 		mkdir -p "$CONTAINER_CLAUDE"/{sessions,projects,file-history,shell-snapshots,cache,backups,telemetry,plans,tasks,paste-cache}
 		ok "$CONTAINER_CLAUDE inicializado ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	else
 		ok "$CONTAINER_CLAUDE ya existe ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	fi
+	# Purge any stale OAuth token unconditionally — covers both the fresh-init
+	# and the upgrade (already-exists) path.  Uses the fail-safe ${VAR:?} form
+	# consistent with the rm -rf calls above.
+	rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 
 	# ~/.claude.json — the OTHER config location Claude Code reads (project list,
 	# onboarding flags, MCP servers, OAuth account). Without a container-specific

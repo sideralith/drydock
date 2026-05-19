@@ -567,6 +567,31 @@ setup() {
 	[ ! -f "$CONTAINER_CLAUDE/.credentials.json" ]
 }
 
+# ── cmd_setup: purge .credentials.json on the upgrade (else) path ────────────
+
+@test "cmd_setup: purges .credentials.json when CONTAINER_CLAUDE already exists (upgrade path)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Pre-create CONTAINER_CLAUDE so the else branch runs (upgrade path),
+	# and plant a stale credentials file inside it.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE/.credentials.json"
+
+	run cmd_setup
+	[ "$status" -eq 0 ]
+	[ ! -f "$CONTAINER_CLAUDE/.credentials.json" ]
+}
+
 # ── ensure_runtime_dirs: shared mode ─────────────────────────────────────────
 
 @test "ensure_runtime_dirs: shared mode (sentinel present + usable) — missing CONTAINER_ENGRAM does NOT trigger cmd_setup" {
