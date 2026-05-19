@@ -713,3 +713,68 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     env_rules="$(jq '[.permissions.deny[] | select(test("\\.(env)\"?$|/\\.env"))] | length' "$SECRETS_FILE")"
     [ "$env_rules" -eq 0 ]
 }
+
+# ── T19: INV-1 runtime integration — //**/ rules baked into the running image ───
+#
+# These tests require a built drydock:latest image. They are gated by
+# DRYDOCK_INTEGRATION=1 and skip cleanly in unit mode (CI stays green without it).
+#
+# Scope: verify that the DEPLOYED managed-settings file at
+#   /etc/claude-code/managed-settings.d/00-secrets.json
+# inside the container contains the //**/-anchored credential deny rules.
+# This is drydock's contract (INV-3 tamper-proof bake step), NOT a test of
+# Claude Code's permission engine (which requires external auth and is upstream).
+#
+# Note on .docker asymmetry: .docker/config.json has Read-only coverage (no
+# Edit/Write) by explicit design decision (Judge B R5). Test T19-B asserts only
+# the Read rule and does NOT assert Edit/Write for .docker.
+
+@test "00-secrets: //**/ root-anchored R/E/W rules baked into running image (integration)" {
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
+
+    run docker run --rm drydock:latest \
+        cat /etc/claude-code/managed-settings.d/00-secrets.json
+    [ "$status" -eq 0 ]
+
+    local deployed_json="$output"
+
+    # Four symmetric dirs: Read, Edit, Write must all use //**/ anchor
+    for verb in "Read" "Edit" "Write"; do
+        for dir in ".ssh" ".aws" ".gnupg" ".kube"; do
+            local rule="${verb}(//**/${dir}/**)"
+            echo "$deployed_json" | jq -e --arg r "$rule" \
+                '.permissions.deny | map(select(. == $r)) | length >= 1' \
+                >/dev/null \
+                || { echo "MISSING in deployed image: $rule"; return 1; }
+        done
+    done
+}
+
+@test "00-secrets: //**/.docker/config.json Read rule baked into running image (integration)" {
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
+
+    run docker run --rm drydock:latest \
+        cat /etc/claude-code/managed-settings.d/00-secrets.json
+    [ "$status" -eq 0 ]
+
+    local deployed_json="$output"
+
+    # .docker has Read-only coverage by design (Edit/Write intentionally absent)
+    echo "$deployed_json" | jq -e \
+        '.permissions.deny | map(select(. == "Read(//**/.docker/config.json)")) | length >= 1' \
+        >/dev/null \
+        || { echo "MISSING in deployed image: Read(//**/.docker/config.json)"; return 1; }
+
+    # Confirm Edit and Write for .docker are intentionally absent (design asymmetry)
+    local docker_edit_count docker_write_count
+    docker_edit_count="$(echo "$deployed_json" | jq \
+        '[.permissions.deny[] | select(. == "Edit(//**/.docker/config.json)")] | length')"
+    docker_write_count="$(echo "$deployed_json" | jq \
+        '[.permissions.deny[] | select(. == "Write(//**/.docker/config.json)")] | length')"
+    [ "$docker_edit_count" -eq 0 ] \
+        || { echo "UNEXPECTED: Edit(//**/.docker/config.json) present — design asymmetry broken"; return 1; }
+    [ "$docker_write_count" -eq 0 ] \
+        || { echo "UNEXPECTED: Write(//**/.docker/config.json) present — design asymmetry broken"; return 1; }
+}
