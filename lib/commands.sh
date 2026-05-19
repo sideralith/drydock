@@ -84,6 +84,9 @@ cmd_setup() {
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
 		note "Copiando $HOST_CLAUDE → $CONTAINER_CLAUDE (excluyendo session state)..."
 		cp -a "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
+		# Purge immediately — closes the credential window between cp -a and the
+		# deferred unconditional purge below (which covers the upgrade path).
+		rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 		for excluded in sessions projects file-history shell-snapshots paste-cache cache backups telemetry ide session-env downloads uploads plans tasks themes; do
 			rm -rf "${CONTAINER_CLAUDE:?}/$excluded"
 		done
@@ -265,7 +268,7 @@ cmd_sync() {
 # Probe includes HOST_CLAUDE_JSON (sibling file, not under HOST_CLAUDE) because
 # drydock sync refreshes it and MCP server edits there are a primary motivator.
 ensure_synced() {
-	[ "${DRYDOCK_SKIP_AUTOSYNC:-0}" = "1" ] && return 0
+	[ "$DRYDOCK_SKIP_AUTOSYNC" = "1" ] && return 0
 	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
 	if [ ! -f "$marker" ]; then
 		cmd_sync || warn "auto-sync failed — continuing without sync"
