@@ -9,6 +9,14 @@
 # Override in tests: export MOUNTS_FILE=/path/to/fixture before sourcing.
 : "${MOUNTS_FILE:=/proc/mounts}"
 
+# ── Discriminator seam ────────────────────────────────────────────────────────
+# DRYDOCK_DISCRIMINATOR_FN: injectable function seam for session discriminator
+# generation. Override in tests: export DRYDOCK_DISCRIMINATOR_FN=_my_stub
+# before sourcing, where _my_stub() { printf 'test'; }
+# Default: _gen_discriminator (4-char random hex, e.g. "a3f9").
+: "${DRYDOCK_DISCRIMINATOR_FN:=_gen_discriminator}"
+_gen_discriminator() { printf '%04x' "$(( (RANDOM << 8 ^ RANDOM) & 0xffff ))"; }
+
 # ── MOUNTINFO_FILE seam ───────────────────────────────────────────────────────
 # Override in tests: export MOUNTINFO_FILE=/path/to/fixture before sourcing.
 : "${MOUNTINFO_FILE:=/proc/self/mountinfo}"
