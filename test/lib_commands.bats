@@ -1754,6 +1754,9 @@ STUB
 }
 
 @test "pre_flight_notice: called from cmd_run path (R5 — notice fires in cmd_run)" {
+	# This test verifies that cmd_run actually calls pre_flight_notice. We use a
+	# spy stub that writes a sentinel to a log, then assert the sentinel appears.
+	# Testing the notice content is covered by the direct unit tests above.
 	local fakehome="$BATS_TEST_TMPDIR/pfn-run-home-$$"
 	mkdir -p "$fakehome/.claude-container"
 	touch "$fakehome/.claude-container.json"
@@ -1773,20 +1776,12 @@ STUB
 	_fixed_disc_pfn_run() { printf 'cafe'; }
 	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_pfn_run
 
-	# Docker: ps returns one running container; compose run is a no-op.
-	local stub_file="$BATS_TEST_TMPDIR/docker-pfn-run-$$"
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-pfn-run-log-$$.log"
 	touch "$DOCKER_CALL_LOG"
-	cat >"$stub_file" <<'STUB'
-#!/usr/bin/env bash
-echo "$*" >> "${DOCKER_CALL_LOG:?}"
-if [ "${1:-}" = "ps" ] && [ "${2:-}" != "-a" ]; then
-	printf 'drydock-pfn-run-proj-a1b2\n'
-fi
-exit 0
-STUB
-	chmod +x "$stub_file"
-	export DOCKER="$stub_file"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	# Override pre_flight_notice with a spy that outputs a sentinel.
+	pre_flight_notice() { printf 'preflight-called\n'; }
 
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 
@@ -1794,11 +1789,11 @@ STUB
 	mkdir -p "$project_dir"
 	run cmd_run "$project_dir"
 	[ "$status" -eq 0 ]
-	# The notice must appear in output.
-	[[ "$output" == *"session"* ]]
+	[[ "$output" == *"preflight-called"* ]]
 }
 
 @test "pre_flight_notice: called from cmd_shell path (R5 — notice fires in cmd_shell)" {
+	# Same spy approach as above but for cmd_shell.
 	local fakehome="$BATS_TEST_TMPDIR/pfn-shell-home-$$"
 	mkdir -p "$fakehome/.claude-container"
 	touch "$fakehome/.claude-container.json"
@@ -1818,19 +1813,12 @@ STUB
 	_fixed_disc_pfn_shell() { printf 'babe'; }
 	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_pfn_shell
 
-	local stub_file="$BATS_TEST_TMPDIR/docker-pfn-shell-$$"
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-pfn-shell-log-$$.log"
 	touch "$DOCKER_CALL_LOG"
-	cat >"$stub_file" <<'STUB'
-#!/usr/bin/env bash
-echo "$*" >> "${DOCKER_CALL_LOG:?}"
-if [ "${1:-}" = "ps" ] && [ "${2:-}" != "-a" ]; then
-	printf 'drydock-pfn-shell-proj-c3d4\n'
-fi
-exit 0
-STUB
-	chmod +x "$stub_file"
-	export DOCKER="$stub_file"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	# Override pre_flight_notice with a spy that outputs a sentinel.
+	pre_flight_notice() { printf 'preflight-called\n'; }
 
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 
@@ -1838,7 +1826,7 @@ STUB
 	mkdir -p "$project_dir"
 	run cmd_shell "$project_dir"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"session"* ]]
+	[[ "$output" == *"preflight-called"* ]]
 }
 
 # ── integration smoke test (concurrent-sessions, PR 2 Wire-in — Task 2.8) ─────
