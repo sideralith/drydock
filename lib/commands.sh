@@ -247,6 +247,47 @@ cmd_sync() {
 	touch "$CONTAINER_CLAUDE/.drydock-last-sync"
 }
 
+# ensure_synced — auto-sync gate for cmd_run / cmd_shell.
+# Evaluates staleness of the host ~/.claude/ config relative to the last-sync
+# marker.  Calls cmd_sync when stale; is silent on the fresh path.
+# Prune set mirrors cmd_sync's rsync --exclude list (including engram conditional).
+# Probe includes HOST_CLAUDE_JSON (sibling file, not under HOST_CLAUDE) because
+# drydock sync refreshes it and MCP server edits there are a primary motivator.
+ensure_synced() {
+	[ "${DRYDOCK_SKIP_AUTOSYNC:-0}" = "1" ] && return 0
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	if [ ! -f "$marker" ]; then
+		cmd_sync
+		return
+	fi
+	# Engram-conditional prune entry: mirrors _engram_exclude in cmd_sync.
+	local -a engram_prune=()
+	if ! engram_usable; then
+		engram_prune=(-o -path '*/mcp/engram.json')
+	fi
+	# Find any non-state, non-excluded config file newer than the marker.
+	# Prune list is kept byte-for-byte aligned with cmd_sync rsync excludes.
+	# -newer is on the PRINT branch (not the top-level) to avoid printing
+	# HOST_CLAUDE_JSON unconditionally when it is not newer than the marker.
+	if find "$HOST_CLAUDE" "$HOST_CLAUDE_JSON" \
+		\( -path '*/sessions/*'   -o -path '*/projects/*' \
+		-o -path '*/file-history/*' -o -path '*/shell-snapshots/*' \
+		-o -path '*/paste-cache/*'  -o -path '*/cache/*' \
+		-o -path '*/backups/*'      -o -path '*/telemetry/*' \
+		-o -path '*/plans/*'        -o -path '*/tasks/*' \
+		-o -path '*/ide/*'          -o -path '*/session-env/*' \
+		-o -path '*/downloads/*'    -o -path '*/uploads/*' \
+		-o -path '*/themes/*' \
+		-o -name '.last-cleanup'    -o -name 'scheduled_tasks.lock' \
+		-o -name '.credentials.json' -o -name '.drydock-last-sync' \
+		-o -name '*.bak.pre-dockerized' \
+		"${engram_prune[@]}" \) -prune \
+		-o -newer "$marker" -type f -print -quit 2>/dev/null | grep -q .; then
+		note "auto-sync: host config changed — syncing into container..."
+		cmd_sync
+	fi
+}
+
 # is_container_running — return 0 iff the named container is currently running.
 # Pure-ish: reads Docker state, no mutations. Exact-name match is by-design
 # (docker inspect matches exact name or ID, never a prefix) — REQ-5 S5.4.

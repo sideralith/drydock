@@ -986,6 +986,153 @@ _setup_cmd_conflict() {
 	[[ "$output" != *"already running"* ]]
 }
 
+# ── auto-sync: Phase 4 — ensure_synced helper ────────────────────────────────
+# Helper: build fake-HOME tree suitable for ensure_synced mtime tests.
+# Creates HOST_CLAUDE, HOST_CLAUDE_JSON, and a minimal CONTAINER_CLAUDE.
+_setup_ensure_synced() {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-es-$$"
+	mkdir -p "$fakehome/.claude"
+	touch "$fakehome/.claude.json"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+}
+
+@test "ensure_synced: DRYDOCK_SKIP_AUTOSYNC=1 — cmd_sync NOT called even with stale marker" {
+	_setup_ensure_synced
+	# Stub engram_usable to avoid executing uname from /tmp (noexec on WSL2 host).
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-skip-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	# Create stale marker and a newer file in HOST_CLAUDE
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	export DRYDOCK_SKIP_AUTOSYNC=1
+	ensure_synced
+	unset DRYDOCK_SKIP_AUTOSYNC
+
+	[ ! -f "$sentinel" ]
+}
+
+@test "ensure_synced: absent marker — cmd_sync called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-absent-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	# Ensure marker does not exist
+	rm -f "$CONTAINER_CLAUDE/.drydock-last-sync"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: stale dir — newer file in HOST_CLAUDE triggers cmd_sync" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-stale-dir-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	mkdir -p "$HOST_CLAUDE/hooks"
+	touch -d '@2000000000' "$HOST_CLAUDE/hooks/test.sh"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: stale JSON — newer HOST_CLAUDE_JSON triggers cmd_sync" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-stale-json-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# HOST_CLAUDE has no newer files, but HOST_CLAUDE_JSON is newer
+	touch -d '@2000000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
+@test "ensure_synced: fresh-pruned (cache) — only cache file newer, cmd_sync NOT called" {
+	_setup_ensure_synced
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-fresh-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# Only a cache file is newer — should be pruned
+	mkdir -p "$HOST_CLAUDE/cache"
+	touch -d '@2000000000' "$HOST_CLAUDE/cache/x"
+	# HOST_CLAUDE_JSON older than marker
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ ! -f "$sentinel" ]
+}
+
+@test "ensure_synced: fresh-pruned (mcp/engram.json) — engram_usable=false, engram.json newer, cmd_sync NOT called" {
+	_setup_ensure_synced
+	# Stub engram_usable to return false (no engram) → mcp/engram.json gets pruned.
+	engram_usable() { return 1; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-engram-excl-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# mcp/engram.json is newer but should be pruned when engram not usable
+	mkdir -p "$HOST_CLAUDE/mcp"
+	touch -d '@2000000000' "$HOST_CLAUDE/mcp/engram.json"
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ ! -f "$sentinel" ]
+}
+
+@test "ensure_synced: stale (mcp/engram.json) — engram_usable=true, engram.json newer, cmd_sync IS called" {
+	_setup_ensure_synced
+	# Stub engram_usable to return true (engram active) → mcp/engram.json NOT pruned.
+	engram_usable() { return 0; }
+
+	local sentinel="$BATS_TEST_TMPDIR/sync-called-engram-incl-$$"
+	cmd_sync() { touch "$sentinel"; }
+
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	touch -d '@1000000000' "$marker"
+	# mcp/engram.json is newer; when engram is usable, it should NOT be pruned
+	mkdir -p "$HOST_CLAUDE/mcp"
+	touch -d '@2000000000' "$HOST_CLAUDE/mcp/engram.json"
+	touch -d '@500000000' "$HOST_CLAUDE_JSON"
+
+	ensure_synced
+
+	[ -f "$sentinel" ]
+}
+
 # ── auto-sync: Phase 3 — marker in cmd_setup ─────────────────────────────────
 
 @test "cmd_setup: creates .drydock-last-sync marker as final action" {
