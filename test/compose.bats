@@ -158,15 +158,19 @@ STUB
 }
 
 @test "export_compose_env: deploy key present — sets DRYDOCK_SSH_DEPLOY_KEY" {
-  HOME="$BATS_TEST_TMPDIR/fakehome"
+  HOME="$BATS_TEST_TMPDIR/fakehome-dk-$$"
   mkdir -p "$HOME/.config/drydock/keys"
+  mkdir -p "$HOME/.claude-container"
+  touch "$HOME/.claude-container.json"
   : > "$HOME/.config/drydock/keys/myproject_deploy"
   export_compose_env "$TEST_PROJECT_DIR"
   [ "$DRYDOCK_SSH_DEPLOY_KEY" = "$HOME/.config/drydock/keys/myproject_deploy" ]
 }
 
 @test "export_compose_env: no deploy key — DRYDOCK_SSH_DEPLOY_KEY unset" {
-  HOME="$BATS_TEST_TMPDIR/fakehome"
+  HOME="$BATS_TEST_TMPDIR/fakehome-nodk-$$"
+  mkdir -p "$HOME/.claude-container"
+  touch "$HOME/.claude-container.json"
   export_compose_env "$TEST_PROJECT_DIR"
   [ -z "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]
 }
@@ -201,5 +205,39 @@ STUB
   # it set. (~/.config/gh is already mounted RW, so this widens nothing — the
   # agent could already `gh auth token`.)
   grep -qE '^[[:space:]]+- GITHUB_PERSONAL_ACCESS_TOKEN[[:space:]]*$' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+# ── docker-compose.yml parametrization (concurrent-sessions, PR 2 Wire-in) ───
+# Task 2.4: verify docker-compose.yml uses per-session env vars for container_name
+# and Claude config mounts. These tests check the YAML source directly (grepping
+# for the expected variable interpolation patterns).
+
+@test "docker-compose.yml: container_name uses DRYDOCK_DISCRIMINATOR in interpolation" {
+  # After PR 2, container_name must include ${DRYDOCK_DISCRIMINATOR} so each
+  # session gets a unique container name.
+  grep -qE 'container_name:.*\$\{DRYDOCK_DISCRIMINATOR\}' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "docker-compose.yml: Claude dir mount uses DRYDOCK_SESSION_CLAUDE_DIR" {
+  # The per-session Claude config dir mount source must reference
+  # ${DRYDOCK_SESSION_CLAUDE_DIR} instead of the old ${HOME}/.claude-container.
+  grep -qF '${DRYDOCK_SESSION_CLAUDE_DIR}' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "docker-compose.yml: Claude json mount uses DRYDOCK_SESSION_CLAUDE_JSON" {
+  # The per-session Claude config json mount source must reference
+  # ${DRYDOCK_SESSION_CLAUDE_JSON} instead of the old ${HOME}/.claude-container.json.
+  grep -qF '${DRYDOCK_SESSION_CLAUDE_JSON}' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "docker-compose.yml: old hardcoded .claude-container mount is gone" {
+  # Ensure the old literal ${HOME}/.claude-container: mount is replaced.
+  # Note: .claude-container/ itself (as a string) should not appear in volume
+  # source positions — only the new ${DRYDOCK_SESSION_*} vars should.
+  ! grep -E '^\s+-\s+"\$\{HOME\}/\.claude-container:' \
     "$DRYDOCK_HOME/docker-compose.yml"
 }
