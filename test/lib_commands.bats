@@ -540,6 +540,33 @@ setup() {
 	[ "$result" = "null" ]
 }
 
+# ── cmd_sync: purge .credentials.json from container on every sync ───────────
+
+@test "cmd_sync: purges .credentials.json from container even when pre-existing" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Pre-create container dir with a stale credentials file (simulates a user
+	# who synced before the --exclude was added, leaving a token behind).
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	touch "$CONTAINER_CLAUDE/.credentials.json"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	[ ! -f "$CONTAINER_CLAUDE/.credentials.json" ]
+}
+
 # ── ensure_runtime_dirs: shared mode ─────────────────────────────────────────
 
 @test "ensure_runtime_dirs: shared mode (sentinel present + usable) — missing CONTAINER_ENGRAM does NOT trigger cmd_setup" {

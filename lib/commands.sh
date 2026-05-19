@@ -221,6 +221,11 @@ cmd_sync() {
 		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
 		/src/ /dst/ || return $?
+	# Purge any stale OAuth token from the container.  rsync --exclude prevents
+	# the file from being COPIED on new syncs, but --delete never removes excluded
+	# files from the destination — so an explicit purge is required to clean up
+	# tokens that were copied by pre-exclusion versions of drydock.
+	rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 	# Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
 	# MCP filter: when engram is not usable, strip the engram MCP server entry
 	# so Claude Code in the container sees no startup error.
