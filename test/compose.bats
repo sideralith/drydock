@@ -82,10 +82,24 @@ MOUNTS
   [ -n "$HOST_DOCKER_GID" ]
 }
 
-@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix" {
+@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix and discriminator" {
+  _fixed_disc() { printf 'test'; }
+  export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+  # Stub DOCKER for collision-check and GC (empty ps = no containers).
+  local stub_file="$BATS_TEST_TMPDIR/docker-disc-stub-$$"
+  cat >"$stub_file" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then printf ''; fi
+exit 0
+STUB
+  chmod +x "$stub_file"
+  export DOCKER="$stub_file"
+  export HOME="$BATS_TEST_TMPDIR/compose-ecpn-home-$$"
+  mkdir -p "$HOME/.claude-container"
+  touch "$HOME/.claude-container.json"
   export_compose_env "$TEST_PROJECT_DIR"
   [ -n "$COMPOSE_PROJECT_NAME" ]
-  [[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject" ]]
+  [[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-test" ]]
 }
 
 @test "export_compose_env sets USER_NAME to id -un" {

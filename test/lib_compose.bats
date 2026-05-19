@@ -122,9 +122,15 @@ MOUNTS
 	[ -n "$HOST_DOCKER_GID" ]
 }
 
-@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix" {
+@test "export_compose_env sets COMPOSE_PROJECT_NAME with drydock- prefix and discriminator" {
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export HOME="$BATS_TEST_TMPDIR/ecpn-home-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	export_compose_env "$TEST_PROJECT_DIR"
-	[ "$COMPOSE_PROJECT_NAME" = "drydock-myproject" ]
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-test" ]]
 }
 
 @test "export_compose_env sets USER_NAME to id -un" {
@@ -748,13 +754,19 @@ MI
 # S3.3 and S3.4 (cmd_run/cmd_shell DOCKER_CALL_LOG) live in lib_commands.bats
 # because those commands are only available after sourcing commands.sh.
 
-@test "export_compose_env: S3.1 — COMPOSE_PROJECT_NAME equals drydock-sideralith-com" {
+@test "export_compose_env: S3.1 — COMPOSE_PROJECT_NAME equals drydock-sideralith-com-<disc>" {
 	# Use a parent dir so basename is exactly "sideralith.com"
 	local parent_dir="$BATS_TEST_TMPDIR/s31-parent"
 	local dotted_dir="$parent_dir/sideralith.com"
 	mkdir -p "$dotted_dir"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export HOME="$BATS_TEST_TMPDIR/s31-home-$$"
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
 	export_compose_env "$dotted_dir"
-	[ "$COMPOSE_PROJECT_NAME" = "drydock-sideralith-com" ]
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-sideralith-com-test" ]]
 }
 
 @test "export_compose_env: S3.2 — deploy-key path uses sanitized PROJECT_NAME" {
