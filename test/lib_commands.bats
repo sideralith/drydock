@@ -1923,3 +1923,83 @@ STUB
 	[[ "$compose_log" != *" stop "* ]]
 	[[ "$compose_log" != *" kill "* ]]
 }
+
+# ── _current_project_name ─────────────────────────────────────────────────────
+
+@test "_current_project_name: returns sanitized basename of cwd" {
+	local proj_dir="$BATS_TEST_TMPDIR/my-test Project"
+	mkdir -p "$proj_dir"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	# Change into synthetic project dir for the pure-string transform
+	(
+		cd "$proj_dir"
+		run _current_project_name
+		[ "$status" -eq 0 ]
+		[ "$output" = "my-test-project" ]
+	)
+}
+
+@test "_current_project_name: does not require DRYDOCK_* env or running container" {
+	local proj_dir="$BATS_TEST_TMPDIR/simple-proj"
+	mkdir -p "$proj_dir"
+
+	# Source without any DRYDOCK_ env or docker available
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	(
+		cd "$proj_dir"
+		run _current_project_name
+		[ "$status" -eq 0 ]
+		[ "$output" = "simple-proj" ]
+	)
+}
+
+# ── _links_list_file ──────────────────────────────────────────────────────────
+
+@test "_links_list_file: returns path under ~/.config/drydock/links/<project>.list" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-lf"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	local proj_dir="$BATS_TEST_TMPDIR/my-project"
+	mkdir -p "$proj_dir"
+
+	(
+		cd "$proj_dir"
+		run _links_list_file
+		[ "$status" -eq 0 ]
+		[ "$output" = "$fakehome/.config/drydock/links/my-project.list" ]
+	)
+}
+
+@test "_links_list_file: sanitizes special chars in project name" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-lf2"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	# Use uppercase + underscores: sanitize lowercases but preserves underscores.
+	local proj_dir="$BATS_TEST_TMPDIR/My_Cool_Project"
+	mkdir -p "$proj_dir"
+
+	(
+		cd "$proj_dir"
+		run _links_list_file
+		[ "$status" -eq 0 ]
+		# sanitize_project_name: uppercase → lowercase, underscores preserved
+		[ "$output" = "$fakehome/.config/drydock/links/my_cool_project.list" ]
+	)
+}

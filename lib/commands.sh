@@ -540,3 +540,17 @@ cmd_doctor() {
 	printf '  USER_GID:         %s\n' "$(id -g)"
 	printf '  HOST_DOCKER_GID:  %s\n' "$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo '?')"
 }
+
+# ── Link helpers ──────────────────────────────────────────────────────────────
+
+# _current_project_name — sanitized basename of the resolved cwd project dir.
+# Pure string transform; no subprocess or compose dependency.
+_current_project_name() {
+	sanitize_project_name "$(basename "$(resolve_project_dir "")")"
+}
+
+# _links_list_file — path to the durable per-project link list.
+# Format: ~/.config/drydock/links/<project>.list
+_links_list_file() {
+	printf '%s/.config/drydock/links/%s.list\n' "$HOME" "$(_current_project_name)"
+}
