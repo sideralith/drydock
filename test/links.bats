@@ -1036,12 +1036,14 @@ _links_setup() {
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sibling_dir"
 
+	# R4-FIX-7: target is the bare $real_home/.claude directory.
+	# This proves the named invariant: the guard uses _real_home (realpath of
+	# $HOME), NOT raw $HOME. With $HOME set to link_home, a naive raw-$HOME check
+	# would compare link_home/.claude, which does NOT match real_home/.claude.
+	# Only _real_home-based guard (e) catches this correctly.
 	(
 		cd "$PROJECT_DIR"
-		# Target under real home .claude — must be caught even when HOME is symlinked
-		# The real path of container target is real_home/.claude-data, which is
-		# under _real_home. Guard (e) must use _real_home patterns.
-		run cmd_link "$sibling_dir" "$real_home/.claude-data"
+		run cmd_link "$sibling_dir" "$real_home/.claude"
 		[ "$status" -ne 0 ]
 		[[ "$output" == *"shadows"* ]]
 	)
@@ -1107,3 +1109,163 @@ _links_setup() {
 		[[ "$output" == *"collision"* ]]
 	)
 }
+
+# ── R4-FIX-1: double-slash // bypasses all container-target guards ────────────
+
+@test "cmd_link: R4-FIX-1 rejects container target starting with // (double-slash)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sibling_dir" "//etc/foo"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"//"* ]]
+	)
+}
+
+# ── R4-FIX-2: credential-dir guards glob overmatch ───────────────────────────
+
+@test "cmd_link: R4-FIX-2 accepts \$HOME/.ssh-backup (not a credential dir)" {
+	_links_setup
+	local ssh_backup="$FAKE_HOME/.ssh-backup"
+	mkdir -p "$ssh_backup"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$ssh_backup"
+		[ "$status" -eq 0 ]
+	)
+}
+
+@test "cmd_link: R4-FIX-2 accepts \$HOME/.dockerfiles (not a credential dir)" {
+	_links_setup
+	local dockerfiles="$FAKE_HOME/.dockerfiles"
+	mkdir -p "$dockerfiles"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$dockerfiles"
+		[ "$status" -eq 0 ]
+	)
+}
+
+@test "cmd_link: R4-FIX-2 still rejects \$HOME/.ssh (exact credential dir)" {
+	_links_setup
+	local ssh_dir="$FAKE_HOME/.ssh"
+	mkdir -p "$ssh_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$ssh_dir"
+		[ "$status" -ne 0 ]
+	)
+}
+
+@test "cmd_link: R4-FIX-2 still rejects \$HOME/.ssh/inner (subdir of credential dir)" {
+	_links_setup
+	local ssh_inner="$FAKE_HOME/.ssh/inner"
+	mkdir -p "$ssh_inner"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$ssh_inner"
+		[ "$status" -ne 0 ]
+	)
+}
+
+# ── R4-FIX-3: dead code in guard (g) ─────────────────────────────────────────
+# (Code-only fix; covered by existing R2-FIX-3 tests.)
+
+# ── R4-FIX-4: file source rejected early ─────────────────────────────────────
+
+@test "cmd_link: R4-FIX-4 rejects a regular file as source" {
+	_links_setup
+
+	local regular_file="$BATS_TEST_TMPDIR/notadir.txt"
+	touch "$regular_file"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$regular_file"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"not a directory"* ]]
+	)
+}
+
+# ── R4-FIX-5: re-linking same host with different container target ─────────────
+
+@test "cmd_link: R4-FIX-5 errors when re-linking same host with a different container target" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir" "/custom/A"
+		run cmd_link "$sibling_dir" "/custom/B"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"unlink"* ]]
+	)
+}
+
+@test "cmd_link: R4-FIX-5 idempotent when same host and same target re-linked" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir" "/custom/A"
+		run cmd_link "$sibling_dir" "/custom/A"
+		[ "$status" -eq 0 ]
+		[[ "$output" == *"already linked"* ]]
+	)
+}
+
+# ── R4-FIX-6: awk failure in cmd_unlink leaves no tmp file ───────────────────
+
+@test "cmd_unlink: R4-FIX-6 no stale .tmp file left when awk fails" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+	)
+
+	# Simulate awk failure by overriding awk as a function in the subprocess.
+	(
+		cd "$PROJECT_DIR"
+		# shellcheck disable=SC2329
+		awk() {
+			# First awk call is the existence check — let it succeed.
+			# Second awk call is the rewrite — fail it.
+			if [ "${_awk_calls:-0}" -eq 0 ]; then
+				_awk_calls=1
+				command awk "$@"
+			else
+				return 1
+			fi
+		}
+		export -f awk
+		run cmd_unlink "$sibling_dir"
+		[ "$status" -ne 0 ]
+	)
+
+	# No .tmp* file must remain
+	local tmp_count
+	tmp_count="$(find "$FAKE_HOME/.config/drydock/links/" -name "*.tmp*" 2>/dev/null | wc -l || echo 0)"
+	[ "$tmp_count" -eq 0 ]
+}
+
+# ── R4-FIX-7: R3-FIX-6 test validates the correct invariant ─────────────────
+# (Test-only fix; no new test added here — the existing test is rewritten below.)

@@ -632,6 +632,12 @@ cmd_link() {
 	local canonical
 	canonical="$(realpath "$src" 2>/dev/null)" || err "path does not exist: $src"
 
+	# R4-FIX-4: reject non-directory sources early with a clean error.
+	# realpath succeeds for regular files too, so without this check a file
+	# source makes it through all guards and produces a cryptic Docker engine
+	# error at compose-up time.
+	[ -d "$canonical" ] || err "rejected: '$canonical' is not a directory"
+
 	# FIX #5: metacharacter validation — reject paths that would corrupt the
 	# pipe-delimited list file, break the Docker Compose volume string, or
 	# break YAML. Applied to canonical (already realpath-resolved) and to
@@ -661,14 +667,20 @@ cmd_link() {
 	# vs realpath-resolved $HOME. Covers drydock-managed dirs AND credential
 	# dirs (INV-1 defense-in-depth: FIX #6 adds ~/.ssh, ~/.aws, ~/.gnupg,
 	# ~/.kube, ~/.docker).
+	# R4-FIX-2: For the five credential dirs (.ssh, .aws, .gnupg, .kube,
+	# .docker) use separator-anchored patterns — match the exact dir OR anything
+	# strictly under it. The old `"$_real_home/.ssh"*` glob matched ~/.ssh-backup,
+	# ~/.dockerfiles, etc. as false positives.
+	# .claude*, .engram*, .config/drydock* keep their wildcards — load-bearing for
+	# per-session directories per INV-2 (e.g. .claude-container-<disc>).
 	if [[ "$canonical/" == "$_real_home/.claude"* ]] \
 		|| [[ "$canonical/" == "$_real_home/.engram"* ]] \
 		|| [[ "$canonical/" == "$_real_home/.config/drydock"* ]] \
-		|| [[ "$canonical/" == "$_real_home/.ssh"* ]] \
-		|| [[ "$canonical/" == "$_real_home/.aws"* ]] \
-		|| [[ "$canonical/" == "$_real_home/.gnupg"* ]] \
-		|| [[ "$canonical/" == "$_real_home/.kube"* ]] \
-		|| [[ "$canonical/" == "$_real_home/.docker"* ]]; then
+		|| [ "$canonical" = "$_real_home/.ssh" ] || [[ "$canonical/" == "$_real_home/.ssh/"* ]] \
+		|| [ "$canonical" = "$_real_home/.aws" ] || [[ "$canonical/" == "$_real_home/.aws/"* ]] \
+		|| [ "$canonical" = "$_real_home/.gnupg" ] || [[ "$canonical/" == "$_real_home/.gnupg/"* ]] \
+		|| [ "$canonical" = "$_real_home/.kube" ] || [[ "$canonical/" == "$_real_home/.kube/"* ]] \
+		|| [ "$canonical" = "$_real_home/.docker" ] || [[ "$canonical/" == "$_real_home/.docker/"* ]]; then
 		err "rejected: '$canonical' is under a protected path (credentials or drydock state)"
 	fi
 
@@ -706,6 +718,14 @@ cmd_link() {
 		# (b) Reject root /.
 		if [ "$container_target" = "/" ]; then
 			err "rejected: container target '/' is the filesystem root"
+		fi
+		# R4-FIX-1: reject targets starting with // (double-slash).
+		# On Linux the kernel normalizes //foo → /foo at mount time, which means
+		# //etc/foo mounts at /etc/foo while bypassing every single-slash guard:
+		# the first-component extractor strips one slash leaving /etc/foo, the
+		# %%/* trim then yields empty-string so the denylist case falls through.
+		if [[ "$container_target" == //* ]]; then
+			err "rejected: container target '$container_target' starts with '//' which normalizes to a different path"
 		fi
 		# R3-FIX-4: reject any target containing a '..' path component. Docker
 		# normalizes /workspace-siblings/../etc/foo to /etc/foo at mount time,
@@ -772,7 +792,9 @@ cmd_link() {
 		# (g) Reject /workspace-siblings bare parent — a mount over it would shadow
 		# all default-target siblings. A target under it (e.g. /workspace-siblings/foo)
 		# is acceptable (functionally equivalent to a default target).
-		if [ "$container_target" = "/workspace-siblings" ] || [ "$container_target" = "/workspace-siblings/" ]; then
+		# R4-FIX-3: the second clause `= "/workspace-siblings/"` is unreachable —
+		# R3-FIX-3 strips the trailing slash at the top of the custom-target branch.
+		if [ "$container_target" = "/workspace-siblings" ]; then
 			err "rejected: container target '$container_target' shadows the /workspace-siblings parent directory"
 		fi
 	else
@@ -791,10 +813,17 @@ cmd_link() {
 			if [ "$existing_name" = "$name" ] && [ "$existing_host" != "$canonical" ]; then
 				err "basename collision: '$name' is already used by '$existing_host'; cannot also link '$canonical'"
 			fi
-			# Idempotent: same host path already present
+			# Idempotent: same host path already present.
+			# R4-FIX-5: also compare the normalized existing target against the
+			# new container_target. If they differ the user is trying to change
+			# the mount point — that requires unlink first.
 			if [ "$existing_host" = "$canonical" ]; then
-				note "already linked: $canonical"
-				return 0
+				local _existing_norm="${existing_target%/}"
+				if [ "$_existing_norm" = "$container_target" ]; then
+					note "already linked: $canonical"
+					return 0
+				fi
+				err "already linked with a different container target '$_existing_norm' — run 'drydock unlink $canonical' first"
 			fi
 			# FIX #3: container target uniqueness — two entries sharing the same
 			# container target would cause Docker Compose to silently keep only one.
@@ -849,7 +878,13 @@ cmd_unlink() {
 	# fails, rm the .tmp and call err. No shell-level EXIT trap is touched.
 	local tmp_file
 	tmp_file="${list_file}.tmp$$"
-	awk -F'|' -v c="$canonical" '$1!=c' "$list_file" > "$tmp_file"
+	# R4-FIX-6: wrap awk in an explicit error path. set -euo pipefail aborts on
+	# awk failure (rare under resource pressure) leaving tmp_file on disk.
+	# Mirror the mv-failure pattern: rm the tmp and call err.
+	if ! awk -F'|' -v c="$canonical" '$1!=c' "$list_file" > "$tmp_file"; then
+		rm -f "$tmp_file"
+		err "awk failed while rewriting link list"
+	fi
 	if ! mv "$tmp_file" "$list_file"; then
 		rm -f "$tmp_file"
 		err "failed to rewrite link list after unlink"
