@@ -1166,3 +1166,154 @@ _make_prototype() {
 	seed_session_config_dir "b00b"
 	[ -f "$fake_home/.claude-container-b00b/live.txt" ]
 }
+
+# ── export_compose_env wiring tests (concurrent-sessions, PR 2 Wire-in) ───────
+# Tests for tasks 2.1–2.3: discriminator exports, collision retry/exhaustion,
+# GC-first ordering. All tests use DRYDOCK_DISCRIMINATOR_FN stub + fake HOME.
+
+# Helper: write a stateful docker stub that returns different ps output each call.
+# Args: counter_file response_1 response_2 ... (responses are space-separated names)
+# Each call to the stub increments the counter; returns response_N for call N.
+_make_docker_ps_seq_stub() {
+	local counter_file="$1"
+	shift
+	local stub_file="$BATS_TEST_TMPDIR/docker-seq-stub-$$"
+	# Encode responses as embedded shell array in the stub script.
+	local resp_code=""
+	local i=0
+	for r in "$@"; do
+		resp_code+="responses[$i]='$r'
+"
+		i=$((i + 1))
+	done
+	local total_responses=$i
+	cat >"$stub_file" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "\${DOCKER_CALL_LOG:-/dev/null}"
+if [ "\${1:-}" = "ps" ]; then
+	declare -a responses
+	${resp_code}total=${total_responses}
+	count=0
+	[ -f "${counter_file}" ] && count="\$(cat "${counter_file}")"
+	idx="\$count"
+	[ "\$idx" -ge "\$total" ] && idx="\$((total - 1))"
+	new_count="\$((count + 1))"
+	printf '%s\n' "\$new_count" > "${counter_file}"
+	printf '%s\n' "\${responses[\$idx]}"
+fi
+exit 0
+STUB
+	chmod +x "$stub_file"
+	printf '%s' "$stub_file"
+}
+
+# Helper: setup a fake home with prototype for wiring tests.
+_setup_wiring_home() {
+	local fake_home="$1"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+}
+
+@test "export_compose_env: exports DRYDOCK_DISCRIMINATOR to the pinned value" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-disc-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_DISCRIMINATOR" = "test" ]
+}
+
+@test "export_compose_env: exports DRYDOCK_SESSION_CLAUDE_DIR as HOME/.claude-container-<disc>" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-dir-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_SESSION_CLAUDE_DIR" = "$fake_home/.claude-container-test" ]
+}
+
+@test "export_compose_env: exports DRYDOCK_SESSION_CLAUDE_JSON as HOME/.claude-container-<disc>.json" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-json-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_SESSION_CLAUDE_JSON" = "$fake_home/.claude-container-test.json" ]
+}
+
+@test "export_compose_env: exports DRYDOCK_SESSION_NAME as drydock-<project>-<disc>" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-name-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_SESSION_NAME" = "drydock-myproject-test" ]
+}
+
+@test "export_compose_env: collision retry uses next disc when first collides" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-retry-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Discriminator fn emits "aaaa" first, "aaaa" again (collision), then "bbbb".
+	local call_count_file="$BATS_TEST_TMPDIR/disc-call-count-$$"
+	printf '0' >"$call_count_file"
+	_seq_disc() {
+		local n
+		n="$(cat "$call_count_file")"
+		printf '%s' "$((n + 1))" >"$call_count_file"
+		case "$n" in
+			0) printf 'aaaa' ;;
+			1) printf 'aaaa' ;;
+			*) printf 'bbbb' ;;
+		esac
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc
+	# Stateful stub: first ps call returns "drydock-myproject-aaaa" (collision),
+	# subsequent calls return empty (no collision).
+	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-retry-$$"
+	printf '0' >"$counter_file"
+	local stub
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "drydock-myproject-aaaa" "")"
+	export DOCKER="$stub"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-retry-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# Final COMPOSE_PROJECT_NAME should use the non-colliding disc "bbbb".
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-bbbb" ]]
+}
+
+@test "export_compose_env: collision exhaustion exits non-zero after 5 retries" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-exhaust-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Always return the same disc (always collides).
+	_always_same_disc() { printf 'ffff'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_always_same_disc
+	# Docker stub always returns the container as live.
+	export DOCKER="$(_make_docker_ps_stub "drydock-myproject-ffff")"
+	run export_compose_env "$TEST_PROJECT_DIR"
+	[ "$status" -ne 0 ]
+}
+
+@test "export_compose_env: gc_orphan_session_dirs is called before discriminator generation" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-gc-order-$$"
+	_setup_wiring_home "$fake_home"
+	# Create an orphan session dir that GC should prune.
+	mkdir -p "$fake_home/.claude-container-dead"
+	touch "$fake_home/.claude-container-dead.json"
+	export HOME="$fake_home"
+	_fixed_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	export DOCKER="$(_make_docker_ps_stub "")"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# GC should have pruned the orphan dir before the disc was assigned.
+	[ ! -d "$fake_home/.claude-container-dead" ]
+}
