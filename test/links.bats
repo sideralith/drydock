@@ -294,6 +294,38 @@ _links_setup() {
 	)
 }
 
+# ── R2-FIX-6: $HOME-as-symlink bypasses host-source guard ────────────────────
+
+@test "cmd_link: R2-FIX-6 rejects path under symlinked \$HOME (credential guard not bypassed)" {
+	_links_setup
+
+	# Create a real home directory and a symlink pointing to it.
+	# Export HOME as the symlink. A path like $HOME_SYMLINK/.claude-secret
+	# resolves via realpath to $REAL_HOME/.claude-secret — the guard must
+	# catch it even though $HOME is a symlink.
+	local real_home="$BATS_TEST_TMPDIR/real-home"
+	local link_home="$BATS_TEST_TMPDIR/link-home"
+	mkdir -p "$real_home"
+	ln -s "$real_home" "$link_home"
+	export HOME="$link_home"
+
+	# Create the protected dir under the real path
+	local secret_dir="$real_home/.claude-secret"
+	mkdir -p "$secret_dir"
+
+	# Create a sibling dir to link (must exist for realpath to succeed)
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		# Link path under $HOME (via the symlink) — realpath resolves to real_home,
+		# so the .claude* prefix guard must fire even though the raw path uses link_home
+		run cmd_link "$link_home/.claude-secret"
+		[ "$status" -ne 0 ]
+	)
+}
+
 # ── FIX #5: metacharacter validation ─────────────────────────────────────────
 
 @test "cmd_link: FIX-5 rejects host path containing pipe character" {

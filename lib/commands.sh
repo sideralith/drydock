@@ -642,25 +642,33 @@ cmd_link() {
 	# SP-6: host-source rejection guard
 	# Reject $HOME itself, ancestors of $HOME, and sensitive subdirs.
 	# Use [[ ]] for prefix matching; handle root "/" specially.
-	if [ "$canonical" = "$HOME" ]; then
+	#
+	# R2-FIX-6: resolve $HOME itself via realpath once, so that a symlinked
+	# $HOME (e.g. $HOME -> /actual/home) does not allow a path under the real
+	# home to bypass prefix guards.  The resolved $canonical is already a
+	# realpath, so all comparisons must be realpath-vs-realpath.
+	local _real_home
+	_real_home="$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+	if [ "$canonical" = "$_real_home" ]; then
 		err "rejected: '$canonical' is \$HOME"
 	fi
 	# Ancestor check: canonical is an ancestor of HOME when HOME starts with canonical/
 	# Special-case root "/" which would produce a double-slash in pattern.
-	if [ "$canonical" = "/" ] || [[ "$HOME/" == "$canonical/"* ]]; then
+	if [ "$canonical" = "/" ] || [[ "$_real_home/" == "$canonical/"* ]]; then
 		err "rejected: '$canonical' is an ancestor of \$HOME"
 	fi
-	# Sensitive subdir check: prefix comparison on canonical.
-	# Covers drydock-managed dirs AND credential dirs (INV-1 defense-in-depth:
-	# FIX #6 adds ~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.docker).
-	if [[ "$canonical/" == "$HOME/.claude"* ]] \
-		|| [[ "$canonical/" == "$HOME/.engram"* ]] \
-		|| [[ "$canonical/" == "$HOME/.config/drydock"* ]] \
-		|| [[ "$canonical/" == "$HOME/.ssh"* ]] \
-		|| [[ "$canonical/" == "$HOME/.aws"* ]] \
-		|| [[ "$canonical/" == "$HOME/.gnupg"* ]] \
-		|| [[ "$canonical/" == "$HOME/.kube"* ]] \
-		|| [[ "$canonical/" == "$HOME/.docker"* ]]; then
+	# Sensitive subdir check: prefix comparison on realpath-resolved canonical
+	# vs realpath-resolved $HOME. Covers drydock-managed dirs AND credential
+	# dirs (INV-1 defense-in-depth: FIX #6 adds ~/.ssh, ~/.aws, ~/.gnupg,
+	# ~/.kube, ~/.docker).
+	if [[ "$canonical/" == "$_real_home/.claude"* ]] \
+		|| [[ "$canonical/" == "$_real_home/.engram"* ]] \
+		|| [[ "$canonical/" == "$_real_home/.config/drydock"* ]] \
+		|| [[ "$canonical/" == "$_real_home/.ssh"* ]] \
+		|| [[ "$canonical/" == "$_real_home/.aws"* ]] \
+		|| [[ "$canonical/" == "$_real_home/.gnupg"* ]] \
+		|| [[ "$canonical/" == "$_real_home/.kube"* ]] \
+		|| [[ "$canonical/" == "$_real_home/.docker"* ]]; then
 		err "rejected: '$canonical' is under a protected path (credentials or drydock state)"
 	fi
 
