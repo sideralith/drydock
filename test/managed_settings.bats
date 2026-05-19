@@ -635,3 +635,81 @@ GUARDRAILS_SCRIPT="$DRYDOCK_HOME/templates/hooks/drydock-block-destructive.sh"
     done
     [ "$failures" -eq 0 ]
 }
+
+# ── T18-RED: INV-1 deny-rule rewrite — credential rules use //**/ root anchor ──
+# Design §5, D8, ADR-3: credential paths (ssh/aws/gnupg/kube/docker/credentials)
+# must use //**/<path> so they match at ANY mount depth, not just under $HOME.
+# drydock-state paths (.config/drydock) MUST keep __HOME__ anchor.
+
+SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
+
+@test "00-secrets: Read(//**/.ssh/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.ssh/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.aws/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.aws/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.gnupg/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.gnupg/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.kube/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.kube/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.docker/config.json) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.docker/config.json)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.claude/.credentials.json) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.claude/.credentials.json)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.claude-container/.credentials.json) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.claude-container/.credentials.json)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Edit and Write rules for credential dirs use //**/ root-anchor" {
+    for verb in "Edit" "Write"; do
+        for dir in ".ssh" ".aws" ".gnupg" ".kube"; do
+            jq -e --arg rule "${verb}(//**/${dir}/**)" \
+                '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+                "$SECRETS_FILE" >/dev/null
+        done
+    done
+}
+
+@test "00-secrets: drydock-state rules keep __HOME__ anchor (NOT root-anchored)" {
+    # .config/drydock Read/Edit/Write must still use __HOME__
+    for verb in "Read" "Edit" "Write"; do
+        jq -e --arg rule "${verb}(__HOME__/.config/drydock/**)" \
+            '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+            "$SECRETS_FILE" >/dev/null
+    done
+}
+
+@test "00-secrets: no __HOME__ anchor in credential rules (only state rules use __HOME__)" {
+    # The credential rules (ssh, aws, gnupg, kube, docker, credentials) MUST NOT
+    # have __HOME__ anchor. Only .config/drydock rules use __HOME__.
+    local home_cred_rules
+    home_cred_rules="$(jq '[.permissions.deny[] | select(
+        (contains("__HOME__") and contains(".config/drydock") | not) and
+        contains("__HOME__")
+    )] | length' "$SECRETS_FILE")"
+    [ "$home_cred_rules" -eq 0 ]
+}
+
+@test "00-secrets: SCOPE GUARD — no .env rule in deny list" {
+    local env_rules
+    env_rules="$(jq '[.permissions.deny[] | select(test("\\.(env)\"?$|/\\.env"))] | length' "$SECRETS_FILE")"
+    [ "$env_rules" -eq 0 ]
+}
