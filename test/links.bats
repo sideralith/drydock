@@ -1019,3 +1019,29 @@ _links_setup() {
 		[ "$status" -ne 0 ]
 	)
 }
+
+# ── R3-FIX-6: container-target guards use raw $HOME instead of $_real_home ───
+
+@test "cmd_link: R3-FIX-6 container-target guard catches path under symlinked HOME" {
+	_links_setup
+
+	# Create a real home and a symlink HOME so $HOME != realpath($HOME)
+	local real_home="$BATS_TEST_TMPDIR/real-cthome"
+	local link_home="$BATS_TEST_TMPDIR/link-cthome"
+	mkdir -p "$real_home"
+	ln -s "$real_home" "$link_home"
+	export HOME="$link_home"
+
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		# Target under real home .claude — must be caught even when HOME is symlinked
+		# The real path of container target is real_home/.claude-data, which is
+		# under _real_home. Guard (e) must use _real_home patterns.
+		run cmd_link "$sibling_dir" "$real_home/.claude-data"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"shadows"* ]]
+	)
+}

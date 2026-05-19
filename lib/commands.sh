@@ -736,17 +736,21 @@ cmd_link() {
 		esac
 		# (e) Reject paths that shadow /workspace or drydock-managed home dirs.
 		# Append trailing / so "/workspace" and "/workspace/sub" both match.
+		# R3-FIX-6: use $_real_home (realpath-resolved, computed earlier in
+		# cmd_link) instead of raw $HOME so that a symlinked $HOME cannot bypass
+		# these guards. Consistent with the host-source guard above which also
+		# uses $_real_home via realpath-resolved canonical.
 		case "$container_target/" in
 		"/workspace/"*)
 			err "rejected: container target '$container_target' shadows /workspace"
 			;;
-		"$HOME/.claude"*)
+		"$_real_home/.claude"*)
 			err "rejected: container target '$container_target' shadows container state"
 			;;
-		"$HOME/.engram"*)
+		"$_real_home/.engram"*)
 			err "rejected: container target '$container_target' shadows container state"
 			;;
-		"$HOME/.config/drydock"*)
+		"$_real_home/.config/drydock"*)
 			err "rejected: container target '$container_target' shadows drydock config"
 			;;
 		esac
@@ -754,7 +758,9 @@ cmd_link() {
 		# A mount over $HOME or /home shadows the entire home directory.
 		# NOTE: targets under $HOME (e.g. /home/<user>/git/foo) are NOT rejected —
 		# that is the host-path-mirror use case.
-		if [ "$container_target" = "$HOME" ] || [[ "$HOME/" == "$container_target/"* ]]; then
+		# R3-FIX-6: use $_real_home for consistency with (e) and with the
+		# host-source guards above.
+		if [ "$container_target" = "$_real_home" ] || [[ "$_real_home/" == "$container_target/"* ]]; then
 			err "rejected: container target '$container_target' shadows \$HOME or an ancestor of \$HOME"
 		fi
 		# (g) Reject /workspace-siblings bare parent — a mount over it would shadow
