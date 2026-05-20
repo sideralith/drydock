@@ -673,8 +673,11 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
         "$SECRETS_FILE" >/dev/null
 }
 
-@test "00-secrets: Read(//**/.claude-container/.credentials.json) present (credential root-anchor)" {
-    jq -e '.permissions.deny | map(select(. == "Read(//**/.claude-container/.credentials.json)")) | length >= 1' \
+@test "00-secrets: Read(//**/.claude-container*/.credentials.json) present (covers literal AND per-session disc dirs)" {
+    # Glob '.claude-container*' matches both '.claude-container/' (legacy single
+    # session) and '.claude-container-<disc>/' (per-session, concurrent-sessions
+    # in v0.2.0+). Single rule, full coverage — no gap for per-session dirs.
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.claude-container*/.credentials.json)")) | length >= 1' \
         "$SECRETS_FILE" >/dev/null
 }
 
@@ -682,6 +685,22 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     for verb in "Edit" "Write"; do
         for dir in ".ssh" ".aws" ".gnupg" ".kube"; do
             jq -e --arg rule "${verb}(//**/${dir}/**)" \
+                '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+                "$SECRETS_FILE" >/dev/null
+        done
+    done
+}
+
+@test "00-secrets: Edit and Write rules for credential FILE paths use //**/ root-anchor" {
+    # Symmetric with the directory-glob test above. Credential FILE paths cover:
+    #   .docker/config.json                   — Docker registry creds
+    #   .claude/.credentials.json             — Claude Code's own OAuth token
+    #   .claude-container*/.credentials.json  — drydock per-session OAuth tokens
+    # All three need R/E/W coverage: Read prevents exfiltration, Edit/Write
+    # prevent accidental overwrite/corruption (threat model A, INV-7).
+    for verb in "Edit" "Write"; do
+        for path in ".docker/config.json" ".claude/.credentials.json" ".claude-container*/.credentials.json"; do
+            jq -e --arg rule "${verb}(//**/${path})" \
                 '.permissions.deny | map(select(. == $rule)) | length >= 1' \
                 "$SECRETS_FILE" >/dev/null
         done
@@ -725,9 +744,12 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 # This is drydock's contract (INV-3 tamper-proof bake step), NOT a test of
 # Claude Code's permission engine (which requires external auth and is upstream).
 #
-# Note on .docker asymmetry: .docker/config.json has Read-only coverage (no
-# Edit/Write) by explicit design decision (Judge B R5). Test T19-B asserts only
-# the Read rule and does NOT assert Edit/Write for .docker.
+# T19-A covers the four symmetric DIRECTORY globs (.ssh/.aws/.gnupg/.kube) R/E/W.
+# T19-B covers the three single-FILE credential paths R/E/W (closed in v0.2.0):
+#   .docker/config.json, .claude/.credentials.json, .claude-container*/.credentials.json.
+# The earlier Read-only asymmetry on .docker/config.json and .credentials.json
+# was closed alongside the link-sibling-projects deny-rule rewrite (the per-session
+# .claude-container-<disc>/.credentials.json gap also fixed via the '*' glob).
 
 @test "00-secrets: //**/ root-anchored R/E/W rules baked into running image (integration)" {
     [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
@@ -751,7 +773,7 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     done
 }
 
-@test "00-secrets: //**/.docker/config.json Read rule baked into running image (integration)" {
+@test "00-secrets: //**/ credential FILE-path R/E/W rules baked into running image (integration)" {
     [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
         || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
 
@@ -761,20 +783,14 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 
     local deployed_json="$output"
 
-    # .docker has Read-only coverage by design (Edit/Write intentionally absent)
-    echo "$deployed_json" | jq -e \
-        '.permissions.deny | map(select(. == "Read(//**/.docker/config.json)")) | length >= 1' \
-        >/dev/null \
-        || { echo "MISSING in deployed image: Read(//**/.docker/config.json)"; return 1; }
-
-    # Confirm Edit and Write for .docker are intentionally absent (design asymmetry)
-    local docker_edit_count docker_write_count
-    docker_edit_count="$(echo "$deployed_json" | jq \
-        '[.permissions.deny[] | select(. == "Edit(//**/.docker/config.json)")] | length')"
-    docker_write_count="$(echo "$deployed_json" | jq \
-        '[.permissions.deny[] | select(. == "Write(//**/.docker/config.json)")] | length')"
-    [ "$docker_edit_count" -eq 0 ] \
-        || { echo "UNEXPECTED: Edit(//**/.docker/config.json) present — design asymmetry broken"; return 1; }
-    [ "$docker_write_count" -eq 0 ] \
-        || { echo "UNEXPECTED: Write(//**/.docker/config.json) present — design asymmetry broken"; return 1; }
+    # Symmetric R/E/W coverage for all three single-file credential paths.
+    for verb in "Read" "Edit" "Write"; do
+        for path in ".docker/config.json" ".claude/.credentials.json" ".claude-container*/.credentials.json"; do
+            local rule="${verb}(//**/${path})"
+            echo "$deployed_json" | jq -e --arg r "$rule" \
+                '.permissions.deny | map(select(. == $r)) | length >= 1' \
+                >/dev/null \
+                || { echo "MISSING in deployed image: $rule"; return 1; }
+        done
+    done
 }
