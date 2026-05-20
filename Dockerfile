@@ -127,6 +127,7 @@ COPY templates/managed-settings.d/ /etc/claude-code/managed-settings.d/
 RUN sed -i "s|__HOME__|/home/${USER_NAME}|g" /etc/claude-code/managed-settings.d/*.json
 
 USER ${USER_NAME}
+ENV HOME=/home/${USER_NAME}
 
 # PATH order:
 #   ~/.local/bin first → contains the host-shared claude/engram/gentle-ai/gga/uv binaries
