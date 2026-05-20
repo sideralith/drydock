@@ -194,10 +194,12 @@ machine, and normal drydock operation (`drydock run`, `compose up`) never
 prints it. drydock itself does not invoke `docker compose config` (verified —
 no occurrence in `bin/`, `lib/`).
 
-**The one debug command that does render the value:** `docker compose config`
-resolves the env passthrough and prints the token in plaintext to stdout. If
-you need to debug the rendered config (or pipe it to a tool that does),
-**always pass `--no-interpolate`**:
+Any invocation of `docker compose config` (and its alias `docker compose
+convert`, and any piping of its output) resolves the env passthrough and
+renders the token in plaintext. If you need to debug the rendered config (or
+pipe it to a tool that does), **always pass `--no-interpolate`**:
+
+> `--no-interpolate` requires Docker Compose v2.2 or later (released November 2021).
 
 ```bash
 # UNSAFE — prints the token value:
@@ -208,10 +210,11 @@ docker compose config --no-interpolate
 ```
 
 This is a zero-cost mitigation already supported by `docker compose`; no
-drydock change required. Structural alternatives (Docker secrets, an
-`env_file` with mode `600`) were evaluated and deferred — under threat
-model A they trade contributor friction for a hazard the
-documented-and-flagged debug step already neutralizes.
+drydock change required. The structural alternative most often suggested —
+an `env_file` — has worse exposure properties than the current approach: the
+token would persist on disk, be discoverable via `find`, and not be scoped to
+the shell session. Docker secrets were evaluated and deferred; under threat
+model A the documented-and-flagged debug step already neutralizes the hazard.
 
 ## Destructive-command guardrail layer (v0.2.0+)
 
