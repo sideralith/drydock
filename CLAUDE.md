@@ -35,7 +35,14 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   being worked on.
 - **Where this lives in code**: `docker-compose.yml` mounts list (no `~/.ssh`, no `~/.gnupg`);
   `docker-compose.ssh.yml` and `docker-compose.gpg.yml` (credential overlays sourced from
-  `~/.config/drydock/` exclusively).
+  `~/.config/drydock/` exclusively). For RW sibling mode: `lib/sibling_ssh.sh` (per-sibling
+  key generation, managed SSH config regeneration, and `remote.origin.url` rewrite/restore
+  helpers); the managed SSH config is written to `~/.config/drydock/ssh-config-<primary>` and
+  RO bind-mounted into the container; the keys directory (`~/.config/drydock/keys/`) mounts as
+  a single `:ro` directory (no per-key overlay enumeration — scales to N siblings without
+  changing the compose files). All per-sibling key material stays under
+  `~/.config/drydock/keys/` — already covered by the `__HOME__/.config/drydock/**` deny rule
+  in `templates/managed-settings.d/00-secrets.json`.
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-2: Container State Split
