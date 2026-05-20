@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new drydock capability or an improvement to an existing one.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are the front door. A maintainer promotes accepted ideas onto
+        `docs/ROADMAP.md` — the curated backlog — and not every request becomes
+        a roadmap item. Questions belong in discussions, not here.
+
+        drydock's threat model is **accidents, not adversaries** (`CLAUDE.md`
+        INV-7). A request that adds adversarial protection — socket-proxy,
+        sandboxing, user-namespace isolation — must justify it against a real
+        use case and the maintenance cost it imposes on contributors.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The pain point this feature solves. Lead with the concrete friction, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: Who hits this, how often, and what it costs them today.
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Proposed approach
+      description: How it could work, from the user's point of view. A rough sketch is fine — the design is refined later.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and non-goals
+      description: Behavior that must not regress, invariants touched (`CLAUDE.md` INV-N), and what this explicitly does not cover.
+    validations:
+      required: false

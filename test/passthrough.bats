@@ -19,7 +19,11 @@ _run_cmd_run() {
     ensure_prereqs()    { :; }
     ensure_runtime_dirs() { :; }
     ensure_image()      { :; }
-    export_compose_env() { :; }
+    ensure_synced()     { :; }
+    export_compose_env() {
+      PROJECT_NAME="$(sanitize_project_name "$(basename "$1")")"
+      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
+    }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     DOCKER=echo
     cmd_run "$@"
@@ -35,7 +39,11 @@ _run_cmd_shell() {
     ensure_prereqs()    { :; }
     ensure_runtime_dirs() { :; }
     ensure_image()      { :; }
-    export_compose_env() { :; }
+    ensure_synced()     { :; }
+    export_compose_env() {
+      PROJECT_NAME="$(sanitize_project_name "$(basename "$1")")"
+      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
+    }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     DOCKER=echo
     cmd_shell "$@"
@@ -51,7 +59,11 @@ _run_main() {
     ensure_prereqs()    { :; }
     ensure_runtime_dirs() { :; }
     ensure_image()      { :; }
-    export_compose_env() { :; }
+    ensure_synced()     { :; }
+    export_compose_env() {
+      PROJECT_NAME="$(sanitize_project_name "$(basename "$1")")"
+      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
+    }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     DOCKER=echo
     main "$@"

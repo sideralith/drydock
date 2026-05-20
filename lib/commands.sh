@@ -21,15 +21,26 @@ Commands:
   run [DIR] [-- ARGS] Launch Claude in DIR (or cwd); ARGS after -- go to claude
                         (e.g. drydock run -- --resume "my-session")
   shell [DIR] [-- CMD] Bash shell in container at DIR; with -- CMD, run CMD instead
-  init [DIR] [--update] Initialize a project — creates .claude/settings.json baseline
-                        (per-project, like \`git init\`); --update merges new template
-                        deny entries into an existing file
+  init [DIR]            Initialize a project — creates .claude/settings.json stub
+                        (per-project, like \`git init\`); drydock policy lives in the
+                        managed-settings layer baked into the image
   build               Build/rebuild the drydock image
   sync                Sync host ~/.claude/ → ~/.claude-container/
   status              Short health snapshot
   doctor              Detailed diagnostics
   setup               (advanced) One-time host setup — auto-triggered on first
                         run/build/sync if missing; you rarely call this explicitly
+  link [--rw] [PATH] [CONTAINER-PATH]
+                      Mount a sibling project inside the container.
+                        --rw: mount read-write; generate a per-sibling deploy
+                              key and managed SSH config for git push access.
+                        PATH: host directory to mount (required).
+                        CONTAINER-PATH: in-container mount target (optional;
+                        default: /workspace-siblings/<basename>/).
+  unlink [--rw] PATH  Remove a sibling mount from the project list.
+                        --rw is accepted and ignored; the list entry's flags
+                        field determines cleanup behavior.
+  links               Show all siblings configured for the current project.
   version             Show drydock version
   help                Show this help
 
@@ -37,9 +48,12 @@ Examples:
   cd ~/git/myproject && drydock                # launch claude there
   drydock run ~/git/otherproject               # explicit dir
   drydock run -- --resume "my-session"         # resume a session
-  drydock init ~/git/newproject                # baseline for a new project
-  drydock init --update                        # merge new template denies
+  drydock init ~/git/newproject                # create settings.json stub
   drydock build                                # rebuild image
+  drydock link ~/git/shared-lib                # mount sibling read-only
+  drydock link ~/git/shared-lib /opt/mylib     # mount at custom path
+  drydock unlink ~/git/shared-lib              # remove sibling
+  drydock links                                # list current project's siblings
 
 DRYDOCK_HOME=$DRYDOCK_HOME
 EOF
@@ -65,13 +79,13 @@ cmd_setup() {
 			if [ ! -d "$CONTAINER_ENGRAM" ]; then
 				if [ -d "$HOST_ENGRAM" ]; then
 					cp -a "$HOST_ENGRAM" "$CONTAINER_ENGRAM"
-					ok "$CONTAINER_ENGRAM inicializado como copia de $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+					ok "$CONTAINER_ENGRAM initialized as copy of $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
 				else
 					mkdir -p "$CONTAINER_ENGRAM"
-					ok "$CONTAINER_ENGRAM creado vacío (no había $HOST_ENGRAM para copiar)"
+					ok "$CONTAINER_ENGRAM created empty ($HOST_ENGRAM did not exist to copy from)"
 				fi
 			else
-				ok "$CONTAINER_ENGRAM ya existe ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+				ok "$CONTAINER_ENGRAM already exists ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
 			fi
 		fi
 	else
@@ -83,17 +97,24 @@ cmd_setup() {
 	fi
 
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
-		note "Copiando $HOST_CLAUDE → $CONTAINER_CLAUDE (excluyendo session state)..."
+		note "Copying $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)..."
 		cp -a "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
+		# Purge immediately — closes the credential window between cp -a and the
+		# deferred unconditional purge below (which covers the upgrade path).
+		rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 		for excluded in sessions projects file-history shell-snapshots paste-cache cache backups telemetry ide session-env downloads uploads plans tasks themes; do
 			rm -rf "${CONTAINER_CLAUDE:?}/$excluded"
 		done
 		rm -f "$CONTAINER_CLAUDE/.last-cleanup" "$CONTAINER_CLAUDE/scheduled_tasks.lock"
 		mkdir -p "$CONTAINER_CLAUDE"/{sessions,projects,file-history,shell-snapshots,cache,backups,telemetry,plans,tasks,paste-cache}
-		ok "$CONTAINER_CLAUDE inicializado ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
+		ok "$CONTAINER_CLAUDE initialized ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	else
-		ok "$CONTAINER_CLAUDE ya existe ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
+		ok "$CONTAINER_CLAUDE already exists ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	fi
+	# Purge any stale OAuth token unconditionally — covers both the fresh-init
+	# and the upgrade (already-exists) path.  Uses the fail-safe ${VAR:?} form
+	# consistent with the rm -rf calls above.
+	rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 
 	# ~/.claude.json — the OTHER config location Claude Code reads (project list,
 	# onboarding flags, MCP servers, OAuth account). Without a container-specific
@@ -110,13 +131,13 @@ cmd_setup() {
 				jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
 					"$HOST_CLAUDE_JSON" >"$CONTAINER_CLAUDE_JSON"
 			fi
-			ok "$CONTAINER_CLAUDE_JSON inicializado como copia de $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
+			ok "$CONTAINER_CLAUDE_JSON initialized as copy of $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 		else
 			echo '{}' >"$CONTAINER_CLAUDE_JSON"
-			ok "$CONTAINER_CLAUDE_JSON creado mínimo (no había $HOST_CLAUDE_JSON para copiar)"
+			ok "$CONTAINER_CLAUDE_JSON created minimal ($HOST_CLAUDE_JSON did not exist to copy from)"
 		fi
 	else
-		ok "$CONTAINER_CLAUDE_JSON ya existe ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
+		ok "$CONTAINER_CLAUDE_JSON already exists ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 	fi
 
 	# MCP filter belt-and-suspenders: remove mcp/engram.json from the container
@@ -125,19 +146,23 @@ cmd_setup() {
 		rm -f "${CONTAINER_CLAUDE:?}/mcp/engram.json"
 	fi
 
+	# Stamp last-sync marker so the first drydock run after setup is a no-op.
+	# touch precedes the "Done" note so the marker exists before the user is told
+	# setup succeeded (mirrors the ordering in cmd_sync: touch then ok "Sync done").
+	touch "${CONTAINER_CLAUDE:?}/.drydock-last-sync"
 	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
 }
 
-# Per-project setup. Creates `.claude/settings.json` baseline in the target
+# Per-project setup. Creates `.claude/settings.json` stub in the target
 # directory. Same mental model as `git init` — once per project.
-# With --update: merges new template deny entries into an existing file.
+# drydock policy (deny rules + SessionStart hook) lives in the managed-settings
+# layer baked into the image; this stub is for per-project dev customization.
 cmd_init() {
-	# drydock init [DIR] [--update]
-	local project_dir_arg="" do_update=0
+	# drydock init [DIR]
+	local project_dir_arg=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		--update | -u) do_update=1 ;;
-		-*) err "drydock init: opción desconocida: $1 (usá --update)" ;;
+		-*) err "drydock init: unknown option: $1" ;;
 		*) project_dir_arg="$1" ;;
 		esac
 		shift
@@ -151,35 +176,18 @@ cmd_init() {
 	local settings="$project_dir/.claude/settings.json"
 
 	if [ ! -f "$settings" ]; then
-		sed "s|__HOME__|$HOME|g" "$DEFAULT_SETTINGS_TEMPLATE" >"$settings"
-		ok "$settings creado con baseline de denies"
-	elif [ "$do_update" -eq 1 ]; then
-		command -v jq >/dev/null || err "drydock init --update necesita jq"
-		jq empty "$settings" 2>/dev/null || err "$settings no es JSON válido — arreglalo a mano o borralo y re-corré drydock init"
-		local rendered merged
-		rendered="$(sed "s|__HOME__|$HOME|g" "$DEFAULT_SETTINGS_TEMPLATE")"
-		merged="$(jq -n --argjson existing "$(cat "$settings")" --argjson template "$rendered" '
-			($existing.permissions.deny // []) as $ed
-			| ($template.permissions.deny // []) as $td
-			| $existing
-			| .permissions.deny = ($ed + ($td | map(select(. as $x | ($ed | index($x)) == null))))
-		')"
-		if [ "$(printf '%s' "$merged" | jq -c '.permissions.deny')" = "$(jq -c '.permissions.deny' "$settings")" ]; then
-			ok "$settings ya tiene todas las deny entries del template — sin cambios"
-		else
-			printf '%s\n' "$merged" >"$settings.tmp.$$" && mv "$settings.tmp.$$" "$settings"
-			ok "$settings actualizado — deny entries del template fusionadas (customizaciones preservadas)"
-		fi
+		cp "$DEFAULT_SETTINGS_TEMPLATE" "$settings"
+		ok "$settings created"
 	else
-		warn "$settings ya existe — no lo sobrescribo (usá 'drydock init --update' para fusionar las deny entries nuevas del template)"
-		note "Template baseline en: $DEFAULT_SETTINGS_TEMPLATE"
+		warn "$settings already exists — not overwriting"
+		note "Template baseline at: $DEFAULT_SETTINGS_TEMPLATE"
 	fi
 
 	if [ -f "$project_dir/.gitignore" ] && ! grep -q '\.claude/settings\.local\.json' "$project_dir/.gitignore"; then
-		note "Tip: agregar '.claude/settings.local.json' a .gitignore (settings personales no compartidas)"
+		note "Tip: add '.claude/settings.local.json' to .gitignore (personal, unshared settings)"
 	fi
 
-	ok "Done. Lanzá Claude con: cd $project_dir && drydock"
+	ok "Done. Launch Claude with: cd $project_dir && drydock"
 }
 
 cmd_build() {
@@ -200,7 +208,7 @@ cmd_build() {
 cmd_sync() {
 	ensure_prereqs
 	ensure_image
-	note "Sync $HOST_CLAUDE → $CONTAINER_CLAUDE (excluyendo session state)"
+	note "Sync $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)"
 	# MCP filter: when engram is not usable in the container, exclude
 	# mcp/engram.json from the rsync so the container config doesn't reference
 	# a non-functional binary.
@@ -232,8 +240,16 @@ cmd_sync() {
 		--exclude='scheduled_tasks.lock' \
 		--exclude='*.bak.pre-dockerized' \
 		--exclude='*.bak.pre-dockerized/' \
+		--exclude='.credentials.json' \
+		--exclude='themes/' \
+		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
-		/src/ /dst/
+		/src/ /dst/ || return $?
+	# Purge any stale OAuth token from the container.  rsync --exclude prevents
+	# the file from being COPIED on new syncs, but --delete never removes excluded
+	# files from the destination — so an explicit purge is required to clean up
+	# tokens that were copied by pre-exclusion versions of drydock.
+	rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 	# Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
 	# MCP filter: when engram is not usable, strip the engram MCP server entry
 	# so Claude Code in the container sees no startup error.
@@ -251,17 +267,101 @@ cmd_sync() {
 		fi
 		ok "$CONTAINER_CLAUDE_JSON refreshed from host"
 	fi
+	# Stamp last-sync marker AFTER both rsync and the JSON refresh succeed.
+	# Under set -euo pipefail an earlier touch would leave a falsely-fresh marker
+	# if the JSON step failed. ensure_synced reads this marker to detect freshness.
+	# NOTE: ensure_prereqs / ensure_image are also called by cmd_run / cmd_shell
+	# before delegating here — that double call is intentional (idempotent; see design).
+	touch "${CONTAINER_CLAUDE:?}/.drydock-last-sync"
 	ok "Sync done"
 }
 
-# is_container_running — return 0 iff the named container is currently running.
-# Pure-ish: reads Docker state, no mutations. Exact-name match is by-design
-# (docker inspect matches exact name or ID, never a prefix) — REQ-5 S5.4.
-is_container_running() {
-	local name="${1:-}" state
-	[ -n "$name" ] || return 1
-	state="$("$DOCKER" inspect --format '{{.State.Running}}' "$name" 2>/dev/null)" || return 1
-	[ "$state" = "true" ]
+# ensure_synced — auto-sync gate for cmd_run / cmd_shell.
+# Evaluates staleness of the host ~/.claude/ config relative to the last-sync
+# marker.  Calls cmd_sync when stale; is silent on the fresh path.
+# Prune set mirrors cmd_sync's rsync --exclude list (including engram conditional).
+# Probe includes HOST_CLAUDE_JSON (sibling file, not under HOST_CLAUDE) because
+# drydock sync refreshes it and MCP server edits there are a primary motivator.
+ensure_synced() {
+	[ "$DRYDOCK_SKIP_AUTOSYNC" = "1" ] && return 0
+	local marker="$CONTAINER_CLAUDE/.drydock-last-sync"
+	if [ ! -f "$marker" ]; then
+		cmd_sync || warn "auto-sync failed — continuing without sync"
+		return 0
+	fi
+	# Engram-conditional prune entry: mirrors _engram_exclude in cmd_sync.
+	# mcp/engram.json is a file on both sides (find -path and rsync --exclude),
+	# no trailing slash either way — no asymmetry here.
+	local -a engram_prune=()
+	if ! engram_usable; then
+		engram_prune=(-o -path '*/mcp/engram.json')
+	fi
+	# Build probe-paths array: always include HOST_CLAUDE; include HOST_CLAUDE_JSON
+	# only when it exists — find emits an error on a missing path.  The guard
+	# keeps the probe clean and avoids a spurious non-zero exit from find.
+	local -a probe_paths=("$HOST_CLAUDE")
+	[ -f "$HOST_CLAUDE_JSON" ] && probe_paths+=("$HOST_CLAUDE_JSON")
+	# Find any non-state, non-excluded config file newer than the marker.
+	# Prune list is kept byte-for-byte aligned with cmd_sync rsync excludes.
+	# Directory entries omit the trailing /* so -prune skips the directory itself
+	# before descent, preventing find from walking all files inside large state
+	# dirs on every no-op invocation.
+	# Deliberate asymmetry: these directory entries use -path '*/sessions' etc.
+	# (no trailing slash → matches a file OR a directory of that name), while
+	# cmd_sync's rsync uses --exclude='sessions/' (trailing slash → directories
+	# only). Safe because Claude Code only ever creates these names as
+	# directories in ~/.claude/; a bare file so named is the sole divergence
+	# case and not a real scenario. -type d is omitted to keep the compound
+	# expression simple.
+	# -newer is on the PRINT branch (not the top-level) to avoid printing
+	# HOST_CLAUDE_JSON unconditionally when it is not newer than the marker.
+	# Output is captured into $hits; find's exit code is captured via find_rc.
+	# When find prints a match, its exit code is irrelevant — the non-empty $hits
+	# drives the sync regardless. When find prints nothing AND exits non-zero, the
+	# probe failed entirely (e.g. HOST_CLAUDE unreadable at traversal start) and
+	# we warn so the skipped sync is visible. When find prints nothing AND exits 0,
+	# the config is genuinely fresh — the happy-path silent no-op.
+	local hits find_rc=0
+	hits="$(find "${probe_paths[@]}" \
+		\( -path '*/sessions' -o -path '*/projects' \
+		-o -path '*/file-history' -o -path '*/shell-snapshots' \
+		-o -path '*/paste-cache' -o -path '*/cache' \
+		-o -path '*/backups' -o -path '*/telemetry' \
+		-o -path '*/plans' -o -path '*/tasks' \
+		-o -path '*/ide' -o -path '*/session-env' \
+		-o -path '*/downloads' -o -path '*/uploads' \
+		-o -path '*/themes' \
+		-o -name '.last-cleanup' -o -name 'scheduled_tasks.lock' \
+		-o -name '.credentials.json' -o -name '.drydock-last-sync' \
+		-o -name '*.bak.pre-dockerized' \
+		"${engram_prune[@]}" \) -prune \
+		-o -newer "$marker" -type f -print -quit 2>/dev/null)" || find_rc=$?
+	if [ -n "$hits" ]; then
+		note "auto-sync: host config changed — syncing into container..."
+		cmd_sync || warn "auto-sync failed — continuing without sync"
+	elif [ "$find_rc" -ne 0 ]; then
+		warn "auto-sync: staleness probe failed (find exited $find_rc) — skipping; run 'drydock sync' manually if host config changed"
+	fi
+}
+
+# pre_flight_notice — non-blocking informational notice printed before starting
+# a new drydock session when other sessions for the same project are already
+# running. Counts existing drydock-<project>-<disc> containers (run sessions
+# only; -shell suffixed containers are excluded by the anchored regex) and
+# prints one informational line. Never refuses — exit is always 0 (R5).
+# Called from both cmd_run and cmd_shell after export_compose_env.
+pre_flight_notice() {
+	local existing count
+	# Query running containers with an anchored name filter; strip any names the
+	# filter passed through that don't strictly match (e.g. -shell variants when
+	# the Docker daemon applies the regex less strictly than POSIX ERE).
+	existing="$("$DOCKER" ps \
+		--filter "name=^drydock-${PROJECT_NAME}-[0-9a-f]+$" \
+		--format '{{.Names}}' 2>/dev/null |
+		grep -E "^drydock-${PROJECT_NAME}-[0-9a-f]+$" || true)"
+	count="$(printf '%s' "$existing" | grep -c . || true)"
+	[ "$count" -gt 0 ] && note "drydock: $count existing drydock-${PROJECT_NAME}-* session(s) running; starting another."
+	return 0
 }
 
 cmd_run() {
@@ -279,6 +379,7 @@ cmd_run() {
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
+	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
@@ -288,24 +389,13 @@ cmd_run() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	# Descriptive container name (vs auto-generated hash). Intentionally does
-	# NOT include the agent name (e.g. "claude") so the same scheme works when
-	# v0.2.0 adds multi-agent support (Codex, OpenCode, pi.dev, etc.); the
-	# agent that's actually running is implicit in the cmd_run code path. Pre-
-	# clean any stopped container with the same name to avoid `run --rm --name`
-	# conflict; running containers are NOT removed (silently skipped) so a
-	# parallel session in another terminal gets a clear name-collision error
-	# instead of being silently killed.
-	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}"
-	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
-	if is_container_running "$_name"; then
-		printf 'drydock: container %s is already running.\n' "$_name" >&2
-		printf '  drydock will not kill a running session.\n' >&2
-		printf '  Attach a shell to it:  docker exec -it %s bash\n' "$_name" >&2
-		printf '  Stop it:               docker stop %s\n' "$_name" >&2
-		printf '  If two projects normalized to the same name, rename one.\n' >&2
-		return 1
-	fi
+	# Per-session container name: export_compose_env has already generated a
+	# unique DRYDOCK_SESSION_NAME (drydock-<project>-<disc>) via collision retry.
+	# No is_container_running guard needed — the discriminator guarantees each
+	# invocation gets its own unique name (R4: existing containers are never
+	# stopped or killed).
+	local _name="$DRYDOCK_SESSION_NAME"
+	pre_flight_notice
 	exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
 }
 
@@ -324,6 +414,7 @@ cmd_shell() {
 	ensure_prereqs
 	ensure_runtime_dirs
 	ensure_image
+	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
@@ -333,21 +424,13 @@ cmd_shell() {
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
-	# Descriptive container name (vs auto-generated hash). Distinct from
-	# cmd_run's name via the "-shell" suffix so a shell can coexist with a
-	# running main session for the same project. Pre-clean any stopped
-	# container with the same name; running ones are left so concurrent
-	# shells get a clear name-collision error.
-	local _name="drydock-${PROJECT_NAME:-${project_dir##*/}}-shell"
-	"$DOCKER" rm "$_name" >/dev/null 2>&1 || true
-	if is_container_running "$_name"; then
-		printf 'drydock: container %s is already running.\n' "$_name" >&2
-		printf '  drydock will not kill a running session.\n' >&2
-		printf '  Attach a shell to it:  docker exec -it %s bash\n' "$_name" >&2
-		printf '  Stop it:               docker stop %s\n' "$_name" >&2
-		printf '  If two projects normalized to the same name, rename one.\n' >&2
-		return 1
-	fi
+	# Per-session container name: export_compose_env generated a fresh discriminator
+	# via collision retry, so this shell session gets its OWN unique discriminator
+	# and its OWN ~/.claude-container-<disc>/ dir — it does NOT share a config dir
+	# with any concurrent drydock run. The -shell suffix further distinguishes the
+	# container name so ps output is unambiguous (R4: no existing session killed).
+	local _name="${DRYDOCK_SESSION_NAME}-shell"
+	pre_flight_notice
 	if [ "${#passthrough[@]}" -gt 0 ]; then
 		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock "${passthrough[@]}"
 	else
@@ -418,13 +501,21 @@ cmd_doctor() {
 		printf '  drydock image:    %s\n' "$(docker image inspect "$IMAGE" --format '{{.Created}}')"
 	fi
 	echo
+	printf '── drydock policy ──\n'
+	local _policy_count=0
+	for _f in "$DRYDOCK_HOME/templates/managed-settings.d/"*.json; do
+		[ -f "$_f" ] || continue
+		local _n
+		_n="$(jq '(.permissions.deny // []) | length' "$_f" 2>/dev/null || echo 0)"
+		_policy_count=$((_policy_count + _n))
+	done
+	printf '  managed-settings:  \033[32m%s deny rules\033[0m (image-baked policy layer — always active)\n' "$_policy_count"
+	echo
 	printf '── current dir context ──\n'
 	printf '  pwd:              %s\n' "$PWD"
 	if [ -d "$PWD/.claude" ]; then
 		if [ -f "$PWD/.claude/settings.json" ]; then
-			local deny_count
-			deny_count="$(jq -r '.permissions.deny // [] | length' "$PWD/.claude/settings.json" 2>/dev/null || echo '?')"
-			printf '  .claude/settings.json: \033[32mfound\033[0m (%s deny entries)\n' "$deny_count"
+			printf '  .claude/settings.json: \033[32mfound\033[0m (project customization)\n'
 		else
 			printf '  .claude/settings.json: \033[33mmissing\033[0m → drydock init\n'
 		fi
@@ -463,4 +554,484 @@ cmd_doctor() {
 	printf '  USER_UID:         %s\n' "$(id -u)"
 	printf '  USER_GID:         %s\n' "$(id -g)"
 	printf '  HOST_DOCKER_GID:  %s\n' "$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo '?')"
+}
+
+# ── Link helpers ──────────────────────────────────────────────────────────────
+
+# _current_project_name — sanitized basename of the resolved cwd project dir.
+# Pure string transform; no subprocess or compose dependency.
+_current_project_name() {
+	sanitize_project_name "$(basename "$(resolve_project_dir "")")"
+}
+
+# _links_list_file — path to the durable per-project link list.
+# Format: ~/.config/drydock/links/<project>.list
+_links_list_file() {
+	printf '%s/.config/drydock/links/%s.list\n' "$HOME" "$(_current_project_name)"
+}
+
+# _check_path_metachar — reject a path string that would corrupt the
+# pipe-delimited list file, break the Docker Compose volume spec, or break YAML.
+# Args: <path> <label>   (label is used verbatim in the error message)
+_check_path_metachar() {
+	local _p="$1" _label="$2"
+	if [[ "$_p" == *'|'* ]]; then
+		err "rejected: $_label contains '|' which would corrupt the link list file"
+	fi
+	if [[ "$_p" == *':'* ]]; then
+		err "rejected: $_label contains ':' which would break the Docker Compose volume spec"
+	fi
+	if [[ "$_p" == *'"'* ]]; then
+		err "rejected: $_label contains '\"' which would break YAML formatting"
+	fi
+	if [[ "$_p" == *$'\\'* ]]; then
+		err "rejected: $_label contains a backslash which would produce an invalid escape in the YAML volume string"
+	fi
+	if [[ "$_p" =~ [[:cntrl:]] ]]; then
+		err "rejected: $_label contains a control character (including newline)"
+	fi
+}
+
+# ── cmd_link ──────────────────────────────────────────────────────────────────
+
+# cmd_link [--rw] <host-path> [container-target]
+# Validates and appends a sibling entry to the project list file.
+# RO-only this slice; --rw is parsed and rejected with a stub error.
+cmd_link() {
+	local rw=0
+	local src="" target_arg=""
+
+	# Parse args: --rw flag, then 1-2 positional args
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--rw)
+			rw=1
+			shift
+			;;
+		-*)
+			err "unknown option: $1"
+			;;
+		*)
+			if [ -z "$src" ]; then
+				src="$1"
+			elif [ -z "$target_arg" ]; then
+				target_arg="$1"
+			else
+				err "too many arguments"
+			fi
+			shift
+			;;
+		esac
+	done
+
+	[ -n "$src" ] || err "usage: drydock link <host-path> [container-target]"
+
+	# D7: canonicalize BEFORE all guards
+	local canonical
+	canonical="$(realpath "$src" 2>/dev/null)" || err "path does not exist: $src"
+
+	# R4-FIX-4: reject non-directory sources early with a clean error.
+	# realpath succeeds for regular files too, so without this check a file
+	# source makes it through all guards and produces a cryptic Docker engine
+	# error at compose-up time.
+	[ -d "$canonical" ] || err "rejected: '$canonical' is not a directory"
+
+	# FIX #5: metacharacter validation — reject paths that would corrupt the
+	# pipe-delimited list file, break the Docker Compose volume string, or
+	# break YAML. Applied to canonical (already realpath-resolved) and to
+	# target_arg (user-supplied, validated before use).
+	_check_path_metachar "$canonical" "host path '$canonical'"
+	[ -z "$target_arg" ] || _check_path_metachar "$target_arg" "container target '$target_arg'"
+
+	# SP-6: host-source rejection guard
+	# Reject $HOME itself, ancestors of $HOME, and sensitive subdirs.
+	# Use [[ ]] for prefix matching; handle root "/" specially.
+	#
+	# R2-FIX-6: resolve $HOME itself via realpath once, so that a symlinked
+	# $HOME (e.g. $HOME -> /actual/home) does not allow a path under the real
+	# home to bypass prefix guards.  The resolved $canonical is already a
+	# realpath, so all comparisons must be realpath-vs-realpath.
+	local _real_home
+	_real_home="$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+	if [ "$canonical" = "$_real_home" ]; then
+		err "rejected: '$canonical' is \$HOME"
+	fi
+	# Ancestor check: canonical is an ancestor of HOME when HOME starts with canonical/
+	# Special-case root "/" which would produce a double-slash in pattern.
+	if [ "$canonical" = "/" ] || [[ "$_real_home/" == "$canonical/"* ]]; then
+		err "rejected: '$canonical' is an ancestor of \$HOME"
+	fi
+	# Sensitive subdir check: prefix comparison on realpath-resolved canonical
+	# vs realpath-resolved $HOME. Covers drydock-managed dirs AND credential
+	# dirs (INV-1 defense-in-depth: FIX #6 adds ~/.ssh, ~/.aws, ~/.gnupg,
+	# ~/.kube, ~/.docker).
+	# R4-FIX-2: For the five credential dirs (.ssh, .aws, .gnupg, .kube,
+	# .docker) use separator-anchored patterns — match the exact dir OR anything
+	# strictly under it. The old `"$_real_home/.ssh"*` glob matched ~/.ssh-backup,
+	# ~/.dockerfiles, etc. as false positives.
+	# .claude*, .engram*, .config/drydock* keep their wildcards — load-bearing for
+	# per-session directories per INV-2 (e.g. .claude-container-<disc>).
+	if [[ "$canonical/" == "$_real_home/.claude"* ]] ||
+		[[ "$canonical/" == "$_real_home/.engram"* ]] ||
+		[[ "$canonical/" == "$_real_home/.config/drydock"* ]] ||
+		[ "$canonical" = "$_real_home/.ssh" ] || [[ "$canonical/" == "$_real_home/.ssh/"* ]] ||
+		[ "$canonical" = "$_real_home/.aws" ] || [[ "$canonical/" == "$_real_home/.aws/"* ]] ||
+		[ "$canonical" = "$_real_home/.gnupg" ] || [[ "$canonical/" == "$_real_home/.gnupg/"* ]] ||
+		[ "$canonical" = "$_real_home/.kube" ] || [[ "$canonical/" == "$_real_home/.kube/"* ]] ||
+		[ "$canonical" = "$_real_home/.docker" ] || [[ "$canonical/" == "$_real_home/.docker/"* ]]; then
+		err "rejected: '$canonical' is under a protected path (credentials or drydock state)"
+	fi
+
+	# Reject the project's own directory.
+	# R3-FIX-2: resolve_project_dir returns logical pwd (symlink path). If CWD
+	# is a symlink, the logical path differs from canonical (realpath-resolved).
+	# Normalize project_dir to its realpath so a symlinked CWD cannot bypass
+	# this guard. Do NOT modify resolve_project_dir — it is used elsewhere with
+	# pwd-style expectations; only this comparison needs realpath normalization.
+	local project_dir
+	project_dir="$(realpath "$(resolve_project_dir "")" 2>/dev/null || resolve_project_dir "")"
+	if [ "$canonical" = "$project_dir" ]; then
+		err "rejected: '$canonical' is the current project directory (already mounted at /workspace)"
+	fi
+
+	# Derive <name> = basename of canonical host path
+	local name
+	name="$(basename "$canonical")"
+
+	# Compute container target (default or custom)
+	local container_target
+	if [ -n "$target_arg" ]; then
+		# R3-FIX-3: strip trailing slash before ALL validation. Docker treats
+		# /foo and /foo/ as the same mount target; storing them as different
+		# strings causes the collision check to miss entries that mount to the
+		# same effective path. A single root "/" is exempt — removing its slash
+		# yields "" which is wrong; the root-reject check (b) fires first anyway.
+		container_target="${target_arg%/}"
+		[ -z "$container_target" ] && container_target="/"
+		# SP-7: custom target rejection guard (FIX #2 — replaces incomplete denylist).
+		# (a) Must be an absolute path.
+		if [[ "$container_target" != /* ]]; then
+			err "rejected: container target '$container_target' must be an absolute path"
+		fi
+		# (b) Reject root /.
+		if [ "$container_target" = "/" ]; then
+			err "rejected: container target '/' is the filesystem root"
+		fi
+		# R4-FIX-1: reject targets starting with // (double-slash).
+		# On Linux the kernel normalizes //foo → /foo at mount time, which means
+		# //etc/foo mounts at /etc/foo while bypassing every single-slash guard:
+		# the first-component extractor strips one slash leaving /etc/foo, the
+		# %%/* trim then yields empty-string so the denylist case falls through.
+		if [[ "$container_target" == //* ]]; then
+			err "rejected: container target '$container_target' starts with '//' which normalizes to a different path"
+		fi
+		# R3-FIX-4: reject any target containing a '..' path component. Docker
+		# normalizes /workspace-siblings/../etc/foo to /etc/foo at mount time,
+		# which would shadow a system directory while bypassing all guards.
+		# Regex: any /.. followed by / or end-of-string → a .. path component.
+		if [[ "$container_target" =~ /\.\.(/|$) ]]; then
+			err "rejected: container target '$container_target' contains '..' which would normalize to a different path"
+		fi
+		# R3-FIX-5: reject any target containing a '.' path component (single dot).
+		# /workspace-siblings/. normalizes to /workspace-siblings and bypasses
+		# the exact-string guard (g) because the guard compares the literal string.
+		# Regex: any /. followed by / or end-of-string → a single-dot component.
+		# This is safe: /.hidden, /.claude etc. have a non-/ char after the dot.
+		if [[ "$container_target" =~ /\.(/|$) ]]; then
+			err "rejected: container target '$container_target' contains '.' component which would normalize to a different path"
+		fi
+		# (d) Explicitly reject the RO hooks mount path (INV-3): /opt/drydock/hooks.
+		# Checked BEFORE the generic /opt system-dir reject so the error message
+		# names INV-3 specifically. Bind-mounted :ro per docker-compose.yml line 84;
+		# a shadowing sibling mount would silently bypass the read-only guardrail.
+		if [[ "$container_target/" == "/opt/drydock/hooks/"* ]] || [ "$container_target" = "/opt/drydock/hooks" ]; then
+			err "rejected: container target '$container_target' shadows the drydock hooks RO mount (INV-3)"
+		fi
+		# (c) Reject targets whose first path component is a system directory.
+		# NOTE: 'home' is intentionally NOT in this list — /home/<user>/git/foo is
+		# the host-path-mirror use case; ancestor-of-$HOME is handled by (f) below.
+		local _first_comp
+		_first_comp="${container_target#/}"
+		_first_comp="${_first_comp%%/*}"
+		case "$_first_comp" in
+		etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+			err "rejected: container target '$container_target' is under a system directory (/$_first_comp)"
+			;;
+		esac
+		# (e) Reject paths that shadow /workspace or drydock-managed home dirs.
+		# Append trailing / so "/workspace" and "/workspace/sub" both match.
+		# R3-FIX-6: use $_real_home (realpath-resolved, computed earlier in
+		# cmd_link) instead of raw $HOME so that a symlinked $HOME cannot bypass
+		# these guards. Consistent with the host-source guard above which also
+		# uses $_real_home via realpath-resolved canonical.
+		case "$container_target/" in
+		"/workspace/"*)
+			err "rejected: container target '$container_target' shadows /workspace"
+			;;
+		"$_real_home/.claude"*)
+			err "rejected: container target '$container_target' shadows container state"
+			;;
+		"$_real_home/.engram"*)
+			err "rejected: container target '$container_target' shadows container state"
+			;;
+		"$_real_home/.config/drydock"*)
+			err "rejected: container target '$container_target' shadows drydock config"
+			;;
+		esac
+		# (f) Reject $HOME itself and ancestors of $HOME as custom target.
+		# A mount over $HOME or /home shadows the entire home directory.
+		# NOTE: targets under $HOME (e.g. /home/<user>/git/foo) are NOT rejected —
+		# that is the host-path-mirror use case.
+		# R3-FIX-6: use $_real_home for consistency with (e) and with the
+		# host-source guards above.
+		if [ "$container_target" = "$_real_home" ] || [[ "$_real_home/" == "$container_target/"* ]]; then
+			err "rejected: container target '$container_target' shadows \$HOME or an ancestor of \$HOME"
+		fi
+		# (g) Reject /workspace-siblings bare parent — a mount over it would shadow
+		# all default-target siblings. A target under it (e.g. /workspace-siblings/foo)
+		# is acceptable (functionally equivalent to a default target).
+		# R4-FIX-3: the second clause `= "/workspace-siblings/"` is unreachable —
+		# R3-FIX-3 strips the trailing slash at the top of the custom-target branch.
+		if [ "$container_target" = "/workspace-siblings" ]; then
+			err "rejected: container target '$container_target' shadows the /workspace-siblings parent directory"
+		fi
+	else
+		# R3-FIX-3: no trailing slash — consistent with normalized custom targets.
+		container_target="/workspace-siblings/$name"
+	fi
+
+	# ADR-5: basename collision check + container-target uniqueness check
+	local list_file
+	list_file="$(_links_list_file)"
+	# JD1-AB: track whether this exact host+target+flags combo was already linked.
+	# Set to 1 inside the loop instead of returning 0 so the RW self-heal path
+	# can still run (idempotent helpers re-apply any missing mutations).
+	local _already_linked=0
+	# New entry's flag for mode-mismatch comparison.
+	local _new_flag=""
+	[ "$rw" -eq 1 ] && _new_flag="rw"
+	if [ -f "$list_file" ]; then
+		local existing_host existing_target existing_flags existing_name existing_target_norm
+		while IFS='|' read -r existing_host existing_target existing_flags; do
+			[ -z "$existing_host" ] && continue
+			existing_name="$(basename "$existing_host")"
+			if [ "$existing_name" = "$name" ] && [ "$existing_host" != "$canonical" ]; then
+				err "basename collision: '$name' is already used by '$existing_host'; cannot also link '$canonical'"
+			fi
+			# Idempotent: same host path already present.
+			# R4-FIX-5: also compare the normalized existing target against the
+			# new container_target. If they differ the user is trying to change
+			# the mount point — that requires unlink first.
+			if [ "$existing_host" = "$canonical" ]; then
+				local _existing_norm="${existing_target%/}"
+				if [ "$_existing_norm" = "$container_target" ]; then
+					# JD1-AB: compare flags — mode mismatch → actionable error.
+					local _existing_flag="${existing_flags:-}"
+					if [ "$_existing_flag" != "$_new_flag" ]; then
+						err "already linked as '${_existing_flag:-ro}'; run 'drydock unlink $canonical' first to re-link as '${_new_flag:-ro}'"
+					fi
+					# Same mode: mark for self-heal / idempotent no-op; continue scanning.
+					_already_linked=1
+					continue
+				fi
+				err "already linked with a different container target '$_existing_norm' — run 'drydock unlink $canonical' first"
+			fi
+			# FIX #3: container target uniqueness — two entries sharing the same
+			# container target would cause Docker Compose to silently keep only one.
+			# R3-FIX-3: normalize existing_target by stripping trailing slash so
+			# that old entries written with a slash still collide correctly.
+			existing_target_norm="${existing_target%/}"
+			if [ -n "$existing_target_norm" ] && [ "$existing_target_norm" = "$container_target" ]; then
+				err "container target collision: '$container_target' is already used by '$existing_host'"
+			fi
+		done <"$list_file"
+	fi
+
+	# Append entry and perform post-link actions.
+	mkdir -p "$(dirname "$list_file")"
+
+	if [ "$rw" -eq 1 ]; then
+		# RW branch: key-gen + SSH config + URL rewrite (SR-1, SR-2, SR-3, SR-4).
+		# JD1-AB: when _already_linked=1 the .list entry already exists — skip
+		# appending to avoid duplication. All helpers are idempotent so they still
+		# run to self-heal any partial state (step 4/5 failures on prior run).
+		local _sanitized
+		_sanitized="$(sanitize_project_name "$name")"
+		local _project_name
+		_project_name="$(sanitize_project_name "$(basename "$(pwd)")")"
+
+		# Layer-2: key-file ownership collision check (defense-in-depth).
+		# Layer-1 basename collision already handled by the loop above.
+		# Run before appending to .list so .list stays clean on error.
+		_check_sibling_basename_collision_rw "$canonical" "$_sanitized" "$list_file"
+
+		if [ -d "${canonical}/.git" ]; then
+			# FIX-1: validate URL FIRST (read-only); then perform mutations so a
+			# mid-flow failure cannot leave the sibling's .git/config pointing at
+			# an alias whose key file + SSH config Host block do not yet exist.
+			# Order: validate → key-gen → .list append → SSH config regen →
+			# URL rewrite. URL mutation is the LAST step; if anything earlier
+			# fails, the sibling .git/config is untouched.
+			_validate_sibling_remote_url "$canonical" "$_sanitized"
+
+			# Key-gen (idempotent — reuses existing key)
+			local _key_path
+			_key_path="$(_generate_sibling_deploy_key "$_sanitized")"
+
+			# Append .list entry only when not already present — must happen
+			# BEFORE SSH config regen so _regenerate_managed_ssh_config emits
+			# the alias block for it.
+			if [ "$_already_linked" -eq 0 ]; then
+				printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			fi
+
+			# Regenerate managed SSH config (alias block now part of the list)
+			_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
+
+			# URL rewrite — final mutation. _validate_sibling_remote_url already
+			# accepted the current URL, so _rewrite re-runs the same validation
+			# idempotently and then performs the single `git remote set-url`.
+			_rewrite_sibling_remote_url "$canonical" "$_sanitized"
+
+			# Print pubkey + GitHub instructions
+			local _pubkey
+			_pubkey="$(cat "${_key_path}.pub")"
+			ok "linked: $canonical → $container_target (rw)"
+			printf '\nDeploy key for %s:\n\n%s\n\n' "$canonical" "$_pubkey" >&2
+			printf 'Add this key to GitHub:\n' >&2
+			printf '  gh repo deploy-key add %s.pub --repo <owner>/%s --title "drydock-%s" --allow-write\n' \
+				"$_key_path" "$name" "$_sanitized" >&2
+			printf '\nOr visit: https://github.com/<owner>/%s/settings/keys/new\n' "$name" >&2
+		else
+			# No .git/ — mount RW but skip SSH sub-flow (SR-2 / D10)
+			if [ "$_already_linked" -eq 0 ]; then
+				printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			fi
+			_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
+			ok "linked: $canonical → $container_target (rw)"
+			note "no .git/ found in $canonical — deploy-key and SSH config alias skipped; re-run 'drydock link --rw $src' after git init to enable git push"
+		fi
+	else
+		# RO branch: no helpers to re-run, so _already_linked → immediate no-op.
+		if [ "$_already_linked" -eq 1 ]; then
+			note "already linked: $canonical"
+			return 0
+		fi
+		printf '%s|%s|\n' "$canonical" "$container_target" >>"$list_file"
+		ok "linked: $canonical → $container_target (ro)"
+	fi
+}
+
+# ── cmd_unlink ────────────────────────────────────────────────────────────────
+
+# cmd_unlink [--rw] <host-path>
+# Removes the matching entry from the project list file.
+# --rw is accepted and ignored; the .list entry's flags field is authoritative
+# for determining cleanup behavior (SR-6).
+# Exits non-zero when the path is not found in the list.
+cmd_unlink() {
+	# Parse --rw flag (accepted and ignored per SR-6)
+	case "${1:-}" in
+	--rw) shift ;;
+	esac
+
+	local src="${1:-}"
+	[ -n "$src" ] || err "usage: drydock unlink <host-path>"
+
+	# Canonicalize input for consistent comparison
+	local canonical
+	canonical="$(realpath "$src" 2>/dev/null || printf '%s' "$src")"
+
+	local list_file
+	list_file="$(_links_list_file)"
+
+	# R3-FIX-7(b): opportunistically remove any stale .tmp* files left by a
+	# previous cmd_unlink that was SIGKILL'd or hit set -e before cleanup.
+	# 2>/dev/null || true: silently no-op when no stale files exist.
+	# Glob '.tmp*' (rather than '.tmp[0-9]*') matches both the current PID-suffix
+	# pattern (.tmp$$) and any future temp-naming variant (mktemp-style, etc.).
+	rm -f "${list_file}".tmp* 2>/dev/null || true
+
+	# Existence check anchored to first field: $1 == canonical (awk -F'|').
+	# grep -F "${canonical}|" would match the literal string anywhere on the
+	# line, including inside the target column — silent deletion of the wrong
+	# entry. awk field-equality is exact.
+	if [ ! -f "$list_file" ] || ! awk -F'|' -v c="$canonical" '$1==c{f=1} END{exit !f}' "$list_file"; then
+		err "not linked: $canonical"
+	fi
+
+	# Read the entry's flags BEFORE removing it — needed for RW cleanup.
+	local _removed_flags
+	_removed_flags="$(awk -F'|' -v c="$canonical" '$1==c{print $3}' "$list_file")"
+
+	# Remove lines whose first field equals canonical (anchored to host column).
+	# awk exits 0 even when no output lines remain — set -e safe.
+	# R3-FIX-1: RETURN trap does NOT fire when set -e triggers a function exit
+	# (verified empirically). Use explicit error-path cleanup instead: if mv
+	# fails, rm the .tmp and call err. No shell-level EXIT trap is touched.
+	local tmp_file
+	tmp_file="${list_file}.tmp$$"
+	# R4-FIX-6: wrap awk in an explicit error path. set -euo pipefail aborts on
+	# awk failure (rare under resource pressure) leaving tmp_file on disk.
+	# Mirror the mv-failure pattern: rm the tmp and call err.
+	if ! awk -F'|' -v c="$canonical" '$1!=c' "$list_file" >"$tmp_file"; then
+		rm -f "$tmp_file"
+		err "awk failed while rewriting link list"
+	fi
+	if ! mv "$tmp_file" "$list_file"; then
+		rm -f "$tmp_file"
+		err "failed to rewrite link list after unlink"
+	fi
+
+	ok "unlinked: $canonical"
+
+	# RW cleanup: regenerate SSH config (removing alias block) + restore URL.
+	if [ "${_removed_flags:-}" = "rw" ]; then
+		local _project_name
+		_project_name="$(sanitize_project_name "$(basename "$(pwd)")")"
+		local _sanitized
+		_sanitized="$(sanitize_project_name "$(basename "$canonical")")"
+		local _key_path
+		_key_path="$(_sibling_deploy_key_path "$_sanitized")"
+
+		# Regenerate managed SSH config without the removed sibling's alias block.
+		_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
+
+		# Restore sibling's git remote URL to canonical form (D6).
+		_restore_canonical_remote_url "$canonical" "$_sanitized"
+
+		# Dual-sided hint (D6, SR-5): local key path + GitHub-side revocation.
+		printf '\nKey files left on disk (not deleted — remove manually when done):\n' >&2
+		printf '  %s\n' "$_key_path" >&2
+		printf '  %s.pub\n' "$_key_path" >&2
+		printf 'To delete them: rm -f %s %s.pub\n\n' "$_key_path" "$_key_path" >&2
+		printf 'GitHub deploy key revocation (drydock cannot do this automatically):\n' >&2
+		printf '  Visit: https://github.com/<owner>/%s/settings/keys\n' "$(basename "$canonical")" >&2
+		printf '  Or run: gh repo deploy-key list --repo <owner>/%s\n' "$(basename "$canonical")" >&2
+		printf '  Then:   gh repo deploy-key delete <id> --repo <owner>/%s\n' "$(basename "$canonical")" >&2
+	fi
+}
+
+# ── cmd_links ─────────────────────────────────────────────────────────────────
+
+# cmd_links
+# Prints all sibling entries for the current project, one per line.
+# Empty list: silent exit 0.
+cmd_links() {
+	local list_file
+	list_file="$(_links_list_file)"
+
+	[ -f "$list_file" ] || return 0
+
+	local host target _flags _mode
+	while IFS='|' read -r host target _flags; do
+		[ -z "$host" ] && continue
+		# Display mount mode per entry (SR-7, OQ-rw-3 inline suffix).
+		if [ "${_flags:-}" = "rw" ]; then
+			_mode="rw"
+		else
+			_mode="ro"
+		fi
+		printf '%s -> %s (%s)\n' "$host" "$target" "$_mode"
+	done <"$list_file"
 }

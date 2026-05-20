@@ -123,3 +123,26 @@ setup_osrelease_fixture() {
 	run host_fs_locks_unreliable
 	[ "$status" -eq 0 ]
 }
+
+# ── DRYDOCK_DISCRIMINATOR_FN seam ─────────────────────────────────────────────
+
+@test "discriminator seam: DRYDOCK_DISCRIMINATOR_FN defaults to _gen_discriminator" {
+	[ "$DRYDOCK_DISCRIMINATOR_FN" = "_gen_discriminator" ]
+}
+
+@test "discriminator seam: _gen_discriminator emits exactly 4 hex chars" {
+	result="$(_gen_discriminator)"
+	[[ "$result" =~ ^[0-9a-f]{4}$ ]]
+}
+
+@test "discriminator seam: _gen_discriminator output is 4 characters long" {
+	result="$(_gen_discriminator)"
+	[ "${#result}" -eq 4 ]
+}
+
+@test "discriminator seam: DRYDOCK_DISCRIMINATOR_FN override is respected" {
+	_fixed_disc() { printf 'cafe'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc
+	result="$("$DRYDOCK_DISCRIMINATOR_FN")"
+	[ "$result" = "cafe" ]
+}

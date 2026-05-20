@@ -1,18 +1,30 @@
-# drydock — optional SSH deploy-key overlay.
+# drydock — optional SSH managed-config overlay.
 #
 # Auto-included by the drydock CLI when ~/.config/drydock/keys/<PROJECT>_deploy
-# exists on the host (see DRYDOCK_SSH_DEPLOY_KEY, set by export_compose_env in
-# lib/compose.sh). Gives the containerized agent a per-repo, write-access SSH
-# deploy key for `git push` over SSH — WITHOUT mounting ~/.ssh.
+# exists OR when the project list has at least one RW sibling
+# (see DRYDOCK_SSH_CONFIG, set by _maybe_export_ssh_config in lib/compose.sh).
 #
-# The key is bind-mounted read-only at the same path inside; GIT_SSH_COMMAND
-# points git at it (IdentitiesOnly so it doesn't fall back to other keys); and
+# Gives the containerized agent SSH access to git push:
+#   - Primary project: via the primary deploy key in the managed SSH config.
+#   - RW siblings: via per-sibling deploy keys and Host alias blocks.
+#
+# The managed SSH config (${DRYDOCK_SSH_CONFIG}) is bind-mounted read-only at
+# the same path inside the container. The entire keys directory is also mounted
+# read-only, so sibling keys are reachable via the IdentityFile paths baked into
+# the managed config. GIT_SSH_COMMAND points git at the managed config (-F flag)
+# so OpenSSH uses Host alias routing instead of a single -i key.
+#
 # github.com's host key is pinned in /etc/ssh/ssh_known_hosts at image build
-# time (see the ssh-keyscan RUN in the Dockerfile), so ssh never creates or
-# touches ~/.ssh/known_hosts. Nothing under ~/.ssh/ — the hook/deny rules on
-# ~/.ssh/** stay strong and unconditional.
+# time (see the ssh-keyscan RUN in the Dockerfile). The HostName in each alias
+# block resolves to github.com, so the pinned key is matched regardless of the
+# alias used. Nothing under ~/.ssh/ — the hook/deny rules on ~/.ssh/** stay
+# strong and unconditional.
 #
-# Setup (one-time, per repo) — see CONTRIBUTING.md:
+# Setup (one-time, per repo) — see docs/links.md:
+#   drydock link --rw ~/git/mysibling   # generates key, prints pubkey + instructions
+#   # Then add the pubkey to GitHub as a deploy key on the sibling repo.
+#
+# For primary project push (no RW siblings), the existing setup still applies:
 #   ssh-keygen -t ed25519 -f ~/.config/drydock/keys/<PROJECT>_deploy -N ""
 #   gh repo deploy-key add ~/.config/drydock/keys/<PROJECT>_deploy.pub \
 #       --repo <owner>/<PROJECT> --title "drydock-<PROJECT>" --allow-write
@@ -20,6 +32,7 @@
 services:
   drydock:
     volumes:
-      - "${DRYDOCK_SSH_DEPLOY_KEY}:${DRYDOCK_SSH_DEPLOY_KEY}:ro"
+      - "${HOME}/.config/drydock/keys:${HOME}/.config/drydock/keys:ro"
+      - "${DRYDOCK_SSH_CONFIG}:${DRYDOCK_SSH_CONFIG}:ro"
     environment:
-      GIT_SSH_COMMAND: "ssh -i ${DRYDOCK_SSH_DEPLOY_KEY} -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts"
+      GIT_SSH_COMMAND: "ssh -F ${DRYDOCK_SSH_CONFIG} -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts"

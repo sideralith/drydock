@@ -9,9 +9,22 @@
 # Override in tests: export MOUNTS_FILE=/path/to/fixture before sourcing.
 : "${MOUNTS_FILE:=/proc/mounts}"
 
+# ── Discriminator seam ────────────────────────────────────────────────────────
+# DRYDOCK_DISCRIMINATOR_FN: injectable function seam for session discriminator
+# generation. Override in tests: export DRYDOCK_DISCRIMINATOR_FN=_my_stub
+# before sourcing, where _my_stub() { printf 'test'; }
+# Default: _gen_discriminator (4-char random hex, e.g. "a3f9").
+: "${DRYDOCK_DISCRIMINATOR_FN:=_gen_discriminator}"
+_gen_discriminator() { printf '%04x' "$(((RANDOM << 8 ^ RANDOM) & 0xffff))"; }
+
 # ── MOUNTINFO_FILE seam ───────────────────────────────────────────────────────
 # Override in tests: export MOUNTINFO_FILE=/path/to/fixture before sourcing.
 : "${MOUNTINFO_FILE:=/proc/self/mountinfo}"
+
+# ── Auto-sync skip seam ───────────────────────────────────────────────────────
+# Set DRYDOCK_SKIP_AUTOSYNC=1 to bypass auto-sync in cmd_run / cmd_shell.
+# Override in tests: export DRYDOCK_SKIP_AUTOSYNC=1 before sourcing.
+: "${DRYDOCK_SKIP_AUTOSYNC:=0}"
 
 # ── OS-detection seams ────────────────────────────────────────────────────────
 # Override in tests to simulate macOS or plain-Linux CI without the real kernel.
@@ -183,4 +196,20 @@ detect_submounts() {
 			return src   # exotic — pass-through
 		}
 	' "$MOUNTINFO_FILE" | sort -t'|' -k2,2 | awk -F'|' '!seen[$2]++'
+}
+
+# _sibling_deploy_key_path — return the path to the per-sibling deploy private
+# key. Argument: sibling_basename (already sanitized).
+# Output: ~/.config/drydock/keys/<sibling_basename>_deploy
+_sibling_deploy_key_path() {
+	local sibling_basename="$1"
+	printf '%s' "$HOME/.config/drydock/keys/${sibling_basename}_deploy"
+}
+
+# _managed_ssh_config_path — return the path to the drydock-managed SSH config
+# for a given primary project name. Argument: primary (sanitized project name).
+# Output: ~/.config/drydock/ssh-config-<primary>
+_managed_ssh_config_path() {
+	local primary="$1"
+	printf '%s' "$HOME/.config/drydock/ssh-config-${primary}"
 }

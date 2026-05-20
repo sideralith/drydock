@@ -16,7 +16,7 @@ setup and usage.
 
 ## 2. Architectural Invariants
 
-Eight invariants, each following the Mercadona pattern — Rule, Why (with a specific falsifiable
+Eight invariants, each following the next pattern — Rule, Why (with a specific falsifiable
 failure mode), Consequence — ordered outside-in: credentials → state isolation → hooks defense →
 optional features → DooD foundation → meta-rule → runtime hardening defaults. Stable identifiers
 (`INV-N`) enable cross-artifact citation; section identifiers (`§N`) likewise.
@@ -35,14 +35,22 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   being worked on.
 - **Where this lives in code**: `docker-compose.yml` mounts list (no `~/.ssh`, no `~/.gnupg`);
   `docker-compose.ssh.yml` and `docker-compose.gpg.yml` (credential overlays sourced from
-  `~/.config/drydock/` exclusively).
+  `~/.config/drydock/` exclusively). For RW sibling mode: `lib/sibling_ssh.sh` (per-sibling
+  key generation, managed SSH config regeneration, and `remote.origin.url` rewrite/restore
+  helpers); the managed SSH config is written to `~/.config/drydock/ssh-config-<primary>` and
+  RO bind-mounted into the container; the keys directory (`~/.config/drydock/keys/`) mounts as
+  a single `:ro` directory (no per-key overlay enumeration — scales to N siblings without
+  changing the compose files). All per-sibling key material stays under
+  `~/.config/drydock/keys/` — already covered by the `__HOME__/.config/drydock/**` deny rule
+  in `templates/managed-settings.d/00-secrets.json`.
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-2: Container State Split
 
-- **Rule**: Container mounts MUST point at `~/.claude-container/`, `~/.claude-container.json`,
-  and `~/.engram-container/` — never at the host's `~/.claude/`, `~/.claude.json`, or
-  `~/.engram/`.
+- **Rule**: Container mounts MUST point at container-specific state — the per-session
+  `~/.claude-container-<disc>/` directory and `~/.claude-container-<disc>.json` file (each
+  seeded from the `~/.claude-container/` prototype), and `~/.engram-container/` — never at
+  the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`.
 - **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
   Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
   when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).
@@ -54,7 +62,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   token. When a host session and a container session refresh concurrently, each re-mints and writes
   a token, invalidating the other's — both sessions get logged out.
   (3) **When engram is in use — divergent MCP config.** The container's Claude config has the engram
-  MCP entry filtered out via `jq 'del(.mcpServers.engram, ...)'` (`commands.sh:110,244`). If the
+  MCP entry filtered out via `jq 'del(.mcpServers.engram, ...)'` (`cmd_setup()` and `cmd_sync()` in `lib/commands.sh`). If the
   container shared the host's live `~/.claude.json`, that filter would destructively mutate it —
   stripping the engram MCP entry from the host's own config.
   (4) **When engram is in use — `~/.engram/engram.db` SQLite WAL corruption.** The hazard is NOT
@@ -63,6 +71,15 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   macOS virtiofs, or a bind-mount crossing the Docker Desktop VM boundary. On a native filesystem
   with working `fcntl` locks, multiple sessions are safe; the cross-VM-boundary mount is what breaks
   the lock guarantee. (The engram DB lock semantics are governed in detail by INV-5.)
+  **Container-vs-container (v0.2.0+).** Concurrent same-project sessions introduce a second
+  consumer class: container-vs-container alongside host-vs-container. Two drydock containers
+  running concurrently for the same project engage INV-2 for exactly the same reasons as reasons
+  (1) and (2) above — `~/.claude.json` last-writer-wins clobber and the OAuth token refresh race
+  apply equally when both writers are containers. The mechanism that keeps INV-2 satisfied in this
+  case is per-session config isolation: each invocation mounts its own `~/.claude-container-<disc>/`
+  directory and `~/.claude-container-<disc>.json` file (where `<disc>` is a 4-character random hex
+  discriminator). No two concurrent containers ever share a `~/.claude*` source path with write
+  access, so neither failure mode can occur between sessions.
 - **Consequence of violating**: Sharing host `~/.claude/`, `~/.claude.json`, and `~/.engram/` with
   the container produces silent failure across all four reasons: concurrent sessions clobber
   `~/.claude.json` writes (last-writer-wins, lost config — no error); trigger an OAuth lockout
@@ -71,22 +88,34 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   on an unreliable-`fcntl`-lock filesystem (WSL2 9P, macOS virtiofs, Docker Desktop VM boundary) —
   silently corrupt `~/.engram/engram.db` via a WAL page clash. Every failure mode is silent: data
   loss or auth loss with no obvious cause.
-- **Where this lives in code**: `lib/paths.sh:23-33` (container path constants);
-  `docker-compose.yml:61-62` (mounts).
+- **Where this lives in code**: the `HOST_CLAUDE` / `CONTAINER_CLAUDE` / `*_JSON` / `*_ENGRAM` path-constants block in `lib/paths.sh`;
+  the `${DRYDOCK_SESSION_CLAUDE_DIR}` / `${DRYDOCK_SESSION_CLAUDE_JSON}` mount lines in `docker-compose.yml`;
+  `export_compose_env()` in `lib/compose.sh` (generates and exports the per-session discriminator paths).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-3: Hooks Read-Only Overlay
 
 - **Rule**: `~/.claude/hooks/` MUST be bind-mounted `:ro` on top of the container's `.claude`
-  mount. The agent MUST NOT have write access to its own hook scripts.
-- **Why**: The hooks directory is the tier-1 defense layer — deny-lists, guardrails, and
-  confirmation prompts live there. If the agent can write here, protection is advisory rather than
-  structural. A sufficiently instruction-following agent can disable its own guardrails mid-session
-  by overwriting the hook scripts, then proceed without them.
+  mount. The agent MUST NOT have write access to its own hook scripts. Additionally, drydock's
+  agent policy — the `permissions.deny` block and the `hooks.SessionStart` entry — MUST be
+  delivered via a Claude Code managed-settings drop-in baked into the image and owned by root.
+  The agent MUST NOT have write access to these policy files.
+- **Why**: The hooks directory and the managed-settings layer together form the tier-1 defense.
+  The hook scripts (guardrails, block-destructive) are RO via bind-mount. The deny block and the
+  SessionStart hook entry are tamper-proof via image-layer ownership: they live at
+  `/etc/claude-code/managed-settings.d/` (root-owned, non-root container user), loaded by Claude
+  Code at highest precedence and not overridable from project settings. Both protections are
+  structural, not advisory. Before v0.2.0, the deny block and hook entry lived in a per-project
+  `settings.json` that a sufficiently instruction-following agent could overwrite, silently
+  weakening the guardrails for the remainder of the session.
 - **Consequence of violating**: A buggy or prompt-injected agent disables its own guardrails
-  mid-session. All hook-based protections are silently bypassed for the remainder of the session
+  mid-session. Hook-based protections are silently bypassed for the remainder of the session
   with no indication to the operator.
-- **Where this lives in code**: `docker-compose.yml:65` (the `:ro` override line).
+- **Where this lives in code**: the `${HOME}/.claude/hooks` `:ro` bind-mount line in `docker-compose.yml`;
+  `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
+  `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`, `10-git-safety.json`,
+  `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`);
+  `templates/hooks/drydock-block-destructive.sh` (PreToolUse guardrail hook, RO bind-mount).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-4: Engram is Optional
@@ -101,8 +130,8 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: drydock loses portability and becomes a wrapper around one specific
   MCP memory stack rather than general-purpose containerized Claude infrastructure — exactly the
   "niche tool instead of portable infrastructure" failure mode the project is designed to avoid.
-- **Where this lives in code**: `lib/compose.sh:30-32` (`engram_usable` gate);
-  `lib/commands.sh:107-126` (MCP filter).
+- **Where this lives in code**: `engram_usable()` in `lib/compose.sh`;
+  `cmd_setup()` and `cmd_sync()` in `lib/commands.sh` (MCP filter).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-5: Engram Shared-Mode Opt-In, Force-Isolated on Unreliable Locks
@@ -118,14 +147,14 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: A user on WSL2 who enables shared mode without force-downgrade
   protection loses engram data silently — conversation memory, project decisions, accumulated
   observations — with no error message, only degraded or wrong recall.
-- **Where this lives in code**: `lib/compose.sh:105-122` (shared-mode resolution);
-  `lib/paths.sh:74-79` (`host_fs_locks_unreliable`).
+- **Where this lives in code**: the engram shared-mode block in `export_compose_env()` in `lib/compose.sh`;
+  `host_fs_locks_unreliable()` in `lib/paths.sh`.
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-6: Docker Socket = Root-Equivalent on Host
 
 - **Rule**: Documentation, error messages, and proposals MUST NOT describe the container as
-  adversarially isolated. The bind-mounted Docker socket (`docker-compose.yml:51`) gives any
+  adversarially isolated. The bind-mounted Docker socket (`docker-compose.yml:53`) gives any
   process inside the container with socket access the ability to run
   `docker run -v /:/host --privileged` and read the entire host filesystem.
 - **Why**: This is THE foundational reason the threat model is A (accidents), not B (adversarial).
@@ -135,7 +164,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: Contributors onboarded with the wrong threat model run untrusted
   workloads or allow prompt-injection attempts inside the container. The eventual outcome is host
   compromise via the Docker socket — a high-severity trust-loss incident against the project.
-- **Where this lives in code**: `docker-compose.yml:51` (the socket mount line).
+- **Where this lives in code**: `docker-compose.yml:53` (the socket mount line).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-7: Threat Model A — Defense Against Accidents, Not Adversaries

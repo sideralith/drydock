@@ -9,11 +9,16 @@ right place for each action.
 | Action | Writes to | Shared host ↔ container? |
 |---|---|---|
 | Update binaries: `gentle-ai`, `claude`, `engram`, `gga`, `uv`, `node` | `~/.local/` | **YES** — mount RW |
-| `/plugin install <x>` inside Claude | `~/.claude/plugins/` | **NO** — separate (`~/.claude-container/plugins/`) |
+| `/plugin install <x>` inside Claude | `~/.claude/plugins/` | **NO** — separate (`~/.claude-container-<disc>/plugins/`, per-session) |
 | Create/edit skill in `~/.claude/skills/` | `~/.claude/skills/` | **NO** — separate |
 | Edit `~/.claude/CLAUDE.md` or `settings.json` (global) | `~/.claude/` | **NO** — separate |
-| Onboarding flags, "seen hints", project registry, MCP servers, OAuth | `~/.claude.json` | **NO** — separate (`~/.claude-container.json`) |
+| Onboarding flags, "seen hints", project registry, MCP servers, OAuth | `~/.claude.json` | **NO** — separate (`~/.claude-container-<disc>.json`, per-session) |
 | Edit `~/.claude/hooks/` | blocked from container (RO overlay) | host-only |
+| drydock guardrail policy (`permissions.deny` git + OS safety, `hooks.SessionStart`, `hooks.PreToolUse` destructive-command hook) | image-baked managed-settings (`/etc/claude-code/managed-settings.d/`) — update via `drydock build` | N/A — applied at highest precedence, not overridable from project `settings.json` |
+| `drydock link` / `unlink` | `~/.config/drydock/links/<project>.list` (host-only; pipe-delimited `host\|target\|flags` per line) | host-only — overlay regenerated per launch |
+| `drydock link --rw` — per-sibling deploy key (first link only; reused idempotently on re-link; **left on disk at unlink** — see dual-hint message) | `~/.config/drydock/keys/<sibling-basename>_deploy{,.pub}` | host-only — mounted `:ro` as a directory into the container |
+| `drydock link --rw` / `unlink` — managed SSH config (regenerated atomically: mktemp + mv + chmod 600 on every link/unlink that touches an RW sibling) | `~/.config/drydock/ssh-config-<primary>` | host-only — RO bind-mounted into the container |
+| `drydock link --rw` — sibling `remote.origin.url` rewritten from canonical GitHub remote to alias (`github.com-<sibling>`); **restored to canonical by `drydock unlink`** | sibling repo `.git/config` at `$SIBLING_DIR` | **YES** — sibling is mounted; the mutation is visible inside the container |
 | Edits to `.claude/settings.json` of a project | repo at `$PROJECT_DIR` | **YES** — same mount |
 | engram memories (`mem_save`) | `~/.engram/engram.db` | **NO** — separate DBs |
 
@@ -34,21 +39,16 @@ paths NOT mounted from host. Update from container = partial update, container
 
 ### Engram update gets a specific recipe
 
-Engram's binary at `~/.local/bin/engram` is shared (mount RW), but its plugin
-metadata in `~/.claude/plugins/cache/engram/` is separate between host and
-container. Update from container leaves the new binary in host with stale
-plugin metadata in host → skew. Correct recipe:
-
-```bash
-# on host:
-gentle-ai update engram        # or canonical upgrade path
-drydock sync                   # sync metadata host → container
-```
+See [engram.md](engram.md#updating-engram) for the correct update recipe
+(binary is shared, plugin metadata is not — updating from inside the container
+causes skew).
 
 ### Plugins from Claude (`/plugin install foo`)
 
-- **From container**: stays only in `~/.claude-container/plugins/`. Host
-  doesn't know. Perfect for trying plugins without committing to them.
+- **From container**: stays only in `~/.claude-container-<disc>/plugins/`
+  (the per-session dir). Host doesn't know. The per-session dir is discarded
+  when GC'd by `gc_orphan_session_dirs` — container-installed plugins do NOT
+  persist across sessions unless promoted to the host.
 - **From host**: stays only in `~/.claude/plugins/`. Container doesn't see it
   until `drydock sync`.
 - **No automatic promote**. If a plugin you tested in the container convinces
@@ -63,16 +63,8 @@ additive to global ones).
 
 ### Engram memories
 
-Memories saved in host Claude (any project) stay on host. Memories saved in
-container Claude (any project) stay in the container's DB. They do **not**
-auto-sync. Consolidate manually when you want:
-
-```bash
-# from whichever side has the memories you want to move:
-engram export ~/engram-snapshot.json
-# on the destination side:
-engram import ~/engram-snapshot.json
-```
+See [engram.md](engram.md#consolidating-memories) for the manual
+export/import recipe (host and container DBs do not auto-sync).
 
 ## Mental model
 
@@ -80,5 +72,8 @@ engram import ~/engram-snapshot.json
   host, container picks up.
 - **`~/.claude/`, `~/.claude.json`, `~/.engram/`** = **isolated workspace**.
   The container is a **reversible playground**; the host is **canonical**.
+  For Claude config specifically, "reversible" now means "discarded on session
+  end" — each session gets its own per-session dir, reaped by
+  `gc_orphan_session_dirs` after the session exits.
 - When in doubt: change on host, then `drydock sync`, then restart the
   container session.

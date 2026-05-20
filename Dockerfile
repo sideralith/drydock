@@ -111,7 +111,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb1 libxext6 libx11-6 libpango-1.0-0 libcairo2 libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Container identity marker (baked as root, read-only to the agent) ────────
+# Referenced by templates/hooks/drydock-session-start.sh to gate in-container
+# behaviour. Content is a minimal fixed string — no version data that could
+# go stale between builds (version stays in DRYDOCK_VERSION env var).
+RUN echo 'drydock' > /etc/drydock-release
+
+# ── Managed-settings drop-in: bake drydock's agent policy into the image ────
+# Files land at /etc/claude-code/managed-settings.d/ — Claude Code auto-loads
+# this directory on Linux at highest precedence (tamper-proof: non-root agent
+# cannot write under /etc/). __HOME__ is resolved to /home/${USER_NAME} here
+# so the deny rule paths and hook dedup string are correct for the in-container
+# user. The sed pass is harmless no-op for files that contain no __HOME__.
+COPY templates/managed-settings.d/ /etc/claude-code/managed-settings.d/
+RUN sed -i "s|__HOME__|/home/${USER_NAME}|g" /etc/claude-code/managed-settings.d/*.json
+
 USER ${USER_NAME}
+# Explicit HOME for non-login shells: T19-C resolves $HOME from a
+# non-login `docker run -- sh -c 'printf %s "$HOME"'`, where Docker only
+# auto-populates HOME from /etc/passwd in newer daemons. Setting ENV
+# makes the dependency explicit and immune to daemon-version variance.
+ENV HOME=/home/${USER_NAME}
 
 # PATH order:
 #   ~/.local/bin first → contains the host-shared claude/engram/gentle-ai/gga/uv binaries

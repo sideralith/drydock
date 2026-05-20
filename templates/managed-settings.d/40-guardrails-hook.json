@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -x /opt/drydock/hooks/drydock-block-destructive.sh ] && exec /opt/drydock/hooks/drydock-block-destructive.sh || exit 0'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

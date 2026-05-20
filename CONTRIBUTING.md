@@ -11,7 +11,7 @@ Thanks for contributing to drydock. Use the table of contents below to jump to w
 
 ## Testing
 
-New to drydock? Run `./install.sh` from the repo root (or `curl -fsSL <URL>/install.sh | bash` for a fresh machine) to create the `drydock` symlink and verify your prereqs before contributing. See `install.sh` header for env-var overrides.
+New to drydock? Run `./install.sh` from the repo root (or `curl -fsSL <URL>/install.sh | bash` for a fresh machine) to create the `drydock` symlink and verify your prereqs before contributing. Running it in a terminal also offers to build the image and add `~/.local/bin` to PATH (all prompts default to no); the `curl | bash` form stays non-interactive. See `install.sh` header for env-var overrides.
 
 ### Install the test runner
 
@@ -46,13 +46,17 @@ container too. The container hardening overlay (INV-8) mounts `/tmp` as a
 (`~/.cache/drydock/bats-tmp`) — the `/tmp` hardening is left untouched. It also
 falls back to `npx --yes bats` when no `bats` binary is on `PATH` (the base
 image ships none). Always use `scripts/test.sh` inside the container; plain
-`bats test/` is the host-only invocation.
+`bats test/` is the host-only invocation (equivalent on a normal host, but
+not safe inside drydock where `/tmp` is `noexec`).
 
 ### No submodule step needed
 
 The bats helper libraries (`bats-support` and `bats-assert`) are vendored
-under `test/test_helper/`. After a plain `git clone`, just run `bats test/`
-— no `git submodule update --init` required.
+under `test/test_helper/`. After a plain `git clone`, just run
+`scripts/test.sh` — no `git submodule update --init` required.
+(On a normal host `scripts/test.sh` delegates to `bats test/`; inside a
+drydock container it additionally redirects bats' tmpdir away from the
+`noexec` `/tmp`.)
 
 ## Giving the sandbox GitHub credentials (optional)
 
@@ -126,11 +130,11 @@ actually matters.
 - Provide a CLI to generate/register these keys for you (the steps above are
   one-time and explicit on purpose).
 
-After updating drydock, run `drydock init --update` in already-configured projects to pick up new baseline denies.
+After updating drydock, run `drydock build` so the new baseline denies in the managed-settings layer take effect.
 
 ## How to file an issue
 
-Use a clear, specific title: one line describing what is broken and in which command (e.g., `drydock init --update fails on macOS 14 with "no such file" error`).
+Use a clear, specific title: one line describing what is broken and in which command (e.g., `drydock build fails on macOS 14 with "no such file" error`).
 
 Include in the body:
 
@@ -155,7 +159,7 @@ GitHub Issues is the only intake channel — there is no Discord, mailing list, 
    cd drydock
    ```
 
-2. **Create a branch** using the `type/short-description` convention — mirrors the commit-type prefix (e.g., `feat/add-podman-support`, `fix/init-update-macos`).
+2. **Create a branch** using the `type/short-description` convention — mirrors the commit-type prefix (e.g., `feat/add-podman-support`, `fix/submount-detection-macos`).
 
 3. **Commit** using Conventional Commits. See [CLAUDE.md §5: Tracking & Contribution](CLAUDE.md#5-tracking--contribution) for the full conventions table: allowed types, the prohibition on `Co-Authored-By` trailers, and the `--no-verify` / `--force` rules. Do not duplicate the table here.
 

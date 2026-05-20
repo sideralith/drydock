@@ -198,6 +198,11 @@ generate_submount_overlay() {
 			warn "sub-mount $mount_pt uses fstype ${class#exotic:} — propagation may not work"
 			;;
 		esac
+		# Idiom: $(printf '...\n') strips the trailing newline (command-substitution
+		# behavior); the explicit body+=$'\n' restores exactly one newline per
+		# entry. Net output: one line per volume, no blank lines between. Do NOT
+		# remove either half — removing the $'\n' concatenates entries on one
+		# line; removing the $() wrapping breaks the strip-and-add pairing.
 		body+=$(printf '      - "%s:%s:rw"\n' "$docker_src" "$mount_pt")
 		body+=$'\n'
 
@@ -222,6 +227,165 @@ generate_submount_overlay() {
 	} >"$SUBMOUNT_OVERLAY"
 }
 
+# generate_links_overlay — write a compose overlay for sibling mounts from the
+# project's link list (~/.config/drydock/links/<project>.list).
+# If the list is absent or empty, do NOT create the file.
+# Overlay shape (simpler than submounts — no environment: block, D4):
+#   services:
+#     drydock:
+#       volumes:
+#         - "<host>:<target>:ro"
+generate_links_overlay() {
+	local project_dir="$1"
+	[ -n "${LINKS_OVERLAY:-}" ] || return 0
+
+	local proj_name
+	proj_name="$(sanitize_project_name "$(basename "$project_dir")")"
+	local list_file="$HOME/.config/drydock/links/${proj_name}.list"
+
+	[ -f "$list_file" ] || return 0
+
+	local body=""
+	local host target _flags _mode
+	while IFS='|' read -r host target _flags; do
+		[ -z "$host" ] && continue
+		# FIX #8: skip malformed lines with an empty target field to prevent
+		# a broken "host::ro" volume spec from entering the compose overlay.
+		[ -z "$target" ] && continue
+		# Read mount mode from field 3: only "rw" produces :rw; everything
+		# else (empty, unknown, corrupt) falls back to :ro for safety (SR-8,
+		# RW-OVL-3).
+		if [ "${_flags:-}" = "rw" ]; then
+			_mode="rw"
+		else
+			_mode="ro"
+		fi
+		# Idiom (see generate_submount_overlay for the full rationale): $() strips
+		# printf's trailing newline; body+=$'\n' restores exactly one — net is
+		# one line per entry, no blank lines between.
+		body+=$(printf '      - "%s:%s:%s"\n' "$host" "$target" "$_mode")
+		body+=$'\n'
+	done <"$list_file"
+
+	[ -n "$body" ] || return 0
+
+	{
+		printf 'services:\n'
+		printf '  drydock:\n'
+		printf '    volumes:\n'
+		printf '%s' "$body"
+	} >"$LINKS_OVERLAY"
+}
+
+# _regenerate_managed_ssh_config(primary_project, list_file) → config_path
+#
+# Full regeneration of the managed SSH config from the .list file. Idempotent
+# (byte-identical for identical inputs). Insertion order from .list preserved
+# (NO sort) so D11 byte-equality holds across re-links of the same sibling set.
+# Atomic mv + chmod 600 (ssh refuses group-readable configs).
+#
+# Config layout: specific (alias) blocks FIRST, fallback general block LAST.
+# Returns the config path on stdout.
+_regenerate_managed_ssh_config() {
+	local primary="$1"
+	local list_file="$2"
+	local config_path
+	config_path="$(_managed_ssh_config_path "$primary")"
+	mkdir -p "$(dirname "$config_path")"
+
+	local tmp
+	tmp="$(mktemp "${config_path}.XXXXXX")" || err "mktemp failed for managed ssh config"
+
+	{
+		printf '# drydock-managed — regenerated on link/unlink. Do not edit.\n'
+		printf '# Source of truth: %s\n\n' "$list_file"
+
+		# Specific (alias) blocks FIRST, fallback general block LAST.
+		# OpenSSH first-match-wins per option; with literal patterns,
+		# ordering does not change semantics, but "specific before general"
+		# is the conventional layout.
+		if [ -f "$list_file" ]; then
+			local _host _target _flags _name _key
+			while IFS='|' read -r _host _target _flags; do
+				[ -z "$_host" ] && continue
+				[ "${_flags:-}" = "rw" ] || continue
+				# Sibling without .git/ — skip (D10).
+				[ -d "${_host}/.git" ] || continue
+				_name="$(sanitize_project_name "$(basename "$_host")")"
+				_key="$(_sibling_deploy_key_path "$_name")"
+				# Defensive: if the key vanished skip; primary push won't break.
+				[ -f "$_key" ] || continue
+				printf 'Host github.com-%s\n' "$_name"
+				printf '  HostName github.com\n'
+				printf '  User git\n'
+				printf '  IdentityFile %s\n' "$_key"
+				printf '  IdentitiesOnly yes\n\n'
+			done <"$list_file"
+		fi
+
+		# Fallback for the primary's canonical URL (D12-b).
+		local _primary_key="$HOME/.config/drydock/keys/${primary}_deploy"
+		if [ -f "$_primary_key" ]; then
+			printf 'Host github.com\n'
+			printf '  User git\n'
+			printf '  IdentityFile %s\n' "$_primary_key"
+			printf '  IdentitiesOnly yes\n'
+		fi
+	} >"$tmp" || {
+		rm -f "$tmp"
+		err "failed to write managed ssh config"
+	}
+
+	# ssh REFUSES configs with group/world-readable bits (Bad owner or
+	# permissions). Chmod BEFORE rename so the visible file is always 600.
+	if ! chmod 600 "$tmp"; then
+		rm -f "$tmp"
+		err "chmod 600 failed on managed ssh config"
+	fi
+	if ! mv -f "$tmp" "$config_path"; then
+		rm -f "$tmp"
+		err "atomic mv failed for managed ssh config"
+	fi
+
+	printf '%s' "$config_path"
+}
+
+# _maybe_export_ssh_config(primary_project)
+#
+# Checks if either the primary deploy key OR any RW entry in .list exists.
+# If so, regenerates the managed SSH config and exports DRYDOCK_SSH_CONFIG.
+# Called from export_compose_env after the existing deploy-key block.
+_maybe_export_ssh_config() {
+	local primary="$1"
+	local list_file="$HOME/.config/drydock/links/${primary}.list"
+	local primary_key="$HOME/.config/drydock/keys/${primary}_deploy"
+
+	local should_activate=0
+
+	# Trigger 1: primary key exists
+	if [ -f "$primary_key" ]; then
+		should_activate=1
+	fi
+
+	# Trigger 2: any RW entry in .list
+	if [ "$should_activate" -eq 0 ] && [ -f "$list_file" ]; then
+		local _h _t _f
+		while IFS='|' read -r _h _t _f; do
+			[ -z "$_h" ] && continue
+			if [ "${_f:-}" = "rw" ]; then
+				should_activate=1
+				break
+			fi
+		done <"$list_file"
+	fi
+
+	[ "$should_activate" -eq 1 ] || return 0
+
+	local config_path
+	config_path="$(_regenerate_managed_ssh_config "$primary" "$list_file")"
+	export DRYDOCK_SSH_CONFIG="$config_path"
+}
+
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
 	local project_dir="$1"
@@ -229,6 +393,10 @@ compose_files() {
 	generate_submount_overlay "$project_dir"
 	if [ -f "${SUBMOUNT_OVERLAY:-}" ] && [ -s "${SUBMOUNT_OVERLAY:-}" ]; then
 		printf '%s\n' "-f" "$SUBMOUNT_OVERLAY"
+	fi
+	generate_links_overlay "$project_dir"
+	if [ -f "${LINKS_OVERLAY:-}" ] && [ -s "${LINKS_OVERLAY:-}" ]; then
+		printf '%s\n' "-f" "$LINKS_OVERLAY"
 	fi
 	# Container hardening defaults (cap_drop, no-new-privileges, tmpfs /tmp).
 	# Suppressed ONLY when DRYDOCK_NO_HARDENING is set to the literal value "1"
@@ -240,7 +408,9 @@ compose_files() {
 	fi
 	# Optional, host opt-in — these vars are set by export_compose_env (called
 	# before this fn) so the -f list and the overlay YAMLs share one decision.
-	if [ -n "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]; then
+	# Gate on DRYDOCK_SSH_CONFIG (set by _maybe_export_ssh_config) which activates
+	# when EITHER the primary deploy key OR any RW sibling exists (SR-9, SR-11).
+	if [ -n "${DRYDOCK_SSH_CONFIG:-}" ]; then
 		printf '%s\n' "-f" "$COMPOSE_SSH"
 	fi
 	if [ -n "${DRYDOCK_GPG_SIGNINGKEY:-}" ]; then
@@ -284,7 +454,60 @@ export_compose_env() {
 	USER_NAME="$(id -un)"
 	export HOST_DOCKER_GID
 	HOST_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 1001)"
-	export COMPOSE_PROJECT_NAME="drydock-${PROJECT_NAME}"
+
+	# ── Per-session identity: discriminator + session dirs ────────────────────
+	# Order: GC orphans → generate discriminator (collision retry) → seed dir.
+	# GC must run first so orphan dirs don't pollute the collision check.
+	gc_orphan_session_dirs
+
+	# Collision retry: generate a discriminator and verify it is free.
+	# A "free" disc means no drydock-*-<disc> or drydock-*-<disc>-shell
+	# container exists in docker ps -a. On a collision: remove the stopped
+	# container for the CURRENT project+disc (belt-and-suspenders cleanup), then
+	# retry with a fresh disc. R4 (no-kill): running containers are never stopped —
+	# a collision with a running container forces a retry with a new disc.
+	local _disc _session_name _ps_out _max_retries=5 _attempt=0
+	while true; do
+		_attempt=$((_attempt + 1))
+		if [ "$_attempt" -gt "$_max_retries" ]; then
+			err "drydock: could not find a free session discriminator after ${_max_retries} attempts — too many concurrent sessions?"
+		fi
+		_disc="$("$DRYDOCK_DISCRIMINATOR_FN")"
+		_session_name="drydock-${PROJECT_NAME}-${_disc}"
+		_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
+		# Check if any container (any project) already uses this disc — match
+		# both the run name (drydock-<proj>-<disc>) and the shell companion
+		# (drydock-<proj>-<disc>-shell).  --format '{{.Names}}' gives one name
+		# per line so ^ and $ anchors are exact; no column-padding false-matches.
+		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
+			# The collision check is project-agnostic (any drydock-*-<disc> match),
+			# but the rm targets only THIS project's container for that disc.
+			# If the collision belongs to a foreign project, the rm is a silent
+			# no-op (container name mismatch); the loop retries with a fresh disc.
+			"$DOCKER" rm "${_session_name}" >/dev/null 2>&1 || true
+			# Always retry with a fresh disc to guarantee uniqueness.
+			continue
+		fi
+		break
+	done
+
+	export DRYDOCK_DISCRIMINATOR="$_disc"
+	export DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-${_disc}"
+	export DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-${_disc}.json"
+	export DRYDOCK_SESSION_NAME="$_session_name"
+	export COMPOSE_PROJECT_NAME="$_session_name"
+
+	# Seed the per-session config dir from the freshly-synced prototype.
+	seed_session_config_dir "$_disc"
+
+	# ── drydock container identity markers (issue #8, Slice A) ───────────────
+	# Forwarded into the container via the environment: block so Claude can
+	# detect it is running inside drydock. DRYDOCK_HOME is a plain bash var
+	# set inline in bin/drydock; export it here so docker-compose.yml can
+	# substitute ${DRYDOCK_HOME} in volume mount sources (e.g. Slice B hook mount).
+	export DRYDOCK=1
+	export DRYDOCK_VERSION
+	export DRYDOCK_HOME
 
 	# ── deploy-key migration warning (REQ-11) ─────────────────────────────────
 	# If the raw basename differs from the sanitized PROJECT_NAME AND an old-named
@@ -307,6 +530,10 @@ export_compose_env() {
 	if [ -f "$_deploy_key" ]; then
 		export DRYDOCK_SSH_DEPLOY_KEY="$_deploy_key"
 	fi
+	# Managed SSH config: regenerated when primary key OR any RW sibling exists.
+	# Exports DRYDOCK_SSH_CONFIG (used by compose_files to activate the SSH overlay
+	# and by docker-compose.ssh.yml for the GIT_SSH_COMMAND -F flag).
+	_maybe_export_ssh_config "$PROJECT_NAME"
 	# Sandbox GPG signing key: ~/.config/drydock/signing/ → GitHub-Verified commits
 	# (consumed by docker-compose.gpg.yml: bind-mount rw + GNUPGHOME + GIT_CONFIG_*).
 	local _signing_home="$HOME/.config/drydock/signing"
@@ -317,7 +544,7 @@ export_compose_env() {
 			export DRYDOCK_GPG_SIGNING_HOME="$_signing_home"
 			export DRYDOCK_GPG_SIGNINGKEY="$_fpr"
 		else
-			warn "$_signing_home existe pero no contiene clave secreta — firma GPG no activada"
+			warn "$_signing_home exists but contains no secret key — GPG signing not enabled"
 		fi
 	fi
 
@@ -333,7 +560,7 @@ export_compose_env() {
 		if [ -f "$_sentinel" ]; then
 			if host_fs_locks_unreliable && [ "${DRYDOCK_ENGRAM_SHARED:-}" != "force" ]; then
 				export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
-				warn "shared engram DB requested but bind-mount POSIX locks unreliable on this host (WSL2 9P / macOS virtiofs) — using isolated DB instead; run 'engram sync --import' to bridge, or set DRYDOCK_ENGRAM_SHARED=force to override (risks SQLite WAL corruption)"
+				warn "shared engram DB requested but bind-mount POSIX locks unreliable on this host (WSL2 9P / macOS virtiofs) — using isolated DB instead; see docs/engram.md to consolidate host and container memory, or set DRYDOCK_ENGRAM_SHARED=force to override (risks SQLite WAL corruption)"
 			else
 				export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram"
 				if host_fs_locks_unreliable; then
@@ -387,14 +614,112 @@ export_compose_env() {
 	sync_submount_env_file "$project_dir"
 }
 
+# gc_orphan_session_dirs — prune per-session Claude config dirs whose container
+# no longer exists. Called before discriminator generation so stale dirs are
+# cleaned before a new session is seeded.
+#
+# Algorithm:
+#   1. Glob $HOME/.claude-container-?*/ (pattern ?* requires ≥1 char after dash;
+#      never matches the bare prototype ~/.claude-container — no trailing dash).
+#   2. For each dir, extract <disc> from the dir name; derive both container names:
+#      drydock-<PROJECT_NAME>-<disc> and drydock-<PROJECT_NAME>-<disc>-shell.
+#   3. If NEITHER name appears in `docker ps -a`, rm -rf the dir and its .json sibling.
+#   4. Returns 0 always — GC failures are non-fatal.
+#
+# Uses DOCKER seam.
+gc_orphan_session_dirs() {
+	local _disc _dir _json _ps_out
+	# Collect docker ps -a output once (avoid N docker calls for N dirs).
+	# --format '{{.Names}}' emits one container name per line so ^ and $ anchors
+	# are exact and column-padding cannot produce false matches.
+	_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
+
+	# Use a for-loop with a glob; protect against no-match (nullglob absent).
+	for _dir in "$HOME"/.claude-container-?*/; do
+		# Skip if glob matched literally (no dirs exist).
+		[ -d "$_dir" ] || continue
+		# Extract disc: remove prefix "$HOME/.claude-container-" and trailing "/".
+		_disc="${_dir#"$HOME"/.claude-container-}"
+		_disc="${_disc%/}"
+		# Validate discriminator shape: only prune dirs drydock itself could have
+		# created (4-char lowercase hex).  Dirs with any other suffix — e.g.
+		# ~/.claude-container-backup — are user-owned and must never be removed.
+		[[ "$_disc" =~ ^[0-9a-f]{4}$ ]] || continue
+		# Project-agnostic liveness check: protect the dir if ANY
+		# drydock-*-<disc> or drydock-*-<disc>-shell container exists,
+		# regardless of which project owns it.  Combined alternation so both
+		# the run name and the shell companion are matched in one pass.
+		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
+			continue
+		fi
+		# Orphan — prune dir and sibling .json.
+		_json="${_dir%/}.json"
+		rm -rf "$_dir"
+		rm -f "$_json"
+	done
+	return 0
+}
+
+# seed_session_config_dir — create (or re-create) a per-session Claude config
+# dir and .json file by copying from the prototype ~/.claude-container/.
+# Called after ensure_synced so the prototype is fresh, and after the
+# discriminator is settled.
+#
+# Arguments:
+#   $1 — disc: the 4-char hex discriminator for this session
+#
+# Behaviour:
+#   - If a live container (run or shell) for this disc already exists in
+#     docker ps -a, return early (safe guard — never overwrite an in-use dir).
+#   - Otherwise: rm -rf the session dir (clean re-seed), cp -a the prototype
+#     dir and .json into the session-specific paths.
+#   - The .drydock-last-sync staleness marker is NOT copied (rm it from the
+#     session dir if present — prototype owns it).
+#
+# Uses DOCKER seam.
+seed_session_config_dir() {
+	local disc="$1"
+	# Guard against a degenerate empty discriminator: rm -rf "$HOME/.claude-container-"
+	# would target the wrong path.  Return early — nothing safe to seed.
+	[ -n "$disc" ] || return 0
+	local session_dir="$HOME/.claude-container-${disc}"
+	local session_json="$HOME/.claude-container-${disc}.json"
+	# Live-container guard: project-agnostic — match ANY drydock-*-<disc> or
+	# drydock-*-<disc>-shell container, regardless of which project owns it.
+	# This prevents a cross-project invocation from re-seeding a live session dir
+	# whose discriminator happens to match the current invocation's disc.
+	# --format '{{.Names}}' gives one name per line; ^ and $ are exact anchors.
+	local _ps_out
+	_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
+	if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${disc}(-shell)?$"; then
+		return 0
+	fi
+
+	# If the prototype does not exist yet, skip seeding.
+	# In production, ensure_runtime_dirs always creates it before export_compose_env
+	# is called. Tests that bypass ensure_runtime_dirs may land here without a
+	# prototype; returning early is safe (no dir to copy = no corruption).
+	[ -d "$HOME/.claude-container" ] || return 0
+
+	# Clean re-seed: remove stale session dir.
+	rm -rf "$session_dir"
+
+	# Copy prototype dir and .json into session-specific paths.
+	cp -a "$HOME/.claude-container" "$session_dir"
+	cp -a "$HOME/.claude-container.json" "$session_json"
+
+	# Remove the staleness marker — it belongs to the prototype, not sessions.
+	rm -f "$session_dir/.drydock-last-sync"
+}
+
 image_exists() {
 	"$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1
 }
 
 ensure_prereqs() {
-	command -v docker >/dev/null || err "docker no está en PATH"
-	[ -S /var/run/docker.sock ] || err "docker socket no encontrado en /var/run/docker.sock"
-	[ -f "$COMPOSE_BASE" ] || err "compose base no encontrado: $COMPOSE_BASE"
+	command -v docker >/dev/null || err "docker not on PATH"
+	[ -S /var/run/docker.sock ] || err "docker socket not found at /var/run/docker.sock"
+	[ -f "$COMPOSE_BASE" ] || err "compose base not found: $COMPOSE_BASE"
 }
 
 ensure_runtime_dirs() {
@@ -416,7 +741,7 @@ ensure_runtime_dirs() {
 		[ ! -d "$CONTAINER_ENGRAM" ] && _needs_setup=1
 	fi
 	if [ "$_needs_setup" -eq 1 ]; then
-		note "runtime state faltante — ejecutando 'drydock setup' automáticamente"
+		note "runtime state missing — running 'drydock setup' automatically"
 		cmd_setup
 	fi
 }
