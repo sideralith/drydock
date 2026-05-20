@@ -199,7 +199,7 @@ convert`, and any piping of its output) resolves the env passthrough and
 renders the token in plaintext. If you need to debug the rendered config (or
 pipe it to a tool that does), **always pass `--no-interpolate`**:
 
-> `--no-interpolate` requires Docker Compose v2.2 or later (released November 2021).
+> **Note:** `--no-interpolate` requires Docker Compose v2.2 or later.
 
 ```bash
 # UNSAFE — prints the token value:
