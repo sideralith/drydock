@@ -551,6 +551,11 @@ cmd_status() {
 		else
 			local _engram_size=""
 			[ -d "$CONTAINER_ENGRAM" ] && _engram_size="$(du -sh "$CONTAINER_ENGRAM" 2>/dev/null | cut -f1)"
+			# Tilde-literal is intentional — display text shown to the user
+			# (e.g. "isolated · ~/.engram-container · 53M"), not a path the
+			# shell needs to expand. The single-quote workaround does not
+			# suppress SC2088, so disable directly per shellcheck conventions.
+			# shellcheck disable=SC2088
 			_dr_item "✓" "engram" "isolated" \
 				"~/.engram-container${_engram_size:+ · $_engram_size}"
 		fi
@@ -708,10 +713,14 @@ cmd_doctor() {
 		_dr_item "✓" "docker-compose.engram.yml" "" "engram on PATH"
 	fi
 	# Optional user-config opt-in overlays (auto-detected from host directories).
+	# Tilde-literals in the meta column are display text (not paths to expand);
+	# disable SC2088 explicitly for the two affected calls.
 	if [ -d "$HOME/.mcp-auth" ]; then
+		# shellcheck disable=SC2088
 		_dr_item "✓" "docker-compose.mcp-auth.yml" "" "~/.mcp-auth present"
 	fi
 	if [ -d "$HOME/.config/ccstatusline" ]; then
+		# shellcheck disable=SC2088
 		_dr_item "✓" "docker-compose.ccstatusline.yml" "" "~/.config/ccstatusline present"
 	fi
 	unset _DR_LABEL_WIDTH
