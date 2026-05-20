@@ -125,11 +125,12 @@ expose every sibling's private key in one shot.
 
 **Defense-in-depth.** `00-secrets.json` (image-baked, root-owned) now includes
 `Bash(...)` deny patterns covering the most common read commands (`cat`, `less`,
-`more`, `head`, `tail`, `od`, `xxd`, `strings`, `bat`, `rg`) targeting that
-path. `bat` and `rg` are explicitly covered because drydock's global agent
-convention prefers `bat`/`rg` over `cat`/`grep`; failing to deny them would
-leave a normal-tool-usage hole (`rg . <key-file>` dumps content just as
-effectively as `cat`).
+`more`, `head`, `tail`, `od`, `xxd`, `strings`, `bat`, `rg`, `nl`, `tac`)
+targeting that path. `bat` and `rg` are explicitly covered because drydock's
+global agent convention prefers `bat`/`rg` over `cat`/`grep`; failing to deny
+them would leave a normal-tool-usage hole (`rg . <key-file>` dumps content just
+as effectively as `cat`). `nl` and `tac` are covered for the same reason — both
+read file content line by line (`nl` numbers lines, `tac` reverses them).
 Under Threat Model A (accidents — INV-7) this is sufficient: the deny rules
 block inadvertent tool invocations. They do NOT block every conceivable
 reading mechanism (`python`, `dd`, `awk`, `perl`, custom scripts, etc.) — a
