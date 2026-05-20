@@ -197,3 +197,19 @@ detect_submounts() {
 		}
 	' "$MOUNTINFO_FILE" | sort -t'|' -k2,2 | awk -F'|' '!seen[$2]++'
 }
+
+# _sibling_deploy_key_path — return the path to the per-sibling deploy private
+# key. Argument: sibling_basename (already sanitized).
+# Output: ~/.config/drydock/keys/<sibling_basename>_deploy
+_sibling_deploy_key_path() {
+	local sibling_basename="$1"
+	printf '%s' "$HOME/.config/drydock/keys/${sibling_basename}_deploy"
+}
+
+# _managed_ssh_config_path — return the path to the drydock-managed SSH config
+# for a given primary project name. Argument: primary (sanitized project name).
+# Output: ~/.config/drydock/ssh-config-<primary>
+_managed_ssh_config_path() {
+	local primary="$1"
+	printf '%s' "$HOME/.config/drydock/ssh-config-${primary}"
+}
