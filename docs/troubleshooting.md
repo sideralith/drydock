@@ -145,9 +145,8 @@ run it from the host where drydock's guardrails do not apply.
 
 **If you believe it is a false positive:** check the documented limitation classes
 in [security.md](security.md#known-limitations). If your case is not listed, open
-a GitHub issue (issue #31 tracks the quoted-target bypass as one known gap). Do
-NOT edit the image-baked drop-ins locally — a `drydock build` restores them from
-the image.
+a GitHub issue. Do NOT edit the image-baked drop-ins locally — a `drydock build`
+restores them from the image.
 
 **To inspect active rules:** the drop-in JSON files are readable at
 `/etc/claude-code/managed-settings.d/` inside the container (read-only), and in

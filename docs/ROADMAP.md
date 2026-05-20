@@ -232,7 +232,7 @@ nice-to-have if demand surfaces.
 
 ### destructive-command-guardrails
 
-**Status.** Done — shipped in v0.2.0 via PR #32 (issue #30 closed). Follow-up: issue #31 (quoted-target bypass).
+**Status.** Done — shipped in v0.2.0 via PR #32 (issue #30 closed). The quoted-target follow-up ([#31][i31]) was also resolved in v0.2.0 — the guardrail hook now normalizes single and double quote pairs around path tokens before applying the anchored regex checks.
 
 **Problem.** drydock's shipped guardrails cover a narrow slice of the accident
 class its threat model targets. `managed-settings.d/10-git-safety.json` holds 11
