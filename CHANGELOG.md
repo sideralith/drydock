@@ -165,5 +165,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.2.0]: https://github.com/sideralith/drydock/releases/tag/v0.2.0
+[0.1.2]: https://github.com/sideralith/drydock/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sideralith/drydock/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sideralith/drydock/releases/tag/v0.1.0

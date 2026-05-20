@@ -14,7 +14,6 @@
 > Currently supports **Claude Code**. Adapters for other agents are on the
 > [roadmap](#roadmap).
 
-
 ## What problem it solves
 
 AI coding agents on the host can touch anything `$HOME` can touch. That's fine

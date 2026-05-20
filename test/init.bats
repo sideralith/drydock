@@ -58,9 +58,9 @@ setup() {
   # First run.
   "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"
 
-  # Second run must emit a warn message.
+  # Second run must emit a warn message naming the existing settings file.
   run bash -c '"$1" init "$2" 2>&1' -- "$DRYDOCK_HOME/bin/drydock" "$TEST_PROJECT_DIR"
-  [[ "$output" == *"warn"* ]] || [[ "$output" == *"ya existe"* ]]
+  [[ "$output" == *"already exists"* ]]
 }
 
 
