@@ -29,6 +29,7 @@ file.
 | Item | Scope | Issue | Status |
 |------|-------|-------|--------|
 | [link-sibling-projects](#link-sibling-projects) | v0.2.0 | [#13][i13] | Done |
+| [rw-sibling-mode](#rw-sibling-mode) | v0.2.0 | [#47][i47] | Done |
 | [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Done |
 | [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Done |
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Done |
@@ -59,6 +60,7 @@ Order for later releases is not yet decided.
 [i18]: https://github.com/sideralith/drydock/issues/18
 [i30]: https://github.com/sideralith/drydock/issues/30
 [i31]: https://github.com/sideralith/drydock/issues/31
+[i47]: https://github.com/sideralith/drydock/issues/47
 
 ---
 
@@ -84,11 +86,34 @@ idempotent re-link are all implemented. INV-1 credential deny rules were rewritt
 from `__HOME__`-anchored to `//**/`-root-anchored (credentials now denied at any
 mount depth, protecting credentials inside mounted siblings).
 
-**Deferred.** RW semantics (`--rw` is parsed and errors "not yet implemented"):
-git-push surface (deploy keys per sibling), `CLAUDE.md` governance, git identity
-for sibling commits are open questions (OQ-1) tracked for a future change.
+**Provenance.** engram #1064 (2026-05-15). RW sibling mode shipped as a
+follow-up change — see [rw-sibling-mode](#rw-sibling-mode) below.
 
-**Provenance.** engram #1064 (2026-05-15).
+### rw-sibling-mode
+
+**Status: Done (v0.2.0, issue #47).**
+
+**Problem.** Read-only sibling linking (`link-sibling-projects`) covers the most
+common use case — cross-project reference — but blocks any workflow that needs to
+write to a sibling: committing a fix in a shared library while iterating in the
+primary project, or landing a docs PR in a separate docs repo. The existing `:ro`
+mount prevents `git push` and all write operations.
+
+**What shipped.** `drydock link --rw <path>`: per-sibling ed25519 deploy keys
+generated at `~/.config/drydock/keys/<basename>_deploy{,.pub}`, a managed SSH
+config at `~/.config/drydock/ssh-config-<primary>` with `Host github.com-<sibling>`
+alias blocks, `GIT_SSH_COMMAND` rewritten to route through the managed config
+inside the container, and the sibling's `remote.origin.url` updated from the
+canonical GitHub remote to the alias (restored on `drydock unlink`). The keys
+directory mounts `:ro` as a directory — no per-key overlay enumeration, scales to
+N siblings. A cross-project basename collision check scans ALL `*.list` files at
+link time. `drydock unlink` prints a dual hint covering both the local key path
+(for `rm`) and the GitHub-side deploy key revocation URL, because drydock cannot
+revoke remote deploy keys. See `docs/links.md` for the user-facing workflow.
+
+**Status.** Done — shipped in v0.2.0 (issue #47 closed by PR squash merge).
+
+**Provenance.** SDD artifacts in engram: spec #2442, design #2443, tasks #2444.
 
 ### install-interactive
 

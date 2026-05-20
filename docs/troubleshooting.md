@@ -384,6 +384,37 @@ These fire only when you supply an explicit container path as the second argumen
 hooks guard rationale → [architecture.md](architecture.md#inv-3-and-the-link-guard);
 host-path-mirror pattern → [docs/links.md](links.md#the-host-path-mirror-pattern).
 
+## `drydock link --rw` errors
+
+`drydock link --rw` adds deploy-key generation and SSH config wiring on top of the
+standard link flow. The table below covers error classes specific to RW mode.
+
+| Error class | Symptom / message | Resolution |
+|---|---|---|
+| **Deploy key missing** | A previously generated key was deleted from `~/.config/drydock/keys/` and the sibling was already unlinked | Re-run `drydock link --rw <path>`. A new ed25519 key pair is generated; you will need to add the new public key as a deploy key on GitHub for that repo. |
+| **Basename collision (cross-project)** | `drydock link --rw` exits with "basename '<name>' is already used as an RW sibling in project '<other>'" | Two projects are trying to link siblings with the same basename (e.g. both link `~/git/shared-lib`). Deploy keys are scoped by basename; sharing would create a key conflict. Use an explicit `<container-target>` with a unique basename for one of them, e.g. `drydock link --rw ~/git/shared-lib /workspace-siblings/shared-lib-projectB`. |
+| **Non-canonical remote URL** | `drydock link --rw` exits with "remote.origin.url is not a github.com HTTPS or SSH remote" | drydock rewrites the sibling's `remote.origin.url` to route through its managed SSH alias. It only supports `github.com` remotes (SSH: `git@github.com:…`, HTTPS: `https://github.com/…`). Other remotes (GitLab, Bitbucket, self-hosted) are not supported by the URL-rewrite step. Use RO mode (`drydock link` without `--rw`) for non-GitHub siblings. |
+| **Already linked as a different mode** | `drydock link --rw <path>` on a path already in the list with `flags=` (RO) | Remove the existing entry first: `drydock unlink <path>`, then re-link with `--rw`. Upgrading from RO to RW in-place is not supported. |
+| **Partial-state self-heal** | Previous `drydock link --rw` was interrupted after key generation but before the list file was updated (or vice versa) | Re-run `drydock link --rw <path>`. The key generation step is idempotent (existing key is reused); the list-write and URL-rewrite steps will complete. |
+
+### git push fails inside the container after `drydock link --rw`
+
+If `git push` inside the container fails with a permission error or host-key
+warning for a linked RW sibling:
+
+1. **Check `GIT_SSH_COMMAND`** is set: `echo $GIT_SSH_COMMAND` — should reference
+   `~/.config/drydock/ssh-config-<primary>`.
+2. **Check the managed SSH config** is mounted: `ls -la ~/.config/drydock/ssh-config-<primary>`
+   inside the container — should exist and be readable.
+3. **Check the alias** in the sibling's `.git/config`: `cat <sibling>/.git/config` — the
+   `remote.origin.url` should be `git@github.com-<sibling>:owner/repo.git` (aliased),
+   NOT `git@github.com:owner/repo.git` (canonical). If it is canonical, the URL-rewrite
+   step did not complete — re-run `drydock link --rw <path>` from the host.
+4. **Check the deploy key is on GitHub**: the public key at
+   `~/.config/drydock/keys/<sibling>_deploy.pub` must be added to the sibling repo's
+   "Deploy keys" settings (with write access) on GitHub. drydock prints this reminder
+   at `link --rw` time, but it requires a manual step on GitHub.
+
 ## drydock can't find DRYDOCK_HOME / compose file
 
 The CLI resolves `DRYDOCK_HOME` by following the symlink at

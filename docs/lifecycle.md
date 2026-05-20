@@ -16,6 +16,9 @@ right place for each action.
 | Edit `~/.claude/hooks/` | blocked from container (RO overlay) | host-only |
 | drydock guardrail policy (`permissions.deny` git + OS safety, `hooks.SessionStart`, `hooks.PreToolUse` destructive-command hook) | image-baked managed-settings (`/etc/claude-code/managed-settings.d/`) — update via `drydock build` | N/A — applied at highest precedence, not overridable from project `settings.json` |
 | `drydock link` / `unlink` | `~/.config/drydock/links/<project>.list` (host-only; pipe-delimited `host\|target\|flags` per line) | host-only — overlay regenerated per launch |
+| `drydock link --rw` — per-sibling deploy key (first link only; reused idempotently on re-link; **left on disk at unlink** — see dual-hint message) | `~/.config/drydock/keys/<sibling-basename>_deploy{,.pub}` | host-only — mounted `:ro` as a directory into the container |
+| `drydock link --rw` / `unlink` — managed SSH config (regenerated atomically: mktemp + mv + chmod 600 on every link/unlink that touches an RW sibling) | `~/.config/drydock/ssh-config-<primary>` | host-only — RO bind-mounted into the container |
+| `drydock link --rw` — sibling `remote.origin.url` rewritten from canonical GitHub remote to alias (`github.com-<sibling>`); **restored to canonical by `drydock unlink`** | sibling repo `.git/config` at `$SIBLING_DIR` | **YES** — sibling is mounted; the mutation is visible inside the container |
 | Edits to `.claude/settings.json` of a project | repo at `$PROJECT_DIR` | **YES** — same mount |
 | engram memories (`mem_save`) | `~/.engram/engram.db` | **NO** — separate DBs |
 
