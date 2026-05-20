@@ -55,7 +55,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   token. When a host session and a container session refresh concurrently, each re-mints and writes
   a token, invalidating the other's — both sessions get logged out.
   (3) **When engram is in use — divergent MCP config.** The container's Claude config has the engram
-  MCP entry filtered out via `jq 'del(.mcpServers.engram, ...)'` (`commands.sh:109,226`). If the
+  MCP entry filtered out via `jq 'del(.mcpServers.engram, ...)'` (`cmd_setup()` and `cmd_sync()` in `lib/commands.sh`). If the
   container shared the host's live `~/.claude.json`, that filter would destructively mutate it —
   stripping the engram MCP entry from the host's own config.
   (4) **When engram is in use — `~/.engram/engram.db` SQLite WAL corruption.** The hazard is NOT
@@ -81,8 +81,9 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   on an unreliable-`fcntl`-lock filesystem (WSL2 9P, macOS virtiofs, Docker Desktop VM boundary) —
   silently corrupt `~/.engram/engram.db` via a WAL page clash. Every failure mode is silent: data
   loss or auth loss with no obvious cause.
-- **Where this lives in code**: `lib/paths.sh:23-33` (container path constants);
-  `docker-compose.yml:63-64` (mounts).
+- **Where this lives in code**: the `HOST_CLAUDE` / `CONTAINER_CLAUDE` / `*_JSON` / `*_ENGRAM` path-constants block in `lib/paths.sh`;
+  the `${DRYDOCK_SESSION_CLAUDE_DIR}` / `${DRYDOCK_SESSION_CLAUDE_JSON}` mount lines in `docker-compose.yml`;
+  `export_compose_env()` in `lib/compose.sh` (generates and exports the per-session discriminator paths).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-3: Hooks Read-Only Overlay
@@ -103,7 +104,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: A buggy or prompt-injected agent disables its own guardrails
   mid-session. Hook-based protections are silently bypassed for the remainder of the session
   with no indication to the operator.
-- **Where this lives in code**: `docker-compose.yml:67` (the `:ro` override line);
+- **Where this lives in code**: the `${HOME}/.claude/hooks` `:ro` bind-mount line in `docker-compose.yml`;
   `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
   `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`, `10-git-safety.json`,
   `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`);
@@ -122,8 +123,8 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: drydock loses portability and becomes a wrapper around one specific
   MCP memory stack rather than general-purpose containerized Claude infrastructure — exactly the
   "niche tool instead of portable infrastructure" failure mode the project is designed to avoid.
-- **Where this lives in code**: `lib/compose.sh:32-34` (`engram_usable` gate);
-  `lib/commands.sh:107-124` (MCP filter).
+- **Where this lives in code**: `engram_usable()` in `lib/compose.sh`;
+  `cmd_setup()` and `cmd_sync()` in `lib/commands.sh` (MCP filter).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-5: Engram Shared-Mode Opt-In, Force-Isolated on Unreliable Locks
@@ -139,8 +140,8 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: A user on WSL2 who enables shared mode without force-downgrade
   protection loses engram data silently — conversation memory, project decisions, accumulated
   observations — with no error message, only degraded or wrong recall.
-- **Where this lives in code**: `lib/compose.sh:337-357` (shared-mode resolution);
-  `lib/paths.sh:74-79` (`host_fs_locks_unreliable`).
+- **Where this lives in code**: the engram shared-mode block in `export_compose_env()` in `lib/compose.sh`;
+  `host_fs_locks_unreliable()` in `lib/paths.sh`.
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-6: Docker Socket = Root-Equivalent on Host
