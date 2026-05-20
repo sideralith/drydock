@@ -24,12 +24,83 @@ adversarial agent**. Read this so you don't develop a false sense of security.
   default; sibling projects are not visible unless explicitly added via
   `drydock link`. Linked siblings mount read-only (`:ro`) — writes are
   blocked at the filesystem level, not just by policy.
-- **Credential read inside a linked sibling** — `00-secrets.json` deny rules
-  use root-anchored `//**/<path>` patterns (e.g. `Read(//**/.ssh/**)`) that
-  match at any mount depth. Credentials inside a sibling at
-  `/workspace-siblings/other-repo/.ssh/` are denied by the same rule that
-  would deny `~/.ssh/` on the primary project.
+- **Credential read inside a linked sibling** — three cooperating layers
+  protect credentials in any linked sibling. See the
+  [dedicated walkthrough below](#credential-protection-in-linked-siblings).
 - **Destructive commands (accident class)** — see the section below.
+
+## Credential protection in linked siblings
+
+When a sibling project is mounted via `drydock link`, three cooperating layers
+defend against credential exposure. They are ordered outside-in — each layer
+catches what the previous one missed.
+
+### Layer 1 — link-time host-source guard
+
+Before any mount is written, `lib/commands.sh` rejects host paths that **are**
+credential directories or anything strictly under them:
+
+- `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker` (and any subdirectory)
+
+The guard uses separator-anchored prefix matching so that `~/.ssh-backup` is
+**not** rejected (a common false-positive risk with naive prefix checks). If the
+path passes the guard, it is not a credential dir — credentials never get linked
+in the first place. This is defense-in-depth for [INV-1](../CLAUDE.md).
+
+### Layer 2 — read-only bind mount
+
+Every linked sibling is mounted `:ro`. Even if a sibling's tree happens to
+contain a `.env` file with database credentials or a `.pem` key, the container
+cannot write to it. Writes are blocked at the OS layer by the bind-mount flag —
+not by policy alone — so this protection holds regardless of whether the agent
+attempts an explicit write or a tool that opens a file for writing.
+
+### Layer 3 — `//**/`-anchored deny rules in `00-secrets.json`
+
+Claude Code's permission engine evaluates the deny rules in
+`templates/managed-settings.d/00-secrets.json` (image-baked, root-owned, not
+overridable from project settings) **before** any tool executes. The credential
+patterns use root-anchored `//**/<path>` globs:
+
+```
+Read(//**/.ssh/**)
+Read(//**/.aws/**)
+Read(//**/.gnupg/**)
+Read(//**/.kube/**)
+Read(//**/.docker/config.json)
+Read(//**/.claude/.credentials.json)
+Read(//**/.claude-container*/.credentials.json)
+```
+
+The `//**/` prefix matches **at any mount depth**: a `.ssh/` directory inside a
+sibling at `/workspace-siblings/other-repo/.ssh/` is denied by the same rule
+that would deny `~/.ssh/` on the primary project or anywhere else in the
+filesystem.
+
+**Read/Edit/Write symmetry.** All three verbs are denied for each credential
+path — not just `Read`:
+
+- `Read` prevents exfiltration.
+- `Edit` and `Write` prevent accidental overwrite or corruption of credential
+  files (threat model A, [INV-7](../CLAUDE.md)) — for example, an agent that
+  tries to "update" a `.env` file it mistook for project config cannot silently
+  corrupt a `.docker/config.json` that happens to live in the sibling tree.
+
+**The `.claude-container*` glob is load-bearing.** It covers both the legacy
+single-session `.claude-container/` directory and the per-session
+`.claude-container-<disc>/` directories introduced by concurrent-sessions
+support in v0.2.0 (see [INV-2](../CLAUDE.md)). Without the `*` glob, per-session
+credential files (`.claude-container-<disc>/.credentials.json`) would be
+uncovered — a gap identified and closed in the v0.2.0 re-verify.
+
+### Upstream enforcement caveat
+
+drydock ships the deny rules; **Claude Code is the enforcer**. If an agent
+bypasses Claude Code's permission gate — via a raw Docker socket call, a
+sub-shell not mediated by the Bash tool, or a base64-obfuscated tool invocation
+— the deny rules do not fire. This is the same non-goal stated in [INV-6](../CLAUDE.md)
+for destructive commands: drydock defends against accidents, not against an
+adversarial agent that is actively trying to circumvent its own permission layer.
 
 ## Destructive-command guardrail layer (v0.2.0+)
 
