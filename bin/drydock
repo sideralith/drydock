@@ -50,20 +50,24 @@ main() {
 	# Reap orphan overlay files left by previous drydock invocations that
 	# `exec`d into docker compose (so their EXIT trap did not fire).
 	# Skip files whose owning PID is still alive (concurrent invocation).
-	local _stale _pid
-	for _stale in "${TMPDIR:-/tmp}"/drydock-submounts-*.yml; do
-		[ -e "$_stale" ] || continue
-		_pid="${_stale##*-}"
-		_pid="${_pid%.yml}"
-		case "$_pid" in
-		'' | *[!0-9]*)
-			rm -f "$_stale"
-			continue
-			;;
-		esac
-		kill -0 "$_pid" 2>/dev/null || rm -f "$_stale"
+	# Iterates both overlay glob patterns so new overlay types need only one
+	# extra string here (ADR-4 / D5).
+	local _stale _pid _glob
+	for _glob in "drydock-submounts-*.yml" "drydock-links-*.yml"; do
+		for _stale in "${TMPDIR:-/tmp}"/$_glob; do
+			[ -e "$_stale" ] || continue
+			_pid="${_stale##*-}"
+			_pid="${_pid%.yml}"
+			case "$_pid" in
+			'' | *[!0-9]*)
+				rm -f "$_stale"
+				continue
+				;;
+			esac
+			kill -0 "$_pid" 2>/dev/null || rm -f "$_stale"
+		done
 	done
-	unset _stale _pid
+	unset _stale _pid _glob
 
 	# Submount overlay: PID-namespaced temp file cleaned up on EXIT.
 	# MUST be inside main() (post source-guard): bats files source bin/drydock
@@ -73,7 +77,10 @@ main() {
 	# paths. That's why the orphan-reap loop above also exists.
 	SUBMOUNT_OVERLAY="${TMPDIR:-/tmp}/drydock-submounts-$$.yml"
 	export SUBMOUNT_OVERLAY
-	trap 'rm -f "${SUBMOUNT_OVERLAY:-}"' EXIT
+	# Links overlay: same lifecycle as SUBMOUNT_OVERLAY.
+	LINKS_OVERLAY="${TMPDIR:-/tmp}/drydock-links-$$.yml"
+	export LINKS_OVERLAY
+	trap 'rm -f "${SUBMOUNT_OVERLAY:-}" "${LINKS_OVERLAY:-}"' EXIT
 
 	case "$cmd" in
 	run) cmd_run "$@" ;;
@@ -85,6 +92,9 @@ main() {
 	sync) cmd_sync "$@" ;;
 	status) cmd_status "$@" ;;
 	doctor) cmd_doctor "$@" ;;
+	link) cmd_link "$@" ;;
+	unlink) cmd_unlink "$@" ;;
+	links) cmd_links "$@" ;;
 	version | --version | -v) echo "drydock $DRYDOCK_VERSION" ;;
 	help | --help | -h) usage ;;
 	onboard) err "renombrado: usá 'drydock init' (semántica git-style per-project)" ;;

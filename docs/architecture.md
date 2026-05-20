@@ -38,14 +38,21 @@ $PROJECT_DIR/  ───────────────────→ $PRO
 $PROJECT_DIR/docs/ ───────────────→ $PROJECT_DIR/docs/  :rw
   (if 9P drvfs / sub-mount)           (explicit re-mount overlay)
 
+~/git/sibling/     (optional)    ──→ /workspace-siblings/sibling  :ro
+  (any path via `drydock link`)       (default target; custom path also supported
+                                       — see host-path-mirror pattern below)
+                                       Overlay generated per-launch from
+                                       ~/.config/drydock/links/<project>.list
+
 /var/run/docker.sock  ────────────→ /var/run/docker.sock
   (host daemon)                       Container CLI → host daemon
                                        → `docker exec serendipilink-api …`
 
 ~/.gitconfig, ~/.config/gh/   ────→ same paths (gitconfig RO, gh RW)
 
-NOT MOUNTED:
-~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.bash_history, other projects under ~/
+NOT MOUNTED (by default):
+~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.bash_history;
+other projects under ~/ — mountable explicitly via `drydock link` (see above)
 ```
 
 **Env passthrough**: `GITHUB_PERSONAL_ACCESS_TOKEN` is forwarded from the
@@ -236,7 +243,7 @@ ownership, not merely by a bind-mount flag.
 
 | File | Layer | Contents |
 |------|-------|----------|
-| `00-secrets.json` | Tier 1 — deny | Secret-file read deny (`Read(~/.ssh/**)` etc.) |
+| `00-secrets.json` | Tier 1 — deny | Secret-file read deny — credential dirs/files use root-anchored `//**/<path>` patterns (effective at any mount depth, including inside sibling projects); drydock-state paths use `__HOME__`-anchored patterns |
 | `10-git-safety.json` | Tier 1 — deny | Git destructive-ops deny (force-push, protected-branch delete/rename, history-rewrite, GitHub API destructive ops) |
 | `20-hooks.json` | Tier 2 — hook wiring | `hooks.SessionStart` entry — wires `drydock-session-start.sh` |
 | `30-os-safety.json` | Tier 1 — deny | OS destructive-ops deny (rm system paths, disk destruction, package purge, firewall flush, docker host-escape) |
@@ -342,13 +349,59 @@ writes a temporary YAML overlay to `${TMPDIR:-/tmp}/drydock-submounts-$$.yml`
 compose invocation. The overlay is cleaned up by a `trap ... EXIT` registered
 inside `main()`.
 
+**Sibling-links overlay** (v0.2.0+): `drydock link <host-path> [container-target]`
+appends a pipe-delimited entry to `~/.config/drydock/links/<project>.list`
+(format: `<host_path>|<container_target>|<flags>`). On every `drydock run`/`shell`,
+`generate_links_overlay` reads the list and writes `${TMPDIR:-/tmp}/drydock-links-$$.yml`
+with a `services.drydock.volumes` block mounting each entry `:ro`. The overlay is
+simpler than sub-mount propagation — no `environment:` block, no env-var passthrough
+(all paths are static literals). `drydock unlink` removes entries; `drydock links`
+shows the current list. The feature is config-command-only: `link`/`unlink`/`links`
+do NOT invoke `export_compose_env`, so they work without a running container.
+
+**The host-path-mirror pattern.** The optional custom container target lets a
+sibling be mounted at the **same absolute path inside the container as it has on
+the host**. For example:
+
+```bash
+drydock link ~/git/shared-lib /home/rai/git/shared-lib
+```
+
+Inside the container, `shared-lib` appears at `/home/rai/git/shared-lib` — the
+same path the host shell resolves. This is useful when stack traces, language
+server output, IDE configs, or build tool output embed absolute paths: the paths
+are stable and match what is on disk. Devcontainers use the same convention.
+
+The reason this works without a special flag is that `home` is intentionally
+**not** in the system-directory reject list at `lib/commands.sh:753`. Targets
+under `$HOME` (e.g. `/home/<user>/git/foo`) are valid; only `$HOME` itself and
+its ancestors are rejected. See [docs/links.md](links.md#the-host-path-mirror-pattern)
+for the full pattern guide.
+
+**INV-3 and the link guard.** The hooks RO overlay covers two paths:
+`${HOME}/.claude/hooks:ro` at `docker-compose.yml:70` and
+`/opt/drydock/hooks:ro` at `docker-compose.yml:84`. A linked sibling mounted
+over either path would silently remove the `:ro` protection. `drydock link`
+defends against both:
+
+- **`/opt/drydock/hooks`** is explicitly rejected by guard (d) at
+  `lib/commands.sh:745-751` — this path gets a named guard because it is a
+  specific drydock-internal path that does not fall under the broader
+  system-directory class (which covers `opt` generally but not the hooks
+  subpath specifically).
+- **`~/.claude/hooks`** shadowing is prevented by guard (e)'s
+  `$HOME/.claude*` pattern, which rejects any target that would shadow the
+  home-relative Claude state directories.
+
+See [security.md](security.md).
+
 Because `lib/commands.sh` uses `exec docker compose run` for `run`/`shell`
 (which replaces the bash process and fires no EXIT trap), `bin/drydock` also
-performs a **startup orphan reap**: on each invocation it globs for
-`/tmp/drydock-submounts-*.yml`, extracts the PID from each filename, checks
-liveness with `kill -0`, and removes any orphaned files from past `exec`'d
-invocations. Concurrent invocations are safe — a live PID's file is left
-untouched.
+performs a **startup orphan reap**: on each invocation it globs for both
+`/tmp/drydock-submounts-*.yml` and `/tmp/drydock-links-*.yml`, extracts the PID
+from each filename, checks liveness with `kill -0`, and removes any orphaned files
+from past `exec`'d invocations. Concurrent invocations are safe — a live PID's
+file is left untouched.
 
 ## Docker-out-of-Docker (DooD), not Docker-in-Docker
 

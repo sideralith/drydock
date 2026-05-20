@@ -346,6 +346,44 @@ DRYDOCK_HOME=~/.local/share/drydock bash -c '
 # don't use the corresponding tool).
 ```
 
+## `drydock link` rejected my path
+
+`drydock link` validates both the host source path and the optional custom
+container target before writing anything. If your path is rejected, the table
+below maps each rejection class to a cause and a fix.
+
+### Host source rejections
+
+| Rejection class | Example trigger | Resolution |
+|---|---|---|
+| 1. Path does not exist or is not a directory | `drydock link ~/git/file.txt` | The host path must exist and be a directory. Symlinks to directories are followed (via `realpath`). |
+| 2. Path contains metacharacters | Host path with `\|`, `:`, `"`, `\`, newline, or tab | These break the pipe-delimited list file, the Docker Compose volume spec, or the YAML overlay. Rename or use a path without these characters. |
+| 3. Path is `$HOME` itself or an ancestor of `$HOME` | `drydock link ~` or `drydock link /home` or `drydock link /` | Mounting `$HOME` or its ancestors would expose everything under `~/` to the container — defeating credential isolation entirely. |
+| 4. Path is a credential directory (or any subdirectory) | `drydock link ~/.ssh`, `drydock link ~/.aws/my-profile` | Separator-anchored guard: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker` and anything strictly under them are rejected. Defense-in-depth for [INV-1](../CLAUDE.md). Note: `~/.ssh-backup` is **not** rejected — the guard is anchored at the directory boundary, not prefix-only. |
+| 5. Path is drydock or Claude state | `drydock link ~/.claude`, `drydock link ~/.engram-container` | `~/.claude*`, `~/.engram*`, and `~/.config/drydock` (including per-session `~/.claude-container-<disc>/` dirs) are rejected. These are load-bearing wildcards for [INV-2](../CLAUDE.md). |
+| 6. Path is the current project directory | `drydock link ~/git/current-project` | The project directory is already mounted at `/workspace`. Linking it again would shadow it. |
+
+### Custom container target rejections
+
+These fire only when you supply an explicit container path as the second argument
+(`drydock link <host> <container-target>`).
+
+| Rejection class | Example trigger | Resolution |
+|---|---|---|
+| 7a. custom target: not absolute | `drydock link ~/git/foo relative/path` | Container targets must begin with `/`. |
+| 7b. custom target: filesystem root | `drydock link ~/git/foo /` | Mounting over `/` would replace the container's root filesystem. |
+| 7c. custom target: starts with `//` | `drydock link ~/git/foo //etc/foo` | The kernel normalizes `//foo` to `/foo` at mount time, which would bypass all single-slash guards (e.g. let `//etc/foo` mount at `/etc/foo`). |
+| 7d. custom target: contains `..` or `.` components | `drydock link ~/git/foo /workspace-siblings/../etc` | Docker normalizes path components at mount time. `/../etc` → `/etc`, bypassing the system-dir guard. |
+| 7e. custom target: shadows `/opt/drydock/hooks` | `drydock link ~/git/foo /opt/drydock/hooks` | This is the hooks RO bind-mount ([INV-3](../CLAUDE.md)). A sibling mount over it would silently remove the read-only guardrail. See [security.md](security.md) and [docs/architecture.md](architecture.md). |
+| 7f. custom target: under a system directory | `drydock link ~/git/foo /etc/myapp`, `/bin/...`, `/usr/...` | First path component must not be `etc`, `bin`, `sbin`, `usr`, `lib`, `lib32`, `lib64`, `boot`, `root`, `opt`, `proc`, `sys`, `dev`, `run`, `var`, or `tmp`. Note: `home` is intentionally **not** in this list — `/home/<user>/git/foo` is the [host-path-mirror pattern](links.md#the-host-path-mirror-pattern). |
+| 7g. custom target: shadows `/workspace`, `/workspace-siblings`, `$HOME`, or drydock state | `drydock link ~/git/foo /workspace/sub`, `/workspace-siblings` | These targets would shadow the primary project mount, the siblings parent directory, `$HOME`, or container state dirs (`~/.claude*`, `~/.engram*`, `~/.config/drydock`). |
+| 8. Basename collision | Two different paths with the same `basename` | The default container target is `/workspace-siblings/<basename>`. Two siblings with the same basename would collide. Supply an explicit `<container-target>` for one of them, or use `drydock unlink` on the conflicting entry first. |
+| 8. Container target collision | Two entries share the same custom target | Docker Compose would silently keep only one mount. Assign distinct container targets. |
+
+**Cross-references**: credential guard rationale → [security.md](security.md);
+hooks guard rationale → [architecture.md](architecture.md#inv-3-and-the-link-guard);
+host-path-mirror pattern → [docs/links.md](links.md#the-host-path-mirror-pattern).
+
 ## drydock can't find DRYDOCK_HOME / compose file
 
 The CLI resolves `DRYDOCK_HOME` by following the symlink at

@@ -136,7 +136,10 @@ scripts, a justfile) runs the same way.
 | `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed — run it again for the same project to get a second concurrent session |
 | `drydock init [DIR]` | Per-project setup: seed a minimal `.claude/settings.json` stub for your own customization (drydock's deny policy is image-baked, applies automatically) |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
-| `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host |
+| `drydock link <PATH> [CONTAINER-PATH]` | Mount a sibling project read-only inside the container at `/workspace-siblings/<name>` (or a custom path). Configuration persists; overlay regenerated on every launch. `--rw` is parsed but not yet implemented (errors immediately). |
+| `drydock unlink PATH` | Remove a sibling mount from the current project's list |
+| `drydock links` | Show all sibling mounts configured for the current project |
+| `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host — runs automatically when the container copy is stale (set `DRYDOCK_SKIP_AUTOSYNC=1` to disable) |
 | `drydock build` | Build/rebuild `drydock:latest` |
 | `drydock status` / `doctor` | Health snapshot / full diagnostics |
 | `drydock setup` | (advanced) Force host-side init — auto-triggered; rarely explicit |
@@ -205,10 +208,15 @@ daemon). Host config lives in two places (`~/.claude/` directory and
 of both (seeded from a shared prototype each run), the project tree, and the
 docker socket. Hooks are RO. The image is universal — only
 env vars (`PROJECT_DIR` etc.) change per project; a dynamically-generated overlay
-propagates sub-mounts under `$PROJECT_DIR`.
+propagates sub-mounts under `$PROJECT_DIR`. A second dynamically-generated overlay
+mounts linked sibling projects (see `drydock link` and [docs/links.md](docs/links.md)).
 
 Full mount map, the two-config-location detail, the split rationale, and the
 sub-mount propagation design: **[docs/architecture.md](docs/architecture.md)**.
+
+**Auto-sync (v0.2.0+):** `drydock run` / `drydock shell` check whether the container's `~/.claude/`
+snapshot is stale (via an mtime sentinel) and run `drydock sync` automatically before starting the
+session. Silent on the happy path. Set `DRYDOCK_SKIP_AUTOSYNC=1` to skip.
 
 **Container hardening (v0.1.1+):** `docker-compose.hardening.yml` is auto-applied on every
 invocation (caps dropped, no-new-privileges, `/tmp` size-bounded to 1 GB by default). Two
@@ -242,6 +250,9 @@ plus docker-wrapped variants. See [docs/security.md](docs/security.md#if-you-hav
   rationale, hooks RO overlay, DooD, UID/GID matching, conditional overlays.
 - **[docs/lifecycle.md](docs/lifecycle.md)** — where to update what (binaries
   vs. plugins vs. skills vs. config), mental model.
+- **[docs/links.md](docs/links.md)** — sibling project links (`drydock link`):
+  the three commands, RO contract, host-path-mirror pattern, list-file format,
+  `--rw` deferred status.
 - **[docs/engram.md](docs/engram.md)** — the optional engram persistent-memory
   integration: detection, shared vs isolated mode, setup, migration.
 - **[docs/security.md](docs/security.md)** — what drydock does and does NOT

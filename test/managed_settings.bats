@@ -635,3 +635,162 @@ GUARDRAILS_SCRIPT="$DRYDOCK_HOME/templates/hooks/drydock-block-destructive.sh"
     done
     [ "$failures" -eq 0 ]
 }
+
+# ── T18-RED: INV-1 deny-rule rewrite — credential rules use //**/ root anchor ──
+# Design §5, D8, ADR-3: credential paths (ssh/aws/gnupg/kube/docker/credentials)
+# must use //**/<path> so they match at ANY mount depth, not just under $HOME.
+# drydock-state paths (.config/drydock) MUST keep __HOME__ anchor.
+
+SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
+
+@test "00-secrets: Read(//**/.ssh/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.ssh/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.aws/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.aws/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.gnupg/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.gnupg/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.kube/**) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.kube/**)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.docker/config.json) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.docker/config.json)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.claude/.credentials.json) present (credential root-anchor)" {
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.claude/.credentials.json)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Read(//**/.claude-container*/.credentials.json) present (covers literal AND per-session disc dirs)" {
+    # Glob '.claude-container*' matches both '.claude-container/' (legacy single
+    # session) and '.claude-container-<disc>/' (per-session, concurrent-sessions
+    # in v0.2.0+). Single rule, full coverage — no gap for per-session dirs.
+    jq -e '.permissions.deny | map(select(. == "Read(//**/.claude-container*/.credentials.json)")) | length >= 1' \
+        "$SECRETS_FILE" >/dev/null
+}
+
+@test "00-secrets: Edit and Write rules for credential dirs use //**/ root-anchor" {
+    for verb in "Edit" "Write"; do
+        for dir in ".ssh" ".aws" ".gnupg" ".kube"; do
+            jq -e --arg rule "${verb}(//**/${dir}/**)" \
+                '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+                "$SECRETS_FILE" >/dev/null
+        done
+    done
+}
+
+@test "00-secrets: Edit and Write rules for credential FILE paths use //**/ root-anchor" {
+    # Symmetric with the directory-glob test above. Credential FILE paths cover:
+    #   .docker/config.json                   — Docker registry creds
+    #   .claude/.credentials.json             — Claude Code's own OAuth token
+    #   .claude-container*/.credentials.json  — drydock per-session OAuth tokens
+    # All three need R/E/W coverage: Read prevents exfiltration, Edit/Write
+    # prevent accidental overwrite/corruption (threat model A, INV-7).
+    for verb in "Edit" "Write"; do
+        for path in ".docker/config.json" ".claude/.credentials.json" ".claude-container*/.credentials.json"; do
+            jq -e --arg rule "${verb}(//**/${path})" \
+                '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+                "$SECRETS_FILE" >/dev/null
+        done
+    done
+}
+
+@test "00-secrets: drydock-state rules keep __HOME__ anchor (NOT root-anchored)" {
+    # .config/drydock Read/Edit/Write must still use __HOME__
+    for verb in "Read" "Edit" "Write"; do
+        jq -e --arg rule "${verb}(__HOME__/.config/drydock/**)" \
+            '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+            "$SECRETS_FILE" >/dev/null
+    done
+}
+
+@test "00-secrets: no __HOME__ anchor in credential rules (only state rules use __HOME__)" {
+    # The credential rules (ssh, aws, gnupg, kube, docker, credentials) MUST NOT
+    # have __HOME__ anchor. Only .config/drydock rules use __HOME__.
+    local home_cred_rules
+    home_cred_rules="$(jq '[.permissions.deny[] | select(
+        (contains("__HOME__") and contains(".config/drydock") | not) and
+        contains("__HOME__")
+    )] | length' "$SECRETS_FILE")"
+    [ "$home_cred_rules" -eq 0 ]
+}
+
+@test "00-secrets: SCOPE GUARD — no .env rule in deny list" {
+    local env_rules
+    env_rules="$(jq '[.permissions.deny[] | select(test("\\.(env)\"?$|/\\.env"))] | length' "$SECRETS_FILE")"
+    [ "$env_rules" -eq 0 ]
+}
+
+# ── T19: INV-1 runtime integration — //**/ rules baked into the running image ───
+#
+# These tests require a built drydock:latest image. They are gated by
+# DRYDOCK_INTEGRATION=1 and skip cleanly in unit mode (CI stays green without it).
+#
+# Scope: verify that the DEPLOYED managed-settings file at
+#   /etc/claude-code/managed-settings.d/00-secrets.json
+# inside the container contains the //**/-anchored credential deny rules.
+# This is drydock's contract (INV-3 tamper-proof bake step), NOT a test of
+# Claude Code's permission engine (which requires external auth and is upstream).
+#
+# T19-A covers the four symmetric DIRECTORY globs (.ssh/.aws/.gnupg/.kube) R/E/W.
+# T19-B covers the three single-FILE credential paths R/E/W (closed in v0.2.0):
+#   .docker/config.json, .claude/.credentials.json, .claude-container*/.credentials.json.
+# The earlier Read-only asymmetry on .docker/config.json and .credentials.json
+# was closed alongside the link-sibling-projects deny-rule rewrite (the per-session
+# .claude-container-<disc>/.credentials.json gap also fixed via the '*' glob).
+
+@test "00-secrets: //**/ root-anchored R/E/W rules baked into running image (integration)" {
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
+
+    run docker run --rm drydock:latest \
+        cat /etc/claude-code/managed-settings.d/00-secrets.json
+    [ "$status" -eq 0 ]
+
+    local deployed_json="$output"
+
+    # Four symmetric dirs: Read, Edit, Write must all use //**/ anchor
+    for verb in "Read" "Edit" "Write"; do
+        for dir in ".ssh" ".aws" ".gnupg" ".kube"; do
+            local rule="${verb}(//**/${dir}/**)"
+            echo "$deployed_json" | jq -e --arg r "$rule" \
+                '.permissions.deny | map(select(. == $r)) | length >= 1' \
+                >/dev/null \
+                || { echo "MISSING in deployed image: $rule"; return 1; }
+        done
+    done
+}
+
+@test "00-secrets: //**/ credential FILE-path R/E/W rules baked into running image (integration)" {
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
+
+    run docker run --rm drydock:latest \
+        cat /etc/claude-code/managed-settings.d/00-secrets.json
+    [ "$status" -eq 0 ]
+
+    local deployed_json="$output"
+
+    # Symmetric R/E/W coverage for all three single-file credential paths.
+    for verb in "Read" "Edit" "Write"; do
+        for path in ".docker/config.json" ".claude/.credentials.json" ".claude-container*/.credentials.json"; do
+            local rule="${verb}(//**/${path})"
+            echo "$deployed_json" | jq -e --arg r "$rule" \
+                '.permissions.deny | map(select(. == $r)) | length >= 1' \
+                >/dev/null \
+                || { echo "MISSING in deployed image: $rule"; return 1; }
+        done
+    done
+}

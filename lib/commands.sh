@@ -30,6 +30,14 @@ Commands:
   doctor              Detailed diagnostics
   setup               (advanced) One-time host setup — auto-triggered on first
                         run/build/sync if missing; you rarely call this explicitly
+  link [PATH] [CONTAINER-PATH]
+                      Mount a sibling project read-only inside the container.
+                        PATH: host directory to mount (required).
+                        CONTAINER-PATH: in-container mount target (optional;
+                        default: /workspace-siblings/<basename>/).
+                        RW links not yet implemented (--rw errors).
+  unlink PATH         Remove a sibling mount from the project list.
+  links               Show all siblings configured for the current project.
   version             Show drydock version
   help                Show this help
 
@@ -39,6 +47,10 @@ Examples:
   drydock run -- --resume "my-session"         # resume a session
   drydock init ~/git/newproject                # create settings.json stub
   drydock build                                # rebuild image
+  drydock link ~/git/shared-lib                # mount sibling read-only
+  drydock link ~/git/shared-lib /opt/mylib     # mount at custom path
+  drydock unlink ~/git/shared-lib              # remove sibling
+  drydock links                                # list current project's siblings
 
 DRYDOCK_HOME=$DRYDOCK_HOME
 EOF
@@ -539,4 +551,363 @@ cmd_doctor() {
 	printf '  USER_UID:         %s\n' "$(id -u)"
 	printf '  USER_GID:         %s\n' "$(id -g)"
 	printf '  HOST_DOCKER_GID:  %s\n' "$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo '?')"
+}
+
+# ── Link helpers ──────────────────────────────────────────────────────────────
+
+# _current_project_name — sanitized basename of the resolved cwd project dir.
+# Pure string transform; no subprocess or compose dependency.
+_current_project_name() {
+	sanitize_project_name "$(basename "$(resolve_project_dir "")")"
+}
+
+# _links_list_file — path to the durable per-project link list.
+# Format: ~/.config/drydock/links/<project>.list
+_links_list_file() {
+	printf '%s/.config/drydock/links/%s.list\n' "$HOME" "$(_current_project_name)"
+}
+
+# _check_path_metachar — reject a path string that would corrupt the
+# pipe-delimited list file, break the Docker Compose volume spec, or break YAML.
+# Args: <path> <label>   (label is used verbatim in the error message)
+_check_path_metachar() {
+	local _p="$1" _label="$2"
+	if [[ "$_p" == *'|'* ]]; then
+		err "rejected: $_label contains '|' which would corrupt the link list file"
+	fi
+	if [[ "$_p" == *':'* ]]; then
+		err "rejected: $_label contains ':' which would break the Docker Compose volume spec"
+	fi
+	if [[ "$_p" == *'"'* ]]; then
+		err "rejected: $_label contains '\"' which would break YAML formatting"
+	fi
+	if [[ "$_p" == *$'\\'* ]]; then
+		err "rejected: $_label contains a backslash which would produce an invalid escape in the YAML volume string"
+	fi
+	if [[ "$_p" =~ [[:cntrl:]] ]]; then
+		err "rejected: $_label contains a control character (including newline)"
+	fi
+}
+
+# ── cmd_link ──────────────────────────────────────────────────────────────────
+
+# cmd_link [--rw] <host-path> [container-target]
+# Validates and appends a sibling entry to the project list file.
+# RO-only this slice; --rw is parsed and rejected with a stub error.
+cmd_link() {
+	local rw=0
+	local src="" target_arg=""
+
+	# Parse args: --rw flag, then 1-2 positional args
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--rw)
+			rw=1
+			shift
+			;;
+		-*)
+			err "unknown option: $1"
+			;;
+		*)
+			if [ -z "$src" ]; then
+				src="$1"
+			elif [ -z "$target_arg" ]; then
+				target_arg="$1"
+			else
+				err "too many arguments"
+			fi
+			shift
+			;;
+		esac
+	done
+
+	# SP-3: --rw is parsed but not yet implemented
+	if [ "$rw" -eq 1 ]; then
+		err "RW links not yet implemented"
+	fi
+
+	[ -n "$src" ] || err "usage: drydock link <host-path> [container-target]"
+
+	# D7: canonicalize BEFORE all guards
+	local canonical
+	canonical="$(realpath "$src" 2>/dev/null)" || err "path does not exist: $src"
+
+	# R4-FIX-4: reject non-directory sources early with a clean error.
+	# realpath succeeds for regular files too, so without this check a file
+	# source makes it through all guards and produces a cryptic Docker engine
+	# error at compose-up time.
+	[ -d "$canonical" ] || err "rejected: '$canonical' is not a directory"
+
+	# FIX #5: metacharacter validation — reject paths that would corrupt the
+	# pipe-delimited list file, break the Docker Compose volume string, or
+	# break YAML. Applied to canonical (already realpath-resolved) and to
+	# target_arg (user-supplied, validated before use).
+	_check_path_metachar "$canonical" "host path '$canonical'"
+	[ -z "$target_arg" ] || _check_path_metachar "$target_arg" "container target '$target_arg'"
+
+	# SP-6: host-source rejection guard
+	# Reject $HOME itself, ancestors of $HOME, and sensitive subdirs.
+	# Use [[ ]] for prefix matching; handle root "/" specially.
+	#
+	# R2-FIX-6: resolve $HOME itself via realpath once, so that a symlinked
+	# $HOME (e.g. $HOME -> /actual/home) does not allow a path under the real
+	# home to bypass prefix guards.  The resolved $canonical is already a
+	# realpath, so all comparisons must be realpath-vs-realpath.
+	local _real_home
+	_real_home="$(realpath "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+	if [ "$canonical" = "$_real_home" ]; then
+		err "rejected: '$canonical' is \$HOME"
+	fi
+	# Ancestor check: canonical is an ancestor of HOME when HOME starts with canonical/
+	# Special-case root "/" which would produce a double-slash in pattern.
+	if [ "$canonical" = "/" ] || [[ "$_real_home/" == "$canonical/"* ]]; then
+		err "rejected: '$canonical' is an ancestor of \$HOME"
+	fi
+	# Sensitive subdir check: prefix comparison on realpath-resolved canonical
+	# vs realpath-resolved $HOME. Covers drydock-managed dirs AND credential
+	# dirs (INV-1 defense-in-depth: FIX #6 adds ~/.ssh, ~/.aws, ~/.gnupg,
+	# ~/.kube, ~/.docker).
+	# R4-FIX-2: For the five credential dirs (.ssh, .aws, .gnupg, .kube,
+	# .docker) use separator-anchored patterns — match the exact dir OR anything
+	# strictly under it. The old `"$_real_home/.ssh"*` glob matched ~/.ssh-backup,
+	# ~/.dockerfiles, etc. as false positives.
+	# .claude*, .engram*, .config/drydock* keep their wildcards — load-bearing for
+	# per-session directories per INV-2 (e.g. .claude-container-<disc>).
+	if [[ "$canonical/" == "$_real_home/.claude"* ]] ||
+		[[ "$canonical/" == "$_real_home/.engram"* ]] ||
+		[[ "$canonical/" == "$_real_home/.config/drydock"* ]] ||
+		[ "$canonical" = "$_real_home/.ssh" ] || [[ "$canonical/" == "$_real_home/.ssh/"* ]] ||
+		[ "$canonical" = "$_real_home/.aws" ] || [[ "$canonical/" == "$_real_home/.aws/"* ]] ||
+		[ "$canonical" = "$_real_home/.gnupg" ] || [[ "$canonical/" == "$_real_home/.gnupg/"* ]] ||
+		[ "$canonical" = "$_real_home/.kube" ] || [[ "$canonical/" == "$_real_home/.kube/"* ]] ||
+		[ "$canonical" = "$_real_home/.docker" ] || [[ "$canonical/" == "$_real_home/.docker/"* ]]; then
+		err "rejected: '$canonical' is under a protected path (credentials or drydock state)"
+	fi
+
+	# Reject the project's own directory.
+	# R3-FIX-2: resolve_project_dir returns logical pwd (symlink path). If CWD
+	# is a symlink, the logical path differs from canonical (realpath-resolved).
+	# Normalize project_dir to its realpath so a symlinked CWD cannot bypass
+	# this guard. Do NOT modify resolve_project_dir — it is used elsewhere with
+	# pwd-style expectations; only this comparison needs realpath normalization.
+	local project_dir
+	project_dir="$(realpath "$(resolve_project_dir "")" 2>/dev/null || resolve_project_dir "")"
+	if [ "$canonical" = "$project_dir" ]; then
+		err "rejected: '$canonical' is the current project directory (already mounted at /workspace)"
+	fi
+
+	# Derive <name> = basename of canonical host path
+	local name
+	name="$(basename "$canonical")"
+
+	# Compute container target (default or custom)
+	local container_target
+	if [ -n "$target_arg" ]; then
+		# R3-FIX-3: strip trailing slash before ALL validation. Docker treats
+		# /foo and /foo/ as the same mount target; storing them as different
+		# strings causes the collision check to miss entries that mount to the
+		# same effective path. A single root "/" is exempt — removing its slash
+		# yields "" which is wrong; the root-reject check (b) fires first anyway.
+		container_target="${target_arg%/}"
+		[ -z "$container_target" ] && container_target="/"
+		# SP-7: custom target rejection guard (FIX #2 — replaces incomplete denylist).
+		# (a) Must be an absolute path.
+		if [[ "$container_target" != /* ]]; then
+			err "rejected: container target '$container_target' must be an absolute path"
+		fi
+		# (b) Reject root /.
+		if [ "$container_target" = "/" ]; then
+			err "rejected: container target '/' is the filesystem root"
+		fi
+		# R4-FIX-1: reject targets starting with // (double-slash).
+		# On Linux the kernel normalizes //foo → /foo at mount time, which means
+		# //etc/foo mounts at /etc/foo while bypassing every single-slash guard:
+		# the first-component extractor strips one slash leaving /etc/foo, the
+		# %%/* trim then yields empty-string so the denylist case falls through.
+		if [[ "$container_target" == //* ]]; then
+			err "rejected: container target '$container_target' starts with '//' which normalizes to a different path"
+		fi
+		# R3-FIX-4: reject any target containing a '..' path component. Docker
+		# normalizes /workspace-siblings/../etc/foo to /etc/foo at mount time,
+		# which would shadow a system directory while bypassing all guards.
+		# Regex: any /.. followed by / or end-of-string → a .. path component.
+		if [[ "$container_target" =~ /\.\.(/|$) ]]; then
+			err "rejected: container target '$container_target' contains '..' which would normalize to a different path"
+		fi
+		# R3-FIX-5: reject any target containing a '.' path component (single dot).
+		# /workspace-siblings/. normalizes to /workspace-siblings and bypasses
+		# the exact-string guard (g) because the guard compares the literal string.
+		# Regex: any /. followed by / or end-of-string → a single-dot component.
+		# This is safe: /.hidden, /.claude etc. have a non-/ char after the dot.
+		if [[ "$container_target" =~ /\.(/|$) ]]; then
+			err "rejected: container target '$container_target' contains '.' component which would normalize to a different path"
+		fi
+		# (d) Explicitly reject the RO hooks mount path (INV-3): /opt/drydock/hooks.
+		# Checked BEFORE the generic /opt system-dir reject so the error message
+		# names INV-3 specifically. Bind-mounted :ro per docker-compose.yml line 84;
+		# a shadowing sibling mount would silently bypass the read-only guardrail.
+		if [[ "$container_target/" == "/opt/drydock/hooks/"* ]] || [ "$container_target" = "/opt/drydock/hooks" ]; then
+			err "rejected: container target '$container_target' shadows the drydock hooks RO mount (INV-3)"
+		fi
+		# (c) Reject targets whose first path component is a system directory.
+		# NOTE: 'home' is intentionally NOT in this list — /home/<user>/git/foo is
+		# the host-path-mirror use case; ancestor-of-$HOME is handled by (f) below.
+		local _first_comp
+		_first_comp="${container_target#/}"
+		_first_comp="${_first_comp%%/*}"
+		case "$_first_comp" in
+		etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+			err "rejected: container target '$container_target' is under a system directory (/$_first_comp)"
+			;;
+		esac
+		# (e) Reject paths that shadow /workspace or drydock-managed home dirs.
+		# Append trailing / so "/workspace" and "/workspace/sub" both match.
+		# R3-FIX-6: use $_real_home (realpath-resolved, computed earlier in
+		# cmd_link) instead of raw $HOME so that a symlinked $HOME cannot bypass
+		# these guards. Consistent with the host-source guard above which also
+		# uses $_real_home via realpath-resolved canonical.
+		case "$container_target/" in
+		"/workspace/"*)
+			err "rejected: container target '$container_target' shadows /workspace"
+			;;
+		"$_real_home/.claude"*)
+			err "rejected: container target '$container_target' shadows container state"
+			;;
+		"$_real_home/.engram"*)
+			err "rejected: container target '$container_target' shadows container state"
+			;;
+		"$_real_home/.config/drydock"*)
+			err "rejected: container target '$container_target' shadows drydock config"
+			;;
+		esac
+		# (f) Reject $HOME itself and ancestors of $HOME as custom target.
+		# A mount over $HOME or /home shadows the entire home directory.
+		# NOTE: targets under $HOME (e.g. /home/<user>/git/foo) are NOT rejected —
+		# that is the host-path-mirror use case.
+		# R3-FIX-6: use $_real_home for consistency with (e) and with the
+		# host-source guards above.
+		if [ "$container_target" = "$_real_home" ] || [[ "$_real_home/" == "$container_target/"* ]]; then
+			err "rejected: container target '$container_target' shadows \$HOME or an ancestor of \$HOME"
+		fi
+		# (g) Reject /workspace-siblings bare parent — a mount over it would shadow
+		# all default-target siblings. A target under it (e.g. /workspace-siblings/foo)
+		# is acceptable (functionally equivalent to a default target).
+		# R4-FIX-3: the second clause `= "/workspace-siblings/"` is unreachable —
+		# R3-FIX-3 strips the trailing slash at the top of the custom-target branch.
+		if [ "$container_target" = "/workspace-siblings" ]; then
+			err "rejected: container target '$container_target' shadows the /workspace-siblings parent directory"
+		fi
+	else
+		# R3-FIX-3: no trailing slash — consistent with normalized custom targets.
+		container_target="/workspace-siblings/$name"
+	fi
+
+	# ADR-5: basename collision check + container-target uniqueness check
+	local list_file
+	list_file="$(_links_list_file)"
+	if [ -f "$list_file" ]; then
+		local existing_host existing_target existing_name existing_target_norm
+		while IFS='|' read -r existing_host existing_target _; do
+			[ -z "$existing_host" ] && continue
+			existing_name="$(basename "$existing_host")"
+			if [ "$existing_name" = "$name" ] && [ "$existing_host" != "$canonical" ]; then
+				err "basename collision: '$name' is already used by '$existing_host'; cannot also link '$canonical'"
+			fi
+			# Idempotent: same host path already present.
+			# R4-FIX-5: also compare the normalized existing target against the
+			# new container_target. If they differ the user is trying to change
+			# the mount point — that requires unlink first.
+			if [ "$existing_host" = "$canonical" ]; then
+				local _existing_norm="${existing_target%/}"
+				if [ "$_existing_norm" = "$container_target" ]; then
+					note "already linked: $canonical"
+					return 0
+				fi
+				err "already linked with a different container target '$_existing_norm' — run 'drydock unlink $canonical' first"
+			fi
+			# FIX #3: container target uniqueness — two entries sharing the same
+			# container target would cause Docker Compose to silently keep only one.
+			# R3-FIX-3: normalize existing_target by stripping trailing slash so
+			# that old entries written with a slash still collide correctly.
+			existing_target_norm="${existing_target%/}"
+			if [ -n "$existing_target_norm" ] && [ "$existing_target_norm" = "$container_target" ]; then
+				err "container target collision: '$container_target' is already used by '$existing_host'"
+			fi
+		done <"$list_file"
+	fi
+
+	# Append entry (create dir+file if absent)
+	mkdir -p "$(dirname "$list_file")"
+	printf '%s|%s|\n' "$canonical" "$container_target" >>"$list_file"
+	ok "linked: $canonical → $container_target (ro)"
+}
+
+# ── cmd_unlink ────────────────────────────────────────────────────────────────
+
+# cmd_unlink <host-path>
+# Removes the matching entry from the project list file.
+# Exits non-zero when the path is not found in the list.
+cmd_unlink() {
+	local src="${1:-}"
+	[ -n "$src" ] || err "usage: drydock unlink <host-path>"
+
+	# Canonicalize input for consistent comparison
+	local canonical
+	canonical="$(realpath "$src" 2>/dev/null || printf '%s' "$src")"
+
+	local list_file
+	list_file="$(_links_list_file)"
+
+	# R3-FIX-7(b): opportunistically remove any stale .tmp* files left by a
+	# previous cmd_unlink that was SIGKILL'd or hit set -e before cleanup.
+	# 2>/dev/null || true: silently no-op when no stale files exist.
+	# Glob '.tmp*' (rather than '.tmp[0-9]*') matches both the current PID-suffix
+	# pattern (.tmp$$) and any future temp-naming variant (mktemp-style, etc.).
+	rm -f "${list_file}".tmp* 2>/dev/null || true
+
+	# Existence check anchored to first field: $1 == canonical (awk -F'|').
+	# grep -F "${canonical}|" would match the literal string anywhere on the
+	# line, including inside the target column — silent deletion of the wrong
+	# entry. awk field-equality is exact.
+	if [ ! -f "$list_file" ] || ! awk -F'|' -v c="$canonical" '$1==c{f=1} END{exit !f}' "$list_file"; then
+		err "not linked: $canonical"
+	fi
+
+	# Remove lines whose first field equals canonical (anchored to host column).
+	# awk exits 0 even when no output lines remain — set -e safe.
+	# R3-FIX-1: RETURN trap does NOT fire when set -e triggers a function exit
+	# (verified empirically). Use explicit error-path cleanup instead: if mv
+	# fails, rm the .tmp and call err. No shell-level EXIT trap is touched.
+	local tmp_file
+	tmp_file="${list_file}.tmp$$"
+	# R4-FIX-6: wrap awk in an explicit error path. set -euo pipefail aborts on
+	# awk failure (rare under resource pressure) leaving tmp_file on disk.
+	# Mirror the mv-failure pattern: rm the tmp and call err.
+	if ! awk -F'|' -v c="$canonical" '$1!=c' "$list_file" >"$tmp_file"; then
+		rm -f "$tmp_file"
+		err "awk failed while rewriting link list"
+	fi
+	if ! mv "$tmp_file" "$list_file"; then
+		rm -f "$tmp_file"
+		err "failed to rewrite link list after unlink"
+	fi
+	ok "unlinked: $canonical"
+}
+
+# ── cmd_links ─────────────────────────────────────────────────────────────────
+
+# cmd_links
+# Prints all sibling entries for the current project, one per line.
+# Empty list: silent exit 0.
+cmd_links() {
+	local list_file
+	list_file="$(_links_list_file)"
+
+	[ -f "$list_file" ] || return 0
+
+	local host target
+	while IFS='|' read -r host target _; do
+		[ -z "$host" ] && continue
+		printf '%s -> %s\n' "$host" "$target"
+	done <"$list_file"
 }

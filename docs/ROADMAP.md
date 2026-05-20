@@ -28,7 +28,7 @@ file.
 
 | Item | Scope | Issue | Status |
 |------|-------|-------|--------|
-| [link-sibling-projects](#link-sibling-projects) | v0.2.0 | [#13][i13] | Planned |
+| [link-sibling-projects](#link-sibling-projects) | v0.2.0 | [#13][i13] | Done |
 | [install-interactive](#install-interactive) | v0.2.0 | [#14][i14] | Done |
 | [auto-sync](#auto-sync) | v0.2.0 | [#15][i15] | Done |
 | [self-awareness](#self-awareness) | v0.2.0 | [#8][i8] | Done |
@@ -66,27 +66,27 @@ Order for later releases is not yet decided.
 
 ### link-sibling-projects
 
+**Status: Done (v0.2.0, issue #13).**
+
 **Problem.** Cross-project work is blind. A drydock session sees only its primary
 project; referencing a sibling repo — keeping a marketing site's CTAs consistent
 with the app's routes, syncing copy, verifying deep links — today means exiting
 drydock and re-launching against the other repo. Constant context switching.
 
-**Proposed solution.** Four commands — `drydock link <path>`, `link --rw <path>`,
-`unlink <path>`, `links`. Siblings mount read-only by default (`--rw` opt-in) at
-`/workspace-siblings/<name>/`, leaving `/workspace` untouched. Configuration
-persists in `~/.config/drydock/links/<project>.list`, one absolute path per line.
-The mount is delivered by a generated `docker-compose.links.yml` overlay — the
-same pattern as submount-propagation.
+**What shipped.** Read-only sibling linking: `drydock link <path>`,
+`drydock unlink <path>`, `drydock links`. Siblings mount `:ro` at
+`/workspace-siblings/<basename>` (or a custom path) inside the container.
+Configuration persists in `~/.config/drydock/links/<project>.list` (pipe-delimited
+3-column format: `<host>|<target>|<flags>`). On every `drydock run`/`shell`, the
+list is projected to an ephemeral `drydock-links-$$.yml` overlay — same pattern as
+submount-propagation. Path-rejection guards, basename collision detection, and
+idempotent re-link are all implemented. INV-1 credential deny rules were rewritten
+from `__HOME__`-anchored to `//**/`-root-anchored (credentials now denied at any
+mount depth, protecting credentials inside mounted siblings).
 
-**Why this scope.** Recurring, concrete maintainer friction; pure ergonomics.
-
-**Invariants touched.** None weakened. A linked sibling is the same blast radius
-as a project the agent could `cd` into directly — within threat model A (INV-7).
-Hooks (INV-3) apply uniformly across primary and siblings.
-
-**Open questions.** RW semantics need a design phase: which `CLAUDE.md` governs
-edits inside a sibling, whether the primary's hooks cover sibling writes (likely
-yes — hooks are container-global), and git identity for sibling commits.
+**Deferred.** RW semantics (`--rw` is parsed and errors "not yet implemented"):
+git-push surface (deploy keys per sibling), `CLAUDE.md` governance, git identity
+for sibling commits are open questions (OQ-1) tracked for a future change.
 
 **Provenance.** engram #1064 (2026-05-15).
 

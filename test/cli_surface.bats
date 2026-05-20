@@ -71,3 +71,63 @@ drydock() {
   run bash -c '"$1" onboard 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" == *"drydock init"* ]]
 }
+
+# ── T14-RED: dispatch arms + usage surface ────────────────────────────────────
+
+@test "drydock help output mentions 'link'" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"link"* ]]
+}
+
+@test "drydock help output mentions 'unlink'" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unlink"* ]]
+}
+
+@test "drydock help output mentions 'links'" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"links"* ]]
+}
+
+@test "drydock link --rw exits non-zero and mentions 'not yet implemented'" {
+  run bash -c '"$1" link --rw /tmp/no-such-path 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not yet implemented"* ]]
+}
+
+@test "drydock links exits 0 without running container (SP-12)" {
+  # Run from a real directory — no DRYDOCK_* env, no running container
+  run bash -c 'cd "$1" && "$2" links 2>&1' -- "$DRYDOCK_HOME" "$DRYDOCK_HOME/bin/drydock"
+  [ "$status" -eq 0 ]
+}
+
+# ── T15-RED: orphan-reap covers drydock-links-*.yml ──────────────────────────
+
+@test "orphan reap: drydock-links-*.yml with dead PID removed on next main() entry" {
+  # Create a fake orphan overlay with a dead PID (PID 1 is init; use a PID that
+  # is guaranteed dead by using a very high unlikely value, then verify it's gone).
+  # Strategy: create a file named drydock-links-<dead-pid>.yml and run drydock help;
+  # the reap loop should remove it.
+  local dead_pid=2147483647  # max int32 — highly unlikely to be alive
+  local orphan="${TMPDIR:-/tmp}/drydock-links-${dead_pid}.yml"
+  printf 'services:\n  drydock:\n    volumes: []\n' > "$orphan"
+
+  run bash -c '"$1" help 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$orphan" ]
+}
+
+@test "orphan reap: drydock-submounts-*.yml regression — still reaped by refactored loop" {
+  local dead_pid=2147483647
+  local orphan="${TMPDIR:-/tmp}/drydock-submounts-${dead_pid}.yml"
+  printf 'services:\n  drydock:\n    volumes: []\n' > "$orphan"
+
+  run bash -c '"$1" help 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$orphan" ]
+}
