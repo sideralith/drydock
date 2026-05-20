@@ -103,23 +103,19 @@ _links_setup() {
 
 # ── T4-RED: cmd_link rejection guards ────────────────────────────────────────
 
-@test "cmd_link: SP-3 --rw exits non-zero, stderr contains 'not yet implemented'" {
+@test "cmd_link: SP-1 (supersedes SP-3) --rw executes without 'not yet implemented' error" {
 	_links_setup
 
-	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-sp1"
 	mkdir -p "$sibling_dir"
-
-	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	# Plain directory (no .git) — exercises the no-.git/ RW path
 
 	(
 		cd "$PROJECT_DIR"
 		run cmd_link --rw "$sibling_dir"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *"not yet implemented"* ]]
+		[ "$status" -eq 0 ]
+		[[ "$output" != *"not yet implemented"* ]]
 	)
-
-	# List MUST NOT have been mutated
-	[ ! -f "$list_file" ] || ! grep -qF "$sibling_dir" "$list_file"
 }
 
 @test "cmd_link: SP-6 rejects \$HOME exactly" {

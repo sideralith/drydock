@@ -30,13 +30,16 @@ Commands:
   doctor              Detailed diagnostics
   setup               (advanced) One-time host setup — auto-triggered on first
                         run/build/sync if missing; you rarely call this explicitly
-  link [PATH] [CONTAINER-PATH]
-                      Mount a sibling project read-only inside the container.
+  link [--rw] [PATH] [CONTAINER-PATH]
+                      Mount a sibling project inside the container.
+                        --rw: mount read-write; generate a per-sibling deploy
+                              key and managed SSH config for git push access.
                         PATH: host directory to mount (required).
                         CONTAINER-PATH: in-container mount target (optional;
                         default: /workspace-siblings/<basename>/).
-                        RW links not yet implemented (--rw errors).
-  unlink PATH         Remove a sibling mount from the project list.
+  unlink [--rw] PATH  Remove a sibling mount from the project list.
+                        --rw is accepted and ignored; the list entry's flags
+                        field determines cleanup behavior.
   links               Show all siblings configured for the current project.
   version             Show drydock version
   help                Show this help
@@ -621,11 +624,6 @@ cmd_link() {
 		esac
 	done
 
-	# SP-3: --rw is parsed but not yet implemented
-	if [ "$rw" -eq 1 ]; then
-		err "RW links not yet implemented"
-	fi
-
 	[ -n "$src" ] || err "usage: drydock link <host-path> [container-target]"
 
 	# D7: canonicalize BEFORE all guards
@@ -836,18 +834,70 @@ cmd_link() {
 		done <"$list_file"
 	fi
 
-	# Append entry (create dir+file if absent)
+	# Append entry and perform post-link actions.
 	mkdir -p "$(dirname "$list_file")"
-	printf '%s|%s|\n' "$canonical" "$container_target" >>"$list_file"
-	ok "linked: $canonical → $container_target (ro)"
+
+	if [ "$rw" -eq 1 ]; then
+		# RW branch: key-gen + SSH config + URL rewrite (SR-1, SR-2, SR-3, SR-4).
+		local _sanitized
+		_sanitized="$(sanitize_project_name "$name")"
+		local _project_name
+		_project_name="$(sanitize_project_name "$(basename "$(pwd)")")"
+
+		# Layer-2: key-file ownership collision check (defense-in-depth).
+		# Layer-1 basename collision already handled by the loop above.
+		# Run before appending to .list so .list stays clean on error.
+		_check_sibling_basename_collision_rw "$canonical" "$_sanitized" "$list_file"
+
+		if [ -d "${canonical}/.git" ]; then
+			# SR-10: validate URL BEFORE key-gen to avoid orphan keys on failure.
+			# _rewrite_sibling_remote_url validates AND rewrites; it calls err() on
+			# bad URLs so no rollback is needed (we haven't written .list yet).
+			_rewrite_sibling_remote_url "$canonical" "$_sanitized"
+
+			# Append .list entry AFTER validation succeeds
+			printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+
+			# Key-gen (idempotent — reuses existing key)
+			local _key_path
+			_key_path="$(_generate_sibling_deploy_key "$_sanitized")"
+			# Regenerate managed SSH config
+			_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
+			# Print pubkey + GitHub instructions
+			local _pubkey
+			_pubkey="$(cat "${_key_path}.pub")"
+			ok "linked: $canonical → $container_target (rw)"
+			printf '\nDeploy key for %s:\n\n%s\n\n' "$canonical" "$_pubkey" >&2
+			printf 'Add this key to GitHub:\n' >&2
+			printf '  gh repo deploy-key add %s.pub --repo <owner>/%s --title "drydock-%s" --allow-write\n' \
+				"$_key_path" "$name" "$_sanitized" >&2
+			printf '\nOr visit: https://github.com/<owner>/%s/settings/keys/new\n' "$name" >&2
+		else
+			# No .git/ — mount RW but skip SSH sub-flow (SR-2 / D10)
+			printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
+			ok "linked: $canonical → $container_target (rw)"
+			note "no .git/ found in $canonical — deploy-key and SSH config alias skipped; re-run 'drydock link --rw $src' after git init to enable git push"
+		fi
+	else
+		printf '%s|%s|\n' "$canonical" "$container_target" >>"$list_file"
+		ok "linked: $canonical → $container_target (ro)"
+	fi
 }
 
 # ── cmd_unlink ────────────────────────────────────────────────────────────────
 
-# cmd_unlink <host-path>
+# cmd_unlink [--rw] <host-path>
 # Removes the matching entry from the project list file.
+# --rw is accepted and ignored; the .list entry's flags field is authoritative
+# for determining cleanup behavior (SR-6).
 # Exits non-zero when the path is not found in the list.
 cmd_unlink() {
+	# Parse --rw flag (accepted and ignored per SR-6)
+	case "${1:-}" in
+	--rw) shift ;;
+	esac
+
 	local src="${1:-}"
 	[ -n "$src" ] || err "usage: drydock unlink <host-path>"
 
@@ -873,6 +923,10 @@ cmd_unlink() {
 		err "not linked: $canonical"
 	fi
 
+	# Read the entry's flags BEFORE removing it — needed for RW cleanup.
+	local _removed_flags
+	_removed_flags="$(awk -F'|' -v c="$canonical" '$1==c{print $3}' "$list_file")"
+
 	# Remove lines whose first field equals canonical (anchored to host column).
 	# awk exits 0 even when no output lines remain — set -e safe.
 	# R3-FIX-1: RETURN trap does NOT fire when set -e triggers a function exit
@@ -891,7 +945,34 @@ cmd_unlink() {
 		rm -f "$tmp_file"
 		err "failed to rewrite link list after unlink"
 	fi
+
 	ok "unlinked: $canonical"
+
+	# RW cleanup: regenerate SSH config (removing alias block) + restore URL.
+	if [ "${_removed_flags:-}" = "rw" ]; then
+		local _project_name
+		_project_name="$(sanitize_project_name "$(basename "$(pwd)")")"
+		local _sanitized
+		_sanitized="$(sanitize_project_name "$(basename "$canonical")")"
+		local _key_path
+		_key_path="$(_sibling_deploy_key_path "$_sanitized")"
+
+		# Regenerate managed SSH config without the removed sibling's alias block.
+		_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
+
+		# Restore sibling's git remote URL to canonical form (D6).
+		_restore_canonical_remote_url "$canonical" "$_sanitized"
+
+		# Dual-sided hint (D6, SR-5): local key path + GitHub-side revocation.
+		printf '\nKey files left on disk (not deleted — remove manually when done):\n' >&2
+		printf '  %s\n' "$_key_path" >&2
+		printf '  %s.pub\n' "$_key_path" >&2
+		printf 'To delete them: rm -f %s %s.pub\n\n' "$_key_path" "$_key_path" >&2
+		printf 'GitHub deploy key revocation (drydock cannot do this automatically):\n' >&2
+		printf '  Visit: https://github.com/<owner>/%s/settings/keys\n' "$(basename "$canonical")" >&2
+		printf '  Or run: gh repo deploy-key list --repo <owner>/%s\n' "$(basename "$canonical")" >&2
+		printf '  Then:   gh repo deploy-key delete <id> --repo <owner>/%s\n' "$(basename "$canonical")" >&2
+	fi
 }
 
 # ── cmd_links ─────────────────────────────────────────────────────────────────
@@ -905,9 +986,15 @@ cmd_links() {
 
 	[ -f "$list_file" ] || return 0
 
-	local host target
-	while IFS='|' read -r host target _; do
+	local host target _flags _mode
+	while IFS='|' read -r host target _flags; do
 		[ -z "$host" ] && continue
-		printf '%s -> %s\n' "$host" "$target"
+		# Display mount mode per entry (SR-7, OQ-rw-3 inline suffix).
+		if [ "${_flags:-}" = "rw" ]; then
+			_mode="rw"
+		else
+			_mode="ro"
+		fi
+		printf '%s -> %s (%s)\n' "$host" "$target" "$_mode"
 	done <"$list_file"
 }
