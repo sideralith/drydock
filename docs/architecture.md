@@ -38,11 +38,22 @@ $PROJECT_DIR/  ───────────────────→ $PRO
 $PROJECT_DIR/docs/ ───────────────→ $PROJECT_DIR/docs/  :rw
   (if 9P drvfs / sub-mount)           (explicit re-mount overlay)
 
-~/git/sibling/     (optional)    ──→ /workspace-siblings/sibling  :ro
-  (any path via `drydock link`)       (default target; custom path also supported
-                                       — see host-path-mirror pattern below)
+~/git/sibling/     (optional)    ──→ /workspace-siblings/sibling  :ro  (or :rw)
+  (any path via `drydock link`)       (:ro by default; :rw when `flags=rw` in
+                                       the .list entry — set by `drydock link --rw`)
                                        Overlay generated per-launch from
                                        ~/.config/drydock/links/<project>.list
+
+~/.config/drydock/ssh-config-<primary>   ──→ same path  :ro
+  (managed SSH config; host-only;             (conditional — only when one or
+   regenerated atomically on every             more RW siblings are linked;
+   link/unlink of an RW sibling)               routes GIT_SSH_COMMAND through
+                                               per-sibling alias blocks)
+
+~/.config/drydock/keys/  ─────────────────→ same path  :ro
+  (per-sibling ed25519 deploy keys;           (conditional — directory mount;
+   host-only; left on disk after               scales to N siblings without
+   unlink — see dual-hint message)             overlay enumeration changes)
 
 /var/run/docker.sock  ────────────→ /var/run/docker.sock
   (host daemon)                       Container CLI → host daemon
@@ -353,11 +364,13 @@ inside `main()`.
 appends a pipe-delimited entry to `~/.config/drydock/links/<project>.list`
 (format: `<host_path>|<container_target>|<flags>`). On every `drydock run`/`shell`,
 `generate_links_overlay` reads the list and writes `${TMPDIR:-/tmp}/drydock-links-$$.yml`
-with a `services.drydock.volumes` block mounting each entry `:ro`. The overlay is
-simpler than sub-mount propagation — no `environment:` block, no env-var passthrough
-(all paths are static literals). `drydock unlink` removes entries; `drydock links`
-shows the current list. The feature is config-command-only: `link`/`unlink`/`links`
-do NOT invoke `export_compose_env`, so they work without a running container.
+with a `services.drydock.volumes` block. Each entry is mounted `:ro` by default; when
+the `flags` field is `rw` (set by `drydock link --rw`), the entry is mounted `:rw`
+instead. The overlay is simpler than sub-mount propagation — no `environment:` block,
+no env-var passthrough (all paths are static literals). `drydock unlink` removes
+entries; `drydock links` shows the current list. The feature is config-command-only:
+`link`/`unlink`/`links` do NOT invoke `export_compose_env`, so they work without a
+running container.
 
 **The host-path-mirror pattern.** The optional custom container target lets a
 sibling be mounted at the **same absolute path inside the container as it has on
