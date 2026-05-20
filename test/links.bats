@@ -568,6 +568,19 @@ _links_setup() {
 @test "cmd_link: R2-FIX-1 rejects custom target equal to \$HOME" {
 	_links_setup
 
+	# Same dependency as the R2-FIX-1/2 host-path-mirror test (see commit b89633a):
+	# when HOME's first path component is in the system-dir denylist (block c fires
+	# BEFORE block f), the rejection message names "system directory" instead of
+	# "shadows/HOME/ancestor". On CI runners (where BATS_TEST_TMPDIR is under /tmp)
+	# this is the path. Skip cleanly so the test reports the situation accurately.
+	local _home_first="${HOME#/}"
+	_home_first="${_home_first%%/*}"
+	case "$_home_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "HOME first-component '/$_home_first' is system-denylisted; block (c) fires first — run via scripts/test.sh on a host where /tmp is noexec"
+		;;
+	esac
+
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sibling_dir"
 
@@ -581,6 +594,15 @@ _links_setup() {
 
 @test "cmd_link: R2-FIX-1 rejects custom target that is an ancestor of \$HOME" {
 	_links_setup
+
+	# Same dependency as the R2-FIX-1/2 host-path-mirror test (see commit b89633a).
+	local _home_first="${HOME#/}"
+	_home_first="${_home_first%%/*}"
+	case "$_home_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "HOME first-component '/$_home_first' is system-denylisted; block (c) fires first — run via scripts/test.sh on a host where /tmp is noexec"
+		;;
+	esac
 
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sibling_dir"
@@ -1049,6 +1071,19 @@ _links_setup() {
 	mkdir -p "$real_home"
 	ln -s "$real_home" "$link_home"
 	export HOME="$link_home"
+
+	# Same dependency as the R2-FIX-1 tests above: when HOME's first path
+	# component is system-denylisted (block c fires before block e/f), the
+	# rejection message names "system directory" instead of "shadows". On CI
+	# runners $BATS_TEST_TMPDIR is under /tmp — both real_home and link_home
+	# are too. Skip cleanly.
+	local _home_first="${HOME#/}"
+	_home_first="${_home_first%%/*}"
+	case "$_home_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "HOME first-component '/$_home_first' is system-denylisted; block (c) fires first — run via scripts/test.sh on a host where /tmp is noexec"
+		;;
+	esac
 
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sibling_dir"
