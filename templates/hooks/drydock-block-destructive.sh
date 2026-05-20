@@ -76,6 +76,36 @@ norm="${norm//;/$'\x01'}"
 norm="${norm//$'\n'/$'\x01'}"
 IFS=$'\x01' read -ra _segments <<<"$norm"
 
+# ── FIX-31: quoted-target normalization (issue #31) ──────────────────────────
+# The space-anchored regex checks in C1-residue / C17 / C18 below use
+# [[:space:]] as the token boundary before the target argument. A quoted
+# target (rm -rf "/etc", rm -rf "." …) defeats the anchor because the
+# path token is preceded by a quote character, not a space.
+#
+# This pass strips a SINGLE layer of matched double or single quote pairs
+# from each segment. Quote chars are replaced with spaces so token
+# boundaries are preserved without breaking word integrity inside the
+# quoted content:
+#
+#   rm -rf "/etc"       →  rm -rf  /etc           (space before /etc, anchored)
+#   echo "hello world"  →  echo  hello world      (content intact)
+#   rm -rf '../foo'     →  rm -rf  ../foo
+#
+# Limitations: nested quotes and escaped quote characters (e.g. "\"") are
+# treated as two separate matched pairs by the sed pattern. Under threat
+# model A (INV-7) this is acceptable — accident-class typos do not produce
+# nested or escaped quotes around path tokens.
+_strip_quotes() {
+	local s="$1"
+	s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+	s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+	printf '%s' "$s"
+}
+
+for _i in "${!_segments[@]}"; do
+	_segments[_i]="$(_strip_quotes "${_segments[_i]}")"
+done
+
 # ── Rule C1-residue: rm with any recursive flag targeting a system path root ──
 # Block: rm with -r/-R/-rf/-Rf/-fr/-fR (or any bundled form containing r or R)
 # where the target is a system path root token (/, /etc, /usr, etc.) — not a
