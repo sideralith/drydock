@@ -6,7 +6,7 @@
 
 # ── Version ───────────────────────────────────────────────────────────────────
 # shellcheck disable=SC2034  # used in lib/commands.sh (usage, cmd_status)
-DRYDOCK_VERSION="0.1.2"
+DRYDOCK_VERSION="0.2.0"
 
 # ── Output helpers ────────────────────────────────────────────────────────────
 err() {
