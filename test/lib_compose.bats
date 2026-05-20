@@ -9,7 +9,7 @@
 load "helpers/load"
 
 setup() {
-	# Source order mirrors bin/drydock: common → paths → compose.
+	# Source order mirrors bin/drydock: common → paths → compose → sibling_ssh.
 	# Stub cmd_setup so ensure_runtime_dirs is safe if anything edges toward it.
 	# shellcheck disable=SC1090
 	source "$DRYDOCK_HOME/lib/common.sh"
@@ -17,6 +17,8 @@ setup() {
 	source "$DRYDOCK_HOME/lib/paths.sh"
 	# shellcheck disable=SC1090
 	source "$DRYDOCK_HOME/lib/compose.sh"
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/sibling_ssh.sh"
 
 	# Provide a stub so any accidental call to ensure_runtime_dirs doesn't fail.
 	cmd_setup() { :; }
@@ -171,9 +173,10 @@ STUB
 	[[ "$output" != *"docker-compose.ssh.yml"* ]]
 }
 
-@test "compose_files: DRYDOCK_SSH_DEPLOY_KEY set — ssh overlay present" {
+@test "compose_files: DRYDOCK_SSH_CONFIG set — ssh overlay present" {
 	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
-	export DRYDOCK_SSH_DEPLOY_KEY="$BATS_TEST_TMPDIR/fake_deploy"
+	export DRYDOCK_SSH_CONFIG="$BATS_TEST_TMPDIR/fake_ssh_config"
+	touch "$BATS_TEST_TMPDIR/fake_ssh_config"
 	run compose_files "$TEST_PROJECT_DIR"
 	[[ "$output" == *"docker-compose.ssh.yml"* ]]
 }
@@ -1610,4 +1613,232 @@ _setup_wiring_home() {
 	gc_orphan_session_dirs
 	# Must still exist — "backup" is not a valid drydock discriminator.
 	[ -d "$fake_home/.claude-container-backup" ]
+}
+
+# ── T8-RED: SSH-CFG-1 — _regenerate_managed_ssh_config atomic + chmod 600 ─────
+
+@test "SSH-CFG-1: _regenerate_managed_ssh_config — atomic write (tmp→mv) and chmod 600" {
+	local fake_home="$BATS_TEST_TMPDIR/ssh-cfg1-home"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local primary="testproject"
+	local list_file="$fake_home/.config/drydock/links/testproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	# Empty list — only primary fallback block
+	printf '' >"$list_file"
+
+	# Create a primary key
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/testproject_deploy"
+
+	run _regenerate_managed_ssh_config "$primary" "$list_file"
+	[ "$status" -eq 0 ]
+
+	local config_path="$fake_home/.config/drydock/ssh-config-testproject"
+	[ -f "$config_path" ]
+
+	local perms
+	perms="$(stat -c '%a' "$config_path")"
+	[ "$perms" = "600" ]
+
+	# Must contain the primary fallback block
+	grep -q "Host github.com" "$config_path"
+	grep -q "IdentityFile" "$config_path"
+}
+
+@test "SSH-CFG-1: _regenerate_managed_ssh_config — no tmp files left on disk after success" {
+	local fake_home="$BATS_TEST_TMPDIR/ssh-cfg1-notmp"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local primary="testproject"
+	local list_file="$fake_home/.config/drydock/links/testproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	printf '' >"$list_file"
+
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/testproject_deploy"
+
+	_regenerate_managed_ssh_config "$primary" "$list_file"
+
+	# No .XXXXXX tmp files should remain
+	local tmp_count
+	tmp_count=$(find "$fake_home/.config/drydock" -name "ssh-config-*.tmp*" 2>/dev/null | wc -l)
+	[ "$tmp_count" -eq 0 ]
+}
+
+@test "SSH-CFG-1: _regenerate_managed_ssh_config — RW sibling with .git/ gets Host alias block" {
+	local fake_home="$BATS_TEST_TMPDIR/ssh-cfg1-alias"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local primary="testproject"
+
+	# Create a fake sibling directory with .git/
+	local sibling_dir="$BATS_TEST_TMPDIR/mysibling"
+	mkdir -p "$sibling_dir/.git"
+
+	local list_file="$fake_home/.config/drydock/links/testproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	printf '%s|/workspace-siblings/mysibling|rw\n' "$sibling_dir" >"$list_file"
+
+	# Create sibling deploy key
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/mysibling_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/mysibling_deploy"
+
+	# No primary key
+	_regenerate_managed_ssh_config "$primary" "$list_file"
+
+	local config_path="$fake_home/.config/drydock/ssh-config-testproject"
+	[ -f "$config_path" ]
+
+	grep -q "Host github.com-mysibling" "$config_path"
+	grep -q "HostName github.com" "$config_path"
+	grep -q "IdentitiesOnly yes" "$config_path"
+	grep -q "User git" "$config_path"
+}
+
+@test "SSH-CFG-1: _regenerate_managed_ssh_config — RO-only sibling excluded from alias blocks" {
+	local fake_home="$BATS_TEST_TMPDIR/ssh-cfg1-ro"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local primary="testproject"
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ro-sibling"
+	mkdir -p "$sibling_dir/.git"
+
+	local list_file="$fake_home/.config/drydock/links/testproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	# RO entry — no flags
+	printf '%s|/workspace-siblings/ro-sibling|\n' "$sibling_dir" >"$list_file"
+
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/testproject_deploy"
+
+	_regenerate_managed_ssh_config "$primary" "$list_file"
+
+	local config_path="$fake_home/.config/drydock/ssh-config-testproject"
+	# No alias block for the RO sibling
+	run grep "Host github.com-ro-sibling" "$config_path"
+	[ "$status" -ne 0 ]
+}
+
+# ── T10-RED: SSH-ACT-1 [CRITICAL] — primary-only activation regression ────────
+
+@test "SSH-ACT-1 [CRITICAL]: _maybe_export_ssh_config — primary key only — exports DRYDOCK_SSH_CONFIG" {
+	local fake_home="$BATS_TEST_TMPDIR/ssh-act1-home"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	# Primary key exists
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/myproject_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/myproject_deploy"
+
+	# Empty list (no siblings)
+	local list_file="$fake_home/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	printf '' >"$list_file"
+
+	# Call _maybe_export_ssh_config
+	unset DRYDOCK_SSH_CONFIG
+	_maybe_export_ssh_config "myproject"
+
+	# DRYDOCK_SSH_CONFIG must be exported and point at the config file
+	[ -n "${DRYDOCK_SSH_CONFIG:-}" ]
+	[ -f "$DRYDOCK_SSH_CONFIG" ]
+
+	# Config must contain exactly one "Host github.com" block (no alias blocks)
+	local alias_count
+	alias_count=$(grep -c "Host github.com-" "$DRYDOCK_SSH_CONFIG" 2>/dev/null || echo 0)
+	[ "$alias_count" -eq 0 ]
+
+	local fallback_count
+	fallback_count=$(grep -c "^Host github.com$" "$DRYDOCK_SSH_CONFIG")
+	[ "$fallback_count" -eq 1 ]
+
+	# File must be chmod 600
+	local perms
+	perms="$(stat -c '%a' "$DRYDOCK_SSH_CONFIG")"
+	[ "$perms" = "600" ]
+}
+
+@test "SSH-ACT-1: _maybe_export_ssh_config — no key, no RW siblings — DRYDOCK_SSH_CONFIG NOT set" {
+	local fake_home="$BATS_TEST_TMPDIR/ssh-act1-nokey"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	# No primary key, no list file
+	unset DRYDOCK_SSH_CONFIG
+
+	_maybe_export_ssh_config "myproject"
+
+	[ -z "${DRYDOCK_SSH_CONFIG:-}" ]
+}
+
+@test "SSH-ACT-1: _maybe_export_ssh_config — RW sibling only, no primary key — exports DRYDOCK_SSH_CONFIG" {
+	local fake_home="$BATS_TEST_TMPDIR/ssh-act1-rwonly"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	# No primary key
+	# But list has one RW entry with .git/
+	local sibling_dir="$BATS_TEST_TMPDIR/rw-sibling-act1"
+	mkdir -p "$sibling_dir/.git"
+
+	local list_file="$fake_home/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	printf '%s|/workspace-siblings/rw-sibling-act1|rw\n' "$sibling_dir" >"$list_file"
+
+	# Create sibling deploy key
+	local sanitized
+	sanitized="$(sanitize_project_name "$(basename "$sibling_dir")")"
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+
+	unset DRYDOCK_SSH_CONFIG
+	_maybe_export_ssh_config "myproject"
+
+	# Must be exported (RW sibling triggers activation)
+	[ -n "${DRYDOCK_SSH_CONFIG:-}" ]
+	[ -f "$DRYDOCK_SSH_CONFIG" ]
+}
+
+@test "compose_files: DRYDOCK_SSH_CONFIG set — docker-compose.ssh.yml included" {
+	local fake_home="$BATS_TEST_TMPDIR/cf-ssh-config-home"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/cf-ssh-submount.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/cf-ssh-links.yml"
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	export DRYDOCK_SSH_CONFIG="$fake_home/.config/drydock/ssh-config-test"
+	touch "$DRYDOCK_SSH_CONFIG"
+
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.ssh.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_SSH_DEPLOY_KEY only (no DRYDOCK_SSH_CONFIG) — ssh.yml NOT included" {
+	local fake_home="$BATS_TEST_TMPDIR/cf-deploy-key-only"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/cf-dk-submount.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/cf-dk-links.yml"
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	export DRYDOCK_SSH_DEPLOY_KEY="$fake_home/.config/drydock/keys/test_deploy"
+	unset DRYDOCK_SSH_CONFIG
+
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	# After the activation gate change, DRYDOCK_SSH_DEPLOY_KEY alone is no longer
+	# the gate — DRYDOCK_SSH_CONFIG is. So ssh.yml should NOT be included here.
+	run grep "docker-compose.ssh.yml" <(printf '%s\n' "$output")
+	[ "$status" -ne 0 ]
 }
