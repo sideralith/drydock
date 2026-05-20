@@ -1667,6 +1667,13 @@ _setup_wiring_home() {
 	# the prior "ssh-config-*.tmp*" pattern matched zero files always,
 	# making the assertion vacuous. The character class below matches
 	# only the actual mktemp output shape.
+	#
+	# The 6-char [a-zA-Z0-9] pattern matches mktemp's actual suffix shape;
+	# it must stay in sync with the X-count in the mktemp template call at
+	# lib/compose.sh _regenerate_managed_ssh_config (currently "${config_path}.XXXXXX"
+	# → 6 X's → 6-char suffix). If that template ever changes, this find
+	# pattern must adapt or the assertion goes vacuous again (the exact bug
+	# this commit fixed).
 	local tmp_count
 	tmp_count=$(find "$fake_home/.config/drydock" \
 		-name 'ssh-config-*.[a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9]' \
