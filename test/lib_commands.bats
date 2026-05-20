@@ -2003,3 +2003,47 @@ STUB
 		[ "$output" = "$fakehome/.config/drydock/links/my_cool_project.list" ]
 	)
 }
+
+# ── T1-RED: _sibling_deploy_key_path and _managed_ssh_config_path ─────────────
+
+@test "_sibling_deploy_key_path: returns ~/.config/drydock/keys/<name>_deploy" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-sdkp"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	run _sibling_deploy_key_path "mysibling"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$fakehome/.config/drydock/keys/mysibling_deploy" ]
+}
+
+@test "_managed_ssh_config_path: returns ~/.config/drydock/ssh-config-<primary>" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-mscp"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	run _managed_ssh_config_path "myprimary"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$fakehome/.config/drydock/ssh-config-myprimary" ]
+}
+
+@test "_sibling_deploy_key_path: sanitized name with dashes preserved" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-sdkp2"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	run _sibling_deploy_key_path "my-lib"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$fakehome/.config/drydock/keys/my-lib_deploy" ]
+}
