@@ -117,11 +117,13 @@ expose every sibling's private key in one shot.
 
 **Defense-in-depth.** `00-secrets.json` (image-baked, root-owned) now includes
 `Bash(...)` deny patterns covering the most common read commands (`cat`, `less`,
-`more`, `head`, `tail`, `od`, `xxd`, `strings`) targeting that path. Under
-Threat Model A (accidents — INV-7) this is sufficient: the deny rules block
-inadvertent tool invocations. They do NOT block every conceivable reading
-mechanism (`python`, `dd`, `awk`, `perl`, etc.) — a determined adversary is
-explicitly out of scope.
+`more`, `head`, `tail`, `od`, `xxd`, `strings`, `bat`) targeting that path.
+`bat` is explicitly covered because drydock's global agent convention prefers
+`bat` over `cat`; failing to deny it would leave a normal-tool-usage hole.
+Under Threat Model A (accidents — INV-7) this is sufficient: the deny rules
+block inadvertent tool invocations. They do NOT block every conceivable
+reading mechanism (`python`, `dd`, `awk`, `perl`, custom scripts, etc.) — a
+determined adversary is explicitly out of scope.
 
 **If you need stricter isolation:** do not enable the SSH overlay
 (`docker-compose.ssh.yml`). RO-only links mount no key material at all.
