@@ -38,14 +38,21 @@ $PROJECT_DIR/  ───────────────────→ $PRO
 $PROJECT_DIR/docs/ ───────────────→ $PROJECT_DIR/docs/  :rw
   (if 9P drvfs / sub-mount)           (explicit re-mount overlay)
 
+~/git/sibling/     (optional)    ──→ /workspace-siblings/sibling/  :ro
+  (any path via `drydock link`)       (default target; custom path also supported
+                                       — see host-path-mirror pattern below)
+                                       Overlay generated per-launch from
+                                       ~/.config/drydock/links/<project>.list
+
 /var/run/docker.sock  ────────────→ /var/run/docker.sock
   (host daemon)                       Container CLI → host daemon
                                        → `docker exec serendipilink-api …`
 
 ~/.gitconfig, ~/.config/gh/   ────→ same paths (gitconfig RO, gh RW)
 
-NOT MOUNTED:
-~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.bash_history, other projects under ~/
+NOT MOUNTED (by default):
+~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.bash_history;
+other projects under ~/ — mountable explicitly via `drydock link` (see above)
 ```
 
 **Env passthrough**: `GITHUB_PERSONAL_ACCESS_TOKEN` is forwarded from the
@@ -351,6 +358,34 @@ simpler than sub-mount propagation — no `environment:` block, no env-var passt
 (all paths are static literals). `drydock unlink` removes entries; `drydock links`
 shows the current list. The feature is config-command-only: `link`/`unlink`/`links`
 do NOT invoke `export_compose_env`, so they work without a running container.
+
+**The host-path-mirror pattern.** The optional custom container target lets a
+sibling be mounted at the **same absolute path inside the container as it has on
+the host**. For example:
+
+```bash
+drydock link ~/git/shared-lib /home/rai/git/shared-lib
+```
+
+Inside the container, `shared-lib` appears at `/home/rai/git/shared-lib` — the
+same path the host shell resolves. This is useful when stack traces, language
+server output, IDE configs, or build tool output embed absolute paths: the paths
+are stable and match what is on disk. Devcontainers use the same convention.
+
+The reason this works without a special flag is that `home` is intentionally
+**not** in the system-directory reject list at `lib/commands.sh:754`. Targets
+under `$HOME` (e.g. `/home/<user>/git/foo`) are valid; only `$HOME` itself and
+its ancestors are rejected. See [docs/links.md](links.md#the-host-path-mirror-pattern)
+for the full pattern guide.
+
+**INV-3 and the link guard.** The hooks RO overlay (`~/.claude/hooks/` mounted
+`:ro` at `docker-compose.yml:67`) keeps the agent from editing its own guardrail
+scripts. A linked sibling mounted over the same path would silently remove the
+`:ro` protection. To prevent this, `drydock link` explicitly rejects any custom
+container target that equals `/opt/drydock/hooks` or anything under it
+(`lib/commands.sh:745-751`). This is the only drydock-internal path that requires
+a named reject — other protected paths (the system-directory list, `/workspace`,
+`$HOME`) are more general classes. See [security.md](security.md).
 
 Because `lib/commands.sh` uses `exec docker compose run` for `run`/`shell`
 (which replaces the bash process and fires no EXIT trap), `bin/drydock` also
