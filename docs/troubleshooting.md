@@ -370,18 +370,18 @@ These fire only when you supply an explicit container path as the second argumen
 
 | Rejection class | Example trigger | Resolution |
 |---|---|---|
-| 7. custom target: not absolute | `drydock link ~/git/foo relative/path` | Container targets must begin with `/`. |
-| 7. custom target: filesystem root | `drydock link ~/git/foo /` | Mounting over `/` would replace the container's root filesystem. |
-| 7. custom target: starts with `//` | `drydock link ~/git/foo //etc/foo` | The kernel normalizes `//foo` to `/foo` at mount time, which would bypass all single-slash guards (e.g. let `//etc/foo` mount at `/etc/foo`). |
-| 7. custom target: contains `..` or `.` components | `drydock link ~/git/foo /workspace-siblings/../etc` | Docker normalizes path components at mount time. `/../etc` → `/etc`, bypassing the system-dir guard. |
-| 7. custom target: shadows `/opt/drydock/hooks` | `drydock link ~/git/foo /opt/drydock/hooks` | This is the hooks RO bind-mount ([INV-3](../CLAUDE.md)). A sibling mount over it would silently remove the read-only guardrail. See [security.md](security.md) and [docs/architecture.md](architecture.md). |
-| 7. custom target: under a system directory | `drydock link ~/git/foo /etc/myapp`, `/bin/...`, `/usr/...` | First path component must not be `etc`, `bin`, `sbin`, `usr`, `lib`, `lib32`, `lib64`, `boot`, `root`, `opt`, `proc`, `sys`, `dev`, `run`, `var`, or `tmp`. Note: `home` is intentionally **not** in this list — `/home/<user>/git/foo` is the [host-path-mirror pattern](links.md#the-host-path-mirror-pattern). |
-| 7. custom target: shadows `/workspace`, `/workspace-siblings`, `$HOME`, or drydock state | `drydock link ~/git/foo /workspace/sub`, `/workspace-siblings` | These targets would shadow the primary project mount, the siblings parent directory, `$HOME`, or container state dirs (`~/.claude*`, `~/.engram*`, `~/.config/drydock`). |
+| 7a. custom target: not absolute | `drydock link ~/git/foo relative/path` | Container targets must begin with `/`. |
+| 7b. custom target: filesystem root | `drydock link ~/git/foo /` | Mounting over `/` would replace the container's root filesystem. |
+| 7c. custom target: starts with `//` | `drydock link ~/git/foo //etc/foo` | The kernel normalizes `//foo` to `/foo` at mount time, which would bypass all single-slash guards (e.g. let `//etc/foo` mount at `/etc/foo`). |
+| 7d. custom target: contains `..` or `.` components | `drydock link ~/git/foo /workspace-siblings/../etc` | Docker normalizes path components at mount time. `/../etc` → `/etc`, bypassing the system-dir guard. |
+| 7e. custom target: shadows `/opt/drydock/hooks` | `drydock link ~/git/foo /opt/drydock/hooks` | This is the hooks RO bind-mount ([INV-3](../CLAUDE.md)). A sibling mount over it would silently remove the read-only guardrail. See [security.md](security.md) and [docs/architecture.md](architecture.md). |
+| 7f. custom target: under a system directory | `drydock link ~/git/foo /etc/myapp`, `/bin/...`, `/usr/...` | First path component must not be `etc`, `bin`, `sbin`, `usr`, `lib`, `lib32`, `lib64`, `boot`, `root`, `opt`, `proc`, `sys`, `dev`, `run`, `var`, or `tmp`. Note: `home` is intentionally **not** in this list — `/home/<user>/git/foo` is the [host-path-mirror pattern](links.md#the-host-path-mirror-pattern). |
+| 7g. custom target: shadows `/workspace`, `/workspace-siblings`, `$HOME`, or drydock state | `drydock link ~/git/foo /workspace/sub`, `/workspace-siblings` | These targets would shadow the primary project mount, the siblings parent directory, `$HOME`, or container state dirs (`~/.claude*`, `~/.engram*`, `~/.config/drydock`). |
 | 8. Basename collision | Two different paths with the same `basename` | The default container target is `/workspace-siblings/<basename>`. Two siblings with the same basename would collide. Supply an explicit `<container-target>` for one of them, or use `drydock unlink` on the conflicting entry first. |
 | 8. Container target collision | Two entries share the same custom target | Docker Compose would silently keep only one mount. Assign distinct container targets. |
 
 **Cross-references**: credential guard rationale → [security.md](security.md);
-hooks guard rationale → [security.md](security.md#destructive-command-guardrail-layer-v020);
+hooks guard rationale → [architecture.md](architecture.md#inv-3-and-the-link-guard);
 host-path-mirror pattern → [docs/links.md](links.md#the-host-path-mirror-pattern).
 
 ## drydock can't find DRYDOCK_HOME / compose file

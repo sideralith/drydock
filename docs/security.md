@@ -70,12 +70,22 @@ Read(//**/.kube/**)
 Read(//**/.docker/config.json)
 Read(//**/.claude/.credentials.json)
 Read(//**/.claude-container*/.credentials.json)
+Read(__HOME__/.config/drydock/**)
+# Edit(...) and Write(...) variants present for every entry — see 00-secrets.json
 ```
 
 The `//**/` prefix matches **at any mount depth**: a `.ssh/` directory inside a
 sibling at `/workspace-siblings/other-repo/.ssh/` is denied by the same rule
 that would deny `~/.ssh/` on the primary project or anywhere else in the
 filesystem.
+
+**`__HOME__`-anchored entry.** `__HOME__/.config/drydock/**` uses an
+`__HOME__`-anchored pattern (resolved to `/home/<user>/.config/drydock/**`
+at image build time) rather than the root-anchored `//**/` form. This is
+intentional: drydock-state paths only need to be denied under the container's
+`$HOME`, not at arbitrary mount depths. The distinction mirrors the threat
+model — credential files like `.ssh/` can appear anywhere in a sibling tree,
+but drydock-state paths are only meaningful under `$HOME`.
 
 **Read/Edit/Write symmetry.** All three verbs are denied for each credential
 path — not just `Read`:
@@ -98,7 +108,7 @@ uncovered — a gap identified and closed in the v0.2.0 re-verify.
 drydock ships the deny rules; **Claude Code is the enforcer**. If an agent
 bypasses Claude Code's permission gate — via a raw Docker socket call, a
 sub-shell not mediated by the Bash tool, or a base64-obfuscated tool invocation
-— the deny rules do not fire. This is the same non-goal stated in [INV-6](../CLAUDE.md)
+— the deny rules do not fire. This is the same non-goal stated in [INV-7](../CLAUDE.md)
 for destructive commands: drydock defends against accidents, not against an
 adversarial agent that is actively trying to circumvent its own permission layer.
 

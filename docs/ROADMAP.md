@@ -75,7 +75,7 @@ drydock and re-launching against the other repo. Constant context switching.
 
 **What shipped.** Read-only sibling linking: `drydock link <path>`,
 `drydock unlink <path>`, `drydock links`. Siblings mount `:ro` at
-`/workspace-siblings/<basename>/` (or a custom path) inside the container.
+`/workspace-siblings/<basename>` (or a custom path) inside the container.
 Configuration persists in `~/.config/drydock/links/<project>.list` (pipe-delimited
 3-column format: `<host>|<target>|<flags>`). On every `drydock run`/`shell`, the
 list is projected to an ephemeral `drydock-links-$$.yml` overlay — same pattern as

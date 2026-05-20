@@ -38,7 +38,7 @@ $PROJECT_DIR/  ───────────────────→ $PRO
 $PROJECT_DIR/docs/ ───────────────→ $PROJECT_DIR/docs/  :rw
   (if 9P drvfs / sub-mount)           (explicit re-mount overlay)
 
-~/git/sibling/     (optional)    ──→ /workspace-siblings/sibling/  :ro
+~/git/sibling/     (optional)    ──→ /workspace-siblings/sibling  :ro
   (any path via `drydock link`)       (default target; custom path also supported
                                        — see host-path-mirror pattern below)
                                        Overlay generated per-launch from
@@ -373,19 +373,27 @@ server output, IDE configs, or build tool output embed absolute paths: the paths
 are stable and match what is on disk. Devcontainers use the same convention.
 
 The reason this works without a special flag is that `home` is intentionally
-**not** in the system-directory reject list at `lib/commands.sh:754`. Targets
+**not** in the system-directory reject list at `lib/commands.sh:753`. Targets
 under `$HOME` (e.g. `/home/<user>/git/foo`) are valid; only `$HOME` itself and
 its ancestors are rejected. See [docs/links.md](links.md#the-host-path-mirror-pattern)
 for the full pattern guide.
 
-**INV-3 and the link guard.** The hooks RO overlay (`~/.claude/hooks/` mounted
-`:ro` at `docker-compose.yml:67`) keeps the agent from editing its own guardrail
-scripts. A linked sibling mounted over the same path would silently remove the
-`:ro` protection. To prevent this, `drydock link` explicitly rejects any custom
-container target that equals `/opt/drydock/hooks` or anything under it
-(`lib/commands.sh:745-751`). This is the only drydock-internal path that requires
-a named reject — other protected paths (the system-directory list, `/workspace`,
-`$HOME`) are more general classes. See [security.md](security.md).
+**INV-3 and the link guard.** The hooks RO overlay covers two paths:
+`${HOME}/.claude/hooks:ro` at `docker-compose.yml:70` and
+`/opt/drydock/hooks:ro` at `docker-compose.yml:84`. A linked sibling mounted
+over either path would silently remove the `:ro` protection. `drydock link`
+defends against both:
+
+- **`/opt/drydock/hooks`** is explicitly rejected by guard (d) at
+  `lib/commands.sh:745-751` — this path gets a named guard because it is a
+  specific drydock-internal path that does not fall under the broader
+  system-directory class (which covers `opt` generally but not the hooks
+  subpath specifically).
+- **`~/.claude/hooks`** shadowing is prevented by guard (e)'s
+  `$HOME/.claude*` pattern, which rejects any target that would shadow the
+  home-relative Claude state directories.
+
+See [security.md](security.md).
 
 Because `lib/commands.sh` uses `exec docker compose run` for `run`/`shell`
 (which replaces the bash process and fires no EXIT trap), `bin/drydock` also

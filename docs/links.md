@@ -5,7 +5,7 @@ read-only sibling workspaces. The agent can read them — useful for referencing
 shared library, another repo's API surface, or a monorepo sibling — but cannot
 write to them.
 
-## The four commands
+## The three commands
 
 | Command | What it does |
 |---|---|
@@ -47,7 +47,7 @@ on the host so `$PWD` inside the container equals `$PWD` outside.
 **Why `home` is not in the system-dir reject list.** The custom container
 target rejects first-path-component system directories (`etc`, `bin`, `usr`,
 etc.) to prevent shadowing critical container paths. `home` is intentionally
-absent from that list (`lib/commands.sh:754`) — `/home/<user>/git/foo` is
+absent from that list (`lib/commands.sh:753`) — `/home/<user>/git/foo` is
 exactly the host-path-mirror target. `$HOME` **itself** and its **ancestors**
 (`/home`, `/`) are still rejected; only targets strictly under `$HOME` are
 allowed.
@@ -145,9 +145,9 @@ Several design questions remain open before RW links can ship:
   merged?
 - **Git identity for sibling commits** — should commits in the sibling use
   the same author as the primary project?
-- **Encoding flags in the list file** — the current pipe-delimited format
-  has no reserved column for a read-write flag; adding one requires a
-  migration or a format bump.
+- **Encoding flags in the list file** — the flags column already exists in
+  the format (currently always empty); populating it for `--rw` is
+  straightforward once the design questions above are resolved.
 
 **Today's workaround.** To modify a sibling, step outside the drydock
 container and edit it directly on the host. The sibling's host path is
