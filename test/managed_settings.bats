@@ -796,6 +796,17 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 }
 
 # ── JD1-C-RED: Bash deny coverage for keys dir ────────────────────────────────
+#
+# Glob convention. The `Bash(<cmd> *<path>*)` form uses Claude Code's
+# argv-glob — `*` matches any substring within the assembled command-line
+# string. This is intentionally distinct from the `Read/Edit/Write(<path>)`
+# form, which uses a path-glob where `**` is the recursive wildcard. Every
+# Bash deny entry across `templates/managed-settings.d/` (00-secrets.json,
+# 10-git-safety.json, 30-os-safety.json) uses single `*`; `**` never
+# appears inside a `Bash(...)` pattern because the two languages are not
+# interchangeable. Judges in JD Round 2 flagged the asymmetry as a
+# readability concern — kept as-is because the convention is consistent
+# and the alternative (`**` in Bash patterns) would be a semantic error.
 
 @test "JD1-C: 00-secrets template contains Bash deny entries for keys dir read commands" {
     local secrets_file="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
