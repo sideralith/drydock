@@ -10,7 +10,7 @@
 
 # ── URL helpers ───────────────────────────────────────────────────────────────
 
-# _validate_sibling_remote_url(sibling_path, alias[, remote_name])
+# _validate_sibling_remote_url(sibling_path, host_alias[, remote_name])
 #
 # Read-only validation of the sibling's remote URL — DOES NOT MUTATE.
 #
@@ -25,9 +25,12 @@
 # .git/config in the final step, eliminating the partial-link hazard where a
 # mid-flow failure (key-gen, SSH config regen) would leave the sibling
 # pointing at an alias whose key + Host block do not yet exist.
+#
+# host_alias is named to avoid shadowing the Bash builtin `alias` — see
+# judgment-day Round 1 (Judge B SUGGESTION).
 _validate_sibling_remote_url() {
 	local sibling="$1"
-	local alias="$2"
+	local host_alias="$2"
 	local remote_name="${3:-origin}"
 
 	local current
@@ -39,10 +42,10 @@ _validate_sibling_remote_url() {
 
 	if [[ "$current" =~ $aliased_re ]]; then
 		local cur_alias="${BASH_REMATCH[1]}"
-		if [ "$cur_alias" = "$alias" ]; then
+		if [ "$cur_alias" = "$host_alias" ]; then
 			return 0
 		fi
-		err "sibling URL is aliased to '$cur_alias' but expected '$alias' — manual cleanup required: git -C '$sibling' remote set-url $remote_name git@github.com:<owner>/<repo>.git"
+		err "sibling URL is aliased to '$cur_alias' but expected '$host_alias' — manual cleanup required: git -C '$sibling' remote set-url $remote_name git@github.com:<owner>/<repo>.git"
 	fi
 
 	if [[ ! "$current" =~ $canonical_re ]]; then
@@ -51,7 +54,7 @@ _validate_sibling_remote_url() {
 	return 0
 }
 
-# _rewrite_sibling_remote_url(sibling_path, alias[, remote_name])
+# _rewrite_sibling_remote_url(sibling_path, host_alias[, remote_name])
 #
 # Rewrite sibling's remote.<name>.url from canonical github SSH form to the
 # aliased form: git@github.com-<alias>:owner/repo[.git]
@@ -65,9 +68,12 @@ _validate_sibling_remote_url() {
 #
 # Validation is shared with _validate_sibling_remote_url — kept here too so
 # direct callers (tests, future code paths) still get the same guarantees.
+#
+# host_alias is named to avoid shadowing the Bash builtin `alias` — see
+# judgment-day Round 1 (Judge B SUGGESTION).
 _rewrite_sibling_remote_url() {
 	local sibling="$1"
-	local alias="$2"
+	local host_alias="$2"
 	local remote_name="${3:-origin}"
 
 	local current
@@ -81,11 +87,11 @@ _rewrite_sibling_remote_url() {
 
 	if [[ "$current" =~ $aliased_re ]]; then
 		local cur_alias="${BASH_REMATCH[1]}"
-		if [ "$cur_alias" = "$alias" ]; then
+		if [ "$cur_alias" = "$host_alias" ]; then
 			# Already aliased to the same alias — idempotent (D11).
 			return 0
 		fi
-		err "sibling URL is aliased to '$cur_alias' but expected '$alias' — manual cleanup required: git -C '$sibling' remote set-url $remote_name git@github.com:<owner>/<repo>.git"
+		err "sibling URL is aliased to '$cur_alias' but expected '$host_alias' — manual cleanup required: git -C '$sibling' remote set-url $remote_name git@github.com:<owner>/<repo>.git"
 	fi
 
 	if [[ ! "$current" =~ $canonical_re ]]; then
@@ -95,7 +101,7 @@ _rewrite_sibling_remote_url() {
 	local owner="${BASH_REMATCH[1]}"
 	local repo="${BASH_REMATCH[2]}"
 	local dotgit="${BASH_REMATCH[3]:-}"
-	local new_url="git@github.com-${alias}:${owner}/${repo}${dotgit}"
+	local new_url="git@github.com-${host_alias}:${owner}/${repo}${dotgit}"
 
 	git -C "$sibling" remote set-url "$remote_name" "$new_url" ||
 		err "git remote set-url failed in $sibling"
