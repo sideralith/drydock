@@ -198,6 +198,11 @@ generate_submount_overlay() {
 			warn "sub-mount $mount_pt uses fstype ${class#exotic:} — propagation may not work"
 			;;
 		esac
+		# Idiom: $(printf '...\n') strips the trailing newline (command-substitution
+		# behavior); the explicit body+=$'\n' restores exactly one newline per
+		# entry. Net output: one line per volume, no blank lines between. Do NOT
+		# remove either half — removing the $'\n' concatenates entries on one
+		# line; removing the $() wrapping breaks the strip-and-add pairing.
 		body+=$(printf '      - "%s:%s:rw"\n' "$docker_src" "$mount_pt")
 		body+=$'\n'
 
@@ -247,6 +252,9 @@ generate_links_overlay() {
 		# FIX #8: skip malformed lines with an empty target field to prevent
 		# a broken "host::ro" volume spec from entering the compose overlay.
 		[ -z "$target" ] && continue
+		# Idiom (see generate_submount_overlay for the full rationale): $() strips
+		# printf's trailing newline; body+=$'\n' restores exactly one — net is
+		# one line per entry, no blank lines between.
 		body+=$(printf '      - "%s:%s:ro"\n' "$host" "$target")
 		body+=$'\n'
 	done < "$list_file"

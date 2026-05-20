@@ -858,10 +858,12 @@ cmd_unlink() {
 	local list_file
 	list_file="$(_links_list_file)"
 
-	# R3-FIX-7(b): opportunistically remove any stale .tmp[0-9]* files left by
-	# a previous cmd_unlink that was SIGKILL'd or hit set -e before cleanup.
+	# R3-FIX-7(b): opportunistically remove any stale .tmp* files left by a
+	# previous cmd_unlink that was SIGKILL'd or hit set -e before cleanup.
 	# 2>/dev/null || true: silently no-op when no stale files exist.
-	rm -f "${list_file}".tmp[0-9]* 2>/dev/null || true
+	# Glob '.tmp*' (rather than '.tmp[0-9]*') matches both the current PID-suffix
+	# pattern (.tmp$$) and any future temp-naming variant (mktemp-style, etc.).
+	rm -f "${list_file}".tmp* 2>/dev/null || true
 
 	# Existence check anchored to first field: $1 == canonical (awk -F'|').
 	# grep -F "${canonical}|" would match the literal string anywhere on the
