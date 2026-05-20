@@ -198,17 +198,32 @@ _check_sibling_basename_collision_rw() {
 	local key_path
 	key_path="$(_sibling_deploy_key_path "$sanitized")"
 
-	if [ -f "$key_path" ] && [ -f "${list_file}" ]; then
-		local _h _t _f
+	# No existing key → no collision possible.
+	[ -f "$key_path" ] || return 0
+
+	# JD1-X: scan ALL projects' .list files under the links directory, not just
+	# the passed list_file. The deploy key path is global; a key created for
+	# ~/groupA/lib (project A) conflicts with a new ~/groupB/lib link (project B)
+	# even though project B's .list has no entry for that basename.
+	local links_dir
+	links_dir="$(dirname "$list_file")"
+	[ -d "$links_dir" ] || return 0
+
+	local other_list _h _t _f
+	for other_list in "$links_dir"/*.list; do
+		[ -f "$other_list" ] || continue
+		# shellcheck disable=SC2094  # false positive: $other_list is the for-variable, not read+written in same pipeline
 		while IFS='|' read -r _h _t _f; do
 			[ -z "$_h" ] && continue
 			[ "${_f:-}" = "rw" ] || continue
 			local _existing_sanitized
 			_existing_sanitized="$(sanitize_project_name "$(basename "$_h")")"
 			if [ "$_existing_sanitized" = "$sanitized" ] && [ "$_h" != "$canonical" ]; then
-				err "key collision: '$key_path' is already owned by RW sibling '$_h'; cannot also link '$canonical' (same sanitized basename '$sanitized')"
+				local _other_project
+				_other_project="$(basename "$other_list" .list)"
+				err "key collision: '$key_path' is already owned by RW sibling '$_h' (project '$_other_project'); cannot also link '$canonical' (same sanitized basename '$sanitized')"
 			fi
-		done <"$list_file"
-	fi
+		done <"$other_list"
+	done
 	return 0
 }
