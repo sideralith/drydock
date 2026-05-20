@@ -136,7 +136,7 @@ scripts, a justfile) runs the same way.
 | `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed — run it again for the same project to get a second concurrent session |
 | `drydock init [DIR]` | Per-project setup: seed a minimal `.claude/settings.json` stub for your own customization (drydock's deny policy is image-baked, applies automatically) |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
-| `drydock link <PATH> [CONTAINER-PATH]` | Mount a sibling project read-only inside the container at `/workspace-siblings/<name>` (or a custom path). Configuration persists; overlay regenerated on every launch. `--rw` is parsed but not yet implemented (errors immediately). |
+| `drydock link [--rw] <PATH> [CONTAINER-PATH]` | Mount a sibling project inside the container at `/workspace-siblings/<name>` (or a custom path). Without `--rw`: read-only mount, no key needed. With `--rw`: read-write mount; generates a per-sibling deploy key and managed SSH config so the agent can `git push` from the sibling without exposing `~/.ssh/`. |
 | `drydock unlink PATH` | Remove a sibling mount from the current project's list |
 | `drydock links` | Show all sibling mounts configured for the current project |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host — runs automatically when the container copy is stale (set `DRYDOCK_SKIP_AUTOSYNC=1` to disable) |
@@ -251,8 +251,8 @@ plus docker-wrapped variants. See [docs/security.md](docs/security.md#if-you-hav
 - **[docs/lifecycle.md](docs/lifecycle.md)** — where to update what (binaries
   vs. plugins vs. skills vs. config), mental model.
 - **[docs/links.md](docs/links.md)** — sibling project links (`drydock link`):
-  the three commands, RO contract, host-path-mirror pattern, list-file format,
-  `--rw` deferred status.
+  the three commands, RO and RW modes, host-path-mirror pattern, list-file
+  format, per-sibling deploy keys, managed SSH config, and unlink lifecycle.
 - **[docs/engram.md](docs/engram.md)** — the optional engram persistent-memory
   integration: detection, shared vs isolated mode, setup, migration.
 - **[docs/security.md](docs/security.md)** — what drydock does and does NOT
