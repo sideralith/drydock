@@ -339,3 +339,32 @@ _ssh_setup() {
 	after="$(git -C "$sibling_dir" remote get-url origin)"
 	[ "$before" = "$after" ]
 }
+
+# ── JD1-X-RED: cross-project basename collision detection ────────────────────
+
+@test "JD1-X: cross-project collision — same sanitized basename in another project's .list is detected" {
+	_ssh_setup
+
+	local links_dir="$FAKE_HOME/.config/drydock/links"
+	mkdir -p "$links_dir"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+
+	# Project A already linked ~/groupA/lib as RW.
+	local list_a="$links_dir/projectA.list"
+	printf '/home/user/groupA/lib|/workspace-siblings/lib|rw\n' >"$list_a"
+
+	# Simulate the existing key (created by project A's link).
+	touch "$FAKE_HOME/.config/drydock/keys/lib_deploy"
+
+	# Project B's .list is empty for this basename.
+	local list_b="$links_dir/projectB.list"
+	touch "$list_b"
+
+	# Call collision check for project B trying to link ~/groupB/lib.
+	run _check_sibling_basename_collision_rw "/home/user/groupB/lib" "lib" "$list_b"
+	[ "$status" -ne 0 ]
+	# Error must mention the conflicting sibling from project A
+	[[ "$output" == *"groupA/lib"* ]]
+	# Error must mention the owning project
+	[[ "$output" == *"projectA"* ]]
+}
