@@ -246,16 +246,24 @@ generate_links_overlay() {
 	[ -f "$list_file" ] || return 0
 
 	local body=""
-	local host target
-	while IFS='|' read -r host target _; do
+	local host target _flags _mode
+	while IFS='|' read -r host target _flags; do
 		[ -z "$host" ] && continue
 		# FIX #8: skip malformed lines with an empty target field to prevent
 		# a broken "host::ro" volume spec from entering the compose overlay.
 		[ -z "$target" ] && continue
+		# Read mount mode from field 3: only "rw" produces :rw; everything
+		# else (empty, unknown, corrupt) falls back to :ro for safety (SR-8,
+		# RW-OVL-3).
+		if [ "${_flags:-}" = "rw" ]; then
+			_mode="rw"
+		else
+			_mode="ro"
+		fi
 		# Idiom (see generate_submount_overlay for the full rationale): $() strips
 		# printf's trailing newline; body+=$'\n' restores exactly one — net is
 		# one line per entry, no blank lines between.
-		body+=$(printf '      - "%s:%s:ro"\n' "$host" "$target")
+		body+=$(printf '      - "%s:%s:%s"\n' "$host" "$target" "$_mode")
 		body+=$'\n'
 	done <"$list_file"
 
