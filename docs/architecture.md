@@ -57,7 +57,7 @@ $PROJECT_DIR/docs/ ───────────────→ $PROJECT_DIR
 
 /var/run/docker.sock  ────────────→ /var/run/docker.sock
   (host daemon)                       Container CLI → host daemon
-                                       → `docker exec serendipilink-api …`
+                                       → `docker exec myproject-api …`
 
 ~/.gitconfig, ~/.config/gh/   ────→ same paths (gitconfig RO, gh RW)
 
@@ -423,7 +423,7 @@ file is left untouched.
 drydock bind-mounts `/var/run/docker.sock`. The `docker` CLI inside the
 container talks to the **host's** daemon — it does NOT run a nested daemon.
 So sibling containers in any project's `docker-compose` stack are visible:
-`docker exec serendipilink-api …`, `make shell-api`, project Makefile
+`docker exec myproject-api …`, `make shell-api`, project Makefile
 targets all work transparently.
 
 Consequence: socket access ≈ root-equivalent on the host. This is why
