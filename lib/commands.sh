@@ -803,9 +803,16 @@ cmd_link() {
 	# ADR-5: basename collision check + container-target uniqueness check
 	local list_file
 	list_file="$(_links_list_file)"
+	# JD1-AB: track whether this exact host+target+flags combo was already linked.
+	# Set to 1 inside the loop instead of returning 0 so the RW self-heal path
+	# can still run (idempotent helpers re-apply any missing mutations).
+	local _already_linked=0
+	# New entry's flag for mode-mismatch comparison.
+	local _new_flag=""
+	[ "$rw" -eq 1 ] && _new_flag="rw"
 	if [ -f "$list_file" ]; then
-		local existing_host existing_target existing_name existing_target_norm
-		while IFS='|' read -r existing_host existing_target _; do
+		local existing_host existing_target existing_flags existing_name existing_target_norm
+		while IFS='|' read -r existing_host existing_target existing_flags; do
 			[ -z "$existing_host" ] && continue
 			existing_name="$(basename "$existing_host")"
 			if [ "$existing_name" = "$name" ] && [ "$existing_host" != "$canonical" ]; then
@@ -818,8 +825,14 @@ cmd_link() {
 			if [ "$existing_host" = "$canonical" ]; then
 				local _existing_norm="${existing_target%/}"
 				if [ "$_existing_norm" = "$container_target" ]; then
-					note "already linked: $canonical"
-					return 0
+					# JD1-AB: compare flags — mode mismatch → actionable error.
+					local _existing_flag="${existing_flags:-}"
+					if [ "$_existing_flag" != "$_new_flag" ]; then
+						err "already linked as '${_existing_flag:-ro}'; run 'drydock unlink $canonical' first to re-link as '${_new_flag:-ro}'"
+					fi
+					# Same mode: mark for self-heal / idempotent no-op; continue scanning.
+					_already_linked=1
+					continue
 				fi
 				err "already linked with a different container target '$_existing_norm' — run 'drydock unlink $canonical' first"
 			fi
@@ -839,6 +852,9 @@ cmd_link() {
 
 	if [ "$rw" -eq 1 ]; then
 		# RW branch: key-gen + SSH config + URL rewrite (SR-1, SR-2, SR-3, SR-4).
+		# JD1-AB: when _already_linked=1 the .list entry already exists — skip
+		# appending to avoid duplication. All helpers are idempotent so they still
+		# run to self-heal any partial state (step 4/5 failures on prior run).
 		local _sanitized
 		_sanitized="$(sanitize_project_name "$name")"
 		local _project_name
@@ -862,9 +878,12 @@ cmd_link() {
 			local _key_path
 			_key_path="$(_generate_sibling_deploy_key "$_sanitized")"
 
-			# Append .list entry — must happen BEFORE SSH config regen so
-			# _regenerate_managed_ssh_config emits the alias block for it.
-			printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			# Append .list entry only when not already present — must happen
+			# BEFORE SSH config regen so _regenerate_managed_ssh_config emits
+			# the alias block for it.
+			if [ "$_already_linked" -eq 0 ]; then
+				printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			fi
 
 			# Regenerate managed SSH config (alias block now part of the list)
 			_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
@@ -885,12 +904,19 @@ cmd_link() {
 			printf '\nOr visit: https://github.com/<owner>/%s/settings/keys/new\n' "$name" >&2
 		else
 			# No .git/ — mount RW but skip SSH sub-flow (SR-2 / D10)
-			printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			if [ "$_already_linked" -eq 0 ]; then
+				printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			fi
 			_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
 			ok "linked: $canonical → $container_target (rw)"
 			note "no .git/ found in $canonical — deploy-key and SSH config alias skipped; re-run 'drydock link --rw $src' after git init to enable git push"
 		fi
 	else
+		# RO branch: no helpers to re-run, so _already_linked → immediate no-op.
+		if [ "$_already_linked" -eq 1 ]; then
+			note "already linked: $canonical"
+			return 0
+		fi
 		printf '%s|%s|\n' "$canonical" "$container_target" >>"$list_file"
 		ok "linked: $canonical → $container_target (ro)"
 	fi
