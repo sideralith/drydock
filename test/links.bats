@@ -22,6 +22,7 @@ _links_setup() {
 	source "$DRYDOCK_HOME/lib/common.sh"
 	source "$DRYDOCK_HOME/lib/paths.sh"
 	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/sibling_ssh.sh"
 	source "$DRYDOCK_HOME/lib/commands.sh"
 }
 

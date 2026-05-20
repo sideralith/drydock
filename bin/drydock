@@ -38,6 +38,8 @@ source "$DRYDOCK_HOME/lib/common.sh"
 source "$DRYDOCK_HOME/lib/paths.sh"
 # shellcheck source=../lib/compose.sh
 source "$DRYDOCK_HOME/lib/compose.sh"
+# shellcheck source=../lib/sibling_ssh.sh
+source "$DRYDOCK_HOME/lib/sibling_ssh.sh"
 # shellcheck source=../lib/commands.sh
 source "$DRYDOCK_HOME/lib/commands.sh"
 

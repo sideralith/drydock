@@ -137,9 +137,10 @@ STUB
   [[ "$output" != *"docker-compose.ssh.yml"* ]]
 }
 
-@test "compose_files: DRYDOCK_SSH_DEPLOY_KEY set — ssh overlay present" {
+@test "compose_files: DRYDOCK_SSH_CONFIG set — ssh overlay present" {
   export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
-  export DRYDOCK_SSH_DEPLOY_KEY="$BATS_TEST_TMPDIR/fake_deploy"
+  export DRYDOCK_SSH_CONFIG="$BATS_TEST_TMPDIR/fake_ssh_config"
+  touch "$BATS_TEST_TMPDIR/fake_ssh_config"
   run compose_files "$TEST_PROJECT_DIR"
   [[ "$output" == *"docker-compose.ssh.yml"* ]]
 }

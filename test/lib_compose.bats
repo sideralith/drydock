@@ -1751,10 +1751,9 @@ _setup_wiring_home() {
 	[ -n "${DRYDOCK_SSH_CONFIG:-}" ]
 	[ -f "$DRYDOCK_SSH_CONFIG" ]
 
-	# Config must contain exactly one "Host github.com" block (no alias blocks)
-	local alias_count
-	alias_count=$(grep -c "Host github.com-" "$DRYDOCK_SSH_CONFIG" 2>/dev/null || echo 0)
-	[ "$alias_count" -eq 0 ]
+	# Config must not contain any alias blocks (only the fallback block)
+	run grep "Host github.com-" "$DRYDOCK_SSH_CONFIG"
+	[ "$status" -ne 0 ]
 
 	local fallback_count
 	fallback_count=$(grep -c "^Host github.com$" "$DRYDOCK_SSH_CONFIG")
@@ -1817,6 +1816,7 @@ _setup_wiring_home() {
 	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/cf-ssh-links.yml"
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
 	export DRYDOCK_SSH_CONFIG="$fake_home/.config/drydock/ssh-config-test"
+	mkdir -p "$(dirname "$DRYDOCK_SSH_CONFIG")"
 	touch "$DRYDOCK_SSH_CONFIG"
 
 	run compose_files "$TEST_PROJECT_DIR"
