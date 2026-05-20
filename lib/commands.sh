@@ -850,19 +850,30 @@ cmd_link() {
 		_check_sibling_basename_collision_rw "$canonical" "$_sanitized" "$list_file"
 
 		if [ -d "${canonical}/.git" ]; then
-			# SR-10: validate URL BEFORE key-gen to avoid orphan keys on failure.
-			# _rewrite_sibling_remote_url validates AND rewrites; it calls err() on
-			# bad URLs so no rollback is needed (we haven't written .list yet).
-			_rewrite_sibling_remote_url "$canonical" "$_sanitized"
-
-			# Append .list entry AFTER validation succeeds
-			printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+			# FIX-1: validate URL FIRST (read-only); then perform mutations so a
+			# mid-flow failure cannot leave the sibling's .git/config pointing at
+			# an alias whose key file + SSH config Host block do not yet exist.
+			# Order: validate → key-gen → .list append → SSH config regen →
+			# URL rewrite. URL mutation is the LAST step; if anything earlier
+			# fails, the sibling .git/config is untouched.
+			_validate_sibling_remote_url "$canonical" "$_sanitized"
 
 			# Key-gen (idempotent — reuses existing key)
 			local _key_path
 			_key_path="$(_generate_sibling_deploy_key "$_sanitized")"
-			# Regenerate managed SSH config
+
+			# Append .list entry — must happen BEFORE SSH config regen so
+			# _regenerate_managed_ssh_config emits the alias block for it.
+			printf '%s|%s|rw\n' "$canonical" "$container_target" >>"$list_file"
+
+			# Regenerate managed SSH config (alias block now part of the list)
 			_regenerate_managed_ssh_config "$_project_name" "$list_file" >/dev/null
+
+			# URL rewrite — final mutation. _validate_sibling_remote_url already
+			# accepted the current URL, so _rewrite re-runs the same validation
+			# idempotently and then performs the single `git remote set-url`.
+			_rewrite_sibling_remote_url "$canonical" "$_sanitized"
+
 			# Print pubkey + GitHub instructions
 			local _pubkey
 			_pubkey="$(cat "${_key_path}.pub")"

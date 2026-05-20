@@ -10,6 +10,47 @@
 
 # ── URL helpers ───────────────────────────────────────────────────────────────
 
+# _validate_sibling_remote_url(sibling_path, alias[, remote_name])
+#
+# Read-only validation of the sibling's remote URL — DOES NOT MUTATE.
+#
+# Returns 0 when the URL is acceptable for rewriting:
+#   - canonical form `git@github.com:owner/repo[.git]`, OR
+#   - already aliased to the SAME alias (idempotent re-link, D11).
+# err()s when the URL is unacceptable:
+#   - aliased to a DIFFERENT alias (unexpected conflict — D5 hazard),
+#   - HTTPS / non-GitHub / malformed (SR-10).
+#
+# Exists so cmd_link --rw can validate FIRST and only mutate the sibling
+# .git/config in the final step, eliminating the partial-link hazard where a
+# mid-flow failure (key-gen, SSH config regen) would leave the sibling
+# pointing at an alias whose key + Host block do not yet exist.
+_validate_sibling_remote_url() {
+	local sibling="$1"
+	local alias="$2"
+	local remote_name="${3:-origin}"
+
+	local current
+	current="$(git -C "$sibling" remote get-url "$remote_name" 2>/dev/null)" ||
+		err "sibling has no '$remote_name' remote — cannot rewrite URL"
+
+	local canonical_re='^git@github\.com:([^/]+)/([^/]+?)(\.git)?$'
+	local aliased_re='^git@github\.com-([^:]+):([^/]+)/([^/]+?)(\.git)?$'
+
+	if [[ "$current" =~ $aliased_re ]]; then
+		local cur_alias="${BASH_REMATCH[1]}"
+		if [ "$cur_alias" = "$alias" ]; then
+			return 0
+		fi
+		err "sibling URL is aliased to '$cur_alias' but expected '$alias' — manual cleanup required: git -C '$sibling' remote set-url $remote_name git@github.com:<owner>/<repo>.git"
+	fi
+
+	if [[ ! "$current" =~ $canonical_re ]]; then
+		err "sibling remote.$remote_name.url='$current' — only canonical 'git@github.com:owner/repo[.git]' SSH URLs supported (HTTPS / non-GitHub remotes are out of scope)"
+	fi
+	return 0
+}
+
 # _rewrite_sibling_remote_url(sibling_path, alias[, remote_name])
 #
 # Rewrite sibling's remote.<name>.url from canonical github SSH form to the
@@ -21,6 +62,9 @@
 # Rejects: HTTPS URLs, non-GitHub hosts, malformed URLs (SR-10).
 # Idempotent: if already aliased to the same alias, returns 0.
 # Errors: if aliased to a DIFFERENT alias (unexpected conflict).
+#
+# Validation is shared with _validate_sibling_remote_url — kept here too so
+# direct callers (tests, future code paths) still get the same guarantees.
 _rewrite_sibling_remote_url() {
 	local sibling="$1"
 	local alias="$2"
