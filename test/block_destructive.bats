@@ -566,3 +566,29 @@ teardown() {
     run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"cd /tmp && rm -rf \"/etc\""}}'
     [ "$status" -eq 2 ]
 }
+
+# ── FIX-31 follow-up: ANSI-C quoting coverage ────────────────────────────────
+# $'...' is bash ANSI-C quoting. The _strip_quotes single-quote sed pass
+# matches the '...' substring even with the $ prefix, so these are caught
+# incidentally. Lock in the coverage so a future change to the sed logic
+# does not silently regress without a test failure.
+
+@test "block_destructive: FIX-31-followup blocks ANSI-C-quoted system path \$'/etc'" {
+    run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf \$'/etc'\"}}"
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31-followup blocks ANSI-C-quoted current-dir dot \$'.'" {
+    run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf \$'.'\"}}"
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31-followup blocks ANSI-C-quoted dotgit \$'.git'" {
+    run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf \$'.git'\"}}"
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31-followup allows ANSI-C-quoted safe path \$'./dist'" {
+    run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf \$'./dist'\"}}"
+    [ "$status" -eq 0 ]
+}

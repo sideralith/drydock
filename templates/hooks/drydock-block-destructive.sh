@@ -91,10 +91,20 @@ IFS=$'\x01' read -ra _segments <<<"$norm"
 #   echo "hello world"  →  echo  hello world      (content intact)
 #   rm -rf '../foo'     →  rm -rf  ../foo
 #
-# Limitations: nested quotes and escaped quote characters (e.g. "\"") are
-# treated as two separate matched pairs by the sed pattern. Under threat
-# model A (INV-7) this is acceptable — accident-class typos do not produce
-# nested or escaped quotes around path tokens.
+# Quote handling coverage:
+# - Nested mixed quoting (e.g. double-quoted block containing single-quoted
+#   inner): the two-pass strip CORRECTLY handles this — the double-quote pass
+#   produces a stripped form; the single-quote pass then catches the inner.
+# - Escaped quote characters (e.g. a backslash-escaped double quote inside a
+#   double-quoted block): treated as two separate matched pairs by the sed
+#   pattern. Acceptable under threat model A (INV-7) — accident-class typos
+#   do not produce backslash-escaped quotes around path tokens.
+# - ANSI-C quoting ($'…' form): handled (incidentally) by the single-quote
+#   pass — the '…' substring matches even with the $ prefix. Coverage is
+#   locked in via FIX-31-followup tests in test/block_destructive.bats.
+# - Mismatched quotes (e.g. quoted opening with no closing): bash rejects the
+#   command at parse time before execution. The hook receives the raw string
+#   but bash never runs it destructively. Acceptable under threat model A.
 _strip_quotes() {
 	local s="$1"
 	s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
