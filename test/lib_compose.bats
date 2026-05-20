@@ -1474,6 +1474,81 @@ _setup_wiring_home() {
 	grep -qF '/host/path/good' "$LINKS_OVERLAY"
 }
 
+# ── T7-RED: generate_links_overlay reads field 3 (flags) ─────────────────────
+
+@test "RW-OVL-1: generate_links_overlay emits :rw for entry with flags=rw" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-rw"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	printf '/host/path/mylib|/workspace-siblings/mylib|rw\n' >"$list_dir/myproject.list"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-rw.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ -f "$LINKS_OVERLAY" ]
+	grep -qF '"/host/path/mylib:/workspace-siblings/mylib:rw"' "$LINKS_OVERLAY"
+}
+
+@test "RW-OVL-2: generate_links_overlay emits :ro for entry with empty flags (backward-compat)" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-ro"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	printf '/host/path/mylib|/workspace-siblings/mylib|\n' >"$list_dir/myproject.list"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-ro.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ -f "$LINKS_OVERLAY" ]
+	grep -qF '"/host/path/mylib:/workspace-siblings/mylib:ro"' "$LINKS_OVERLAY"
+}
+
+@test "RW-OVL-3: generate_links_overlay falls back to :ro for unknown/corrupt flags value" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-corrupt"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	printf '/host/path/mylib|/workspace-siblings/mylib|corrupt-flag\n' >"$list_dir/myproject.list"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-corrupt.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ -f "$LINKS_OVERLAY" ]
+	# Must fall back to :ro for safety — never :corrupt-flag
+	grep -qF '"/host/path/mylib:/workspace-siblings/mylib:ro"' "$LINKS_OVERLAY"
+	run grep -F ':corrupt-flag' "$LINKS_OVERLAY"
+	[ "$status" -ne 0 ]
+}
+
+@test "RW-OVL: mixed RO and RW entries — each emits correct mode" {
+	local fake_home="$BATS_TEST_TMPDIR/glo-home-mixed"
+	mkdir -p "$fake_home"
+	export HOME="$fake_home"
+
+	local list_dir="$fake_home/.config/drydock/links"
+	mkdir -p "$list_dir"
+	printf '/host/path/ro-lib|/workspace-siblings/ro-lib|\n' >"$list_dir/myproject.list"
+	printf '/host/path/rw-lib|/workspace-siblings/rw-lib|rw\n' >>"$list_dir/myproject.list"
+
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-mixed.yml"
+
+	generate_links_overlay "$TEST_PROJECT_DIR"
+
+	[ -f "$LINKS_OVERLAY" ]
+	grep -qF '"/host/path/ro-lib:/workspace-siblings/ro-lib:ro"' "$LINKS_OVERLAY"
+	grep -qF '"/host/path/rw-lib:/workspace-siblings/rw-lib:rw"' "$LINKS_OVERLAY"
+}
+
 # ── T12-RED: compose_files wiring ─────────────────────────────────────────────
 
 @test "compose_files: LINKS_OVERLAY present and non-empty → included after submount, before hardening" {
