@@ -42,12 +42,6 @@ load "helpers/load"
 
 HOOK="$DRYDOCK_HOME/templates/hooks/drydock-block-destructive.sh"
 
-# Helper: emit a synthetic PreToolUse JSON payload for the given command string.
-make_payload() {
-    local cmd="$1"
-    printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$cmd"
-}
-
 setup() {
     # Create a temp release file so the host-safety guard does not early-exit.
     DRYDOCK_RELEASE_FILE="$(mktemp)"
