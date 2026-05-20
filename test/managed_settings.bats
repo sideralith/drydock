@@ -794,3 +794,21 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
         done
     done
 }
+
+# ── JD1-C-RED: Bash deny coverage for keys dir ────────────────────────────────
+
+@test "JD1-C: 00-secrets template contains Bash deny entries for keys dir read commands" {
+    local secrets_file="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
+    [ -f "$secrets_file" ]
+
+    # Each of these Bash commands must be covered by a deny rule targeting
+    # __HOME__/.config/drydock/keys/*. The pattern form matches existing entries:
+    # Bash(<cmd> *__HOME__/.config/drydock/keys/*)
+    for cmd in cat less more head tail od xxd strings; do
+        local pattern="Bash($cmd *__HOME__/.config/drydock/keys/*)"
+        jq -e --arg p "$pattern" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$secrets_file" >/dev/null \
+            || { echo "MISSING deny rule: $pattern"; return 1; }
+    done
+}
