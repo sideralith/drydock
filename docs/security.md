@@ -49,11 +49,19 @@ in the first place. This is defense-in-depth for [INV-1](../CLAUDE.md).
 
 ### Layer 2 — read-only bind mount
 
-Every linked sibling is mounted `:ro`. Even if a sibling's tree happens to
-contain a `.env` file with database credentials or a `.pem` key, the container
-cannot write to it. Writes are blocked at the OS layer by the bind-mount flag —
-not by policy alone — so this protection holds regardless of whether the agent
-attempts an explicit write or a tool that opens a file for writing.
+Every linked sibling is mounted `:ro` by default. Even if a sibling's tree
+happens to contain a `.env` file with database credentials or a `.pem` key, the
+container cannot write to it. Writes are blocked at the OS layer by the
+bind-mount flag — not by policy alone — so this protection holds regardless of
+whether the agent attempts an explicit write or a tool that opens a file for
+writing.
+
+**RW exception.** When a sibling is linked with `drydock link --rw`, it is
+mounted `:rw`. The accident surface changes: the agent CAN write to (and
+delete from) the sibling tree. The credential-directory guard (Layer 1) and the
+deny rules (Layer 3) still apply, but there is no filesystem-layer write block.
+This is the intended tradeoff for enabling `git push` workflows inside the
+container. Only link `:rw` when you need write access to that sibling.
 
 ### Layer 3 — `//**/`-anchored deny rules in `00-secrets.json`
 
@@ -129,6 +137,35 @@ determined adversary is explicitly out of scope.
 
 **If you need stricter isolation:** do not enable the SSH overlay
 (`docker-compose.ssh.yml`). RO-only links mount no key material at all.
+
+### Per-sibling deploy key lifecycle (INV-1 supplement)
+
+`drydock link --rw` generates one ed25519 key pair per sibling basename at
+`~/.config/drydock/keys/<basename>_deploy{,.pub}`. Scope, lifecycle, and INV-1
+alignment:
+
+- **One key per sibling basename.** Keys are scoped by `basename`, not by host
+  path or project. If two different projects link siblings with the same basename
+  (e.g. both link `~/git/shared-lib`), there would be a key-scope collision —
+  drydock prevents this with a cross-project basename scan
+  (`_check_sibling_basename_collision_rw` scans ALL `*.list` files, not just the
+  current project's) and rejects the second link at the point of collision.
+
+- **Key generation is idempotent.** If a key already exists at the expected path,
+  `drydock link --rw` reuses it. Running `link --rw` a second time does not
+  generate a new key or invalidate the GitHub deploy key registration.
+
+- **Key stays on disk after `drydock unlink`.** drydock does NOT delete the key
+  pair on unlink. A deploy key registration on GitHub would become orphaned with
+  no warning if the local file were deleted. Instead, `drydock unlink` prints a
+  dual-sided hint: (1) the local file path to `rm` if you no longer need the key,
+  and (2) the GitHub URL to revoke the deploy key registration. drydock cannot
+  revoke GitHub deploy keys remotely — both steps require a manual decision.
+
+- **INV-1 alignment.** All per-sibling key material stays under
+  `~/.config/drydock/keys/` — the same subtree as the primary project deploy key
+  and GPG signing key. The `__HOME__/.config/drydock/**` deny rule in
+  `00-secrets.json` already covers all per-sibling keys with no extension needed.
 
 ### Upstream enforcement caveat
 
