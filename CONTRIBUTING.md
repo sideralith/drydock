@@ -46,13 +46,17 @@ container too. The container hardening overlay (INV-8) mounts `/tmp` as a
 (`~/.cache/drydock/bats-tmp`) — the `/tmp` hardening is left untouched. It also
 falls back to `npx --yes bats` when no `bats` binary is on `PATH` (the base
 image ships none). Always use `scripts/test.sh` inside the container; plain
-`bats test/` is the host-only invocation.
+`bats test/` is the host-only invocation (equivalent on a normal host, but
+not safe inside drydock where `/tmp` is `noexec`).
 
 ### No submodule step needed
 
 The bats helper libraries (`bats-support` and `bats-assert`) are vendored
-under `test/test_helper/`. After a plain `git clone`, just run `bats test/`
-— no `git submodule update --init` required.
+under `test/test_helper/`. After a plain `git clone`, just run
+`scripts/test.sh` — no `git submodule update --init` required.
+(On a normal host `scripts/test.sh` delegates to `bats test/`; inside a
+drydock container it additionally redirects bats' tmpdir away from the
+`noexec` `/tmp`.)
 
 ## Giving the sandbox GitHub credentials (optional)
 
