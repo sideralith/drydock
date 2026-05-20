@@ -1752,3 +1752,122 @@ _make_git_sibling() {
 	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
 	[ ! -f "$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy" ]
 }
+
+# ── JD1-AB-RED: idempotent check must consider flags field ────────────────────
+
+@test "JD1-AB-1: link RO then link --rw same path → mode-mismatch error, non-zero, unlink hint" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-1"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"already linked as"*"ro"* ]]
+		[[ "$output" == *"drydock unlink"* ]]
+	)
+}
+
+@test "JD1-AB-2: link --rw then link (no flag) same path → mode-mismatch error, non-zero, unlink hint" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-2"
+	_make_git_sibling "$sibling_dir"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+		run cmd_link "$sibling_dir"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"already linked as"*"rw"* ]]
+		[[ "$output" == *"drydock unlink"* ]]
+	)
+}
+
+@test "JD1-AB-3: link --rw then link --rw same path → idempotent success, single .list entry" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-3"
+	_make_git_sibling "$sibling_dir"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Exactly one entry in .list for this canonical path
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	local count
+	count="$(grep -cF "$canonical" "$list_file")"
+	[ "$count" -eq 1 ]
+
+	# SSH config still has alias block
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	local ssh_config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
+	[ -f "$ssh_config" ]
+	grep -q "Host github.com-${sanitized}" "$ssh_config"
+
+	# Key file still present
+	[ -f "$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy" ]
+
+	# URL still aliased
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[[ "$url" == *"github.com-${sanitized}"* ]]
+}
+
+@test "JD1-AB-4: partial-state self-heal — .list entry exists but SSH config absent, re-link --rw completes mutations" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-4"
+	_make_git_sibling "$sibling_dir"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+
+	# Simulate partial state: .list has the RW entry, but no SSH config exists
+	# and URL is still canonical (as if steps 4+5 never ran).
+	mkdir -p "$(dirname "$list_file")"
+	printf '%s|/workspace-siblings/%s|rw\n' "$canonical" "$(basename "$sibling_dir")" >"$list_file"
+	local ssh_config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
+	rm -f "$ssh_config"
+	# URL left at canonical (not aliased)
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# SSH config must now have the alias block
+	[ -f "$ssh_config" ]
+	grep -q "Host github.com-${sanitized}" "$ssh_config"
+
+	# URL must be aliased now
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[[ "$url" == *"github.com-${sanitized}"* ]]
+
+	# Still exactly one entry in .list
+	local count
+	count="$(grep -cF "$canonical" "$list_file")"
+	[ "$count" -eq 1 ]
+}
