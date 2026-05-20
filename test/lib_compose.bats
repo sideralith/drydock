@@ -167,7 +167,7 @@ STUB
 
 # ── optional git-credential overlays (ssh deploy key + sandbox gpg) ──────────
 
-@test "compose_files: no DRYDOCK_SSH_DEPLOY_KEY — ssh overlay absent" {
+@test "compose_files: no DRYDOCK_SSH_CONFIG — ssh overlay absent" {
 	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
 	run compose_files "$TEST_PROJECT_DIR"
 	[[ "$output" != *"docker-compose.ssh.yml"* ]]
