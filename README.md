@@ -14,7 +14,6 @@
 > Currently supports **Claude Code**. Adapters for other agents are on the
 > [roadmap](#roadmap).
 
-<!-- badges placeholder: CI · license · version -->
 
 ## What problem it solves
 
