@@ -67,13 +67,13 @@ setup() {
 @test "drydock init: unknown flag errors" {
   run bash -c '"$1" init --bogus "$2" 2>&1' -- "$DRYDOCK_HOME/bin/drydock" "$TEST_PROJECT_DIR"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"opción desconocida"* ]]
+  [[ "$output" == *"unknown option"* ]]
 }
 
 @test "drydock init: --update flag errors as unknown option" {
   run bash -c '"$1" init --update "$2" 2>&1' -- "$DRYDOCK_HOME/bin/drydock" "$TEST_PROJECT_DIR"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"opción desconocida"* ]]
+  [[ "$output" == *"unknown option"* ]]
 }
 
 # ── stub content assertions (design D4, D5, D6) ──────────────────────────────
