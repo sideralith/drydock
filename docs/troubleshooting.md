@@ -3,7 +3,7 @@
 Common failures and fixes. Run `drydock doctor` first — it shows versions,
 paths, mount detection, and GIDs.
 
-## "Claude configuration file not found at: /home/rai/.claude.json" / settings don't persist
+## "Claude configuration file not found at: ~/.claude.json" / settings don't persist
 
 Claude Code reads config from TWO locations: the `~/.claude/` **directory**
 (skills, plugins, `settings.json`, `CLAUDE.md`, hooks) AND the `~/.claude.json`
@@ -23,7 +23,7 @@ cp -a ~/.claude.json ~/.claude-container.json    # repair the prototype; or: dry
 `drydock setup` auto-creates the prototype. `drydock sync` refreshes it from
 host. The compose file mounts a per-session `~/.claude-container-<disc>.json`
 (seeded from the `~/.claude-container.json` prototype) at
-`/home/rai/.claude.json:rw`.
+`~/.claude.json:rw`.
 
 ## `docker exec` from inside the container fails with permission denied
 
