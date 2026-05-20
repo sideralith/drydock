@@ -673,14 +673,14 @@ cmd_link() {
 	# ~/.dockerfiles, etc. as false positives.
 	# .claude*, .engram*, .config/drydock* keep their wildcards — load-bearing for
 	# per-session directories per INV-2 (e.g. .claude-container-<disc>).
-	if [[ "$canonical/" == "$_real_home/.claude"* ]] \
-		|| [[ "$canonical/" == "$_real_home/.engram"* ]] \
-		|| [[ "$canonical/" == "$_real_home/.config/drydock"* ]] \
-		|| [ "$canonical" = "$_real_home/.ssh" ] || [[ "$canonical/" == "$_real_home/.ssh/"* ]] \
-		|| [ "$canonical" = "$_real_home/.aws" ] || [[ "$canonical/" == "$_real_home/.aws/"* ]] \
-		|| [ "$canonical" = "$_real_home/.gnupg" ] || [[ "$canonical/" == "$_real_home/.gnupg/"* ]] \
-		|| [ "$canonical" = "$_real_home/.kube" ] || [[ "$canonical/" == "$_real_home/.kube/"* ]] \
-		|| [ "$canonical" = "$_real_home/.docker" ] || [[ "$canonical/" == "$_real_home/.docker/"* ]]; then
+	if [[ "$canonical/" == "$_real_home/.claude"* ]] ||
+		[[ "$canonical/" == "$_real_home/.engram"* ]] ||
+		[[ "$canonical/" == "$_real_home/.config/drydock"* ]] ||
+		[ "$canonical" = "$_real_home/.ssh" ] || [[ "$canonical/" == "$_real_home/.ssh/"* ]] ||
+		[ "$canonical" = "$_real_home/.aws" ] || [[ "$canonical/" == "$_real_home/.aws/"* ]] ||
+		[ "$canonical" = "$_real_home/.gnupg" ] || [[ "$canonical/" == "$_real_home/.gnupg/"* ]] ||
+		[ "$canonical" = "$_real_home/.kube" ] || [[ "$canonical/" == "$_real_home/.kube/"* ]] ||
+		[ "$canonical" = "$_real_home/.docker" ] || [[ "$canonical/" == "$_real_home/.docker/"* ]]; then
 		err "rejected: '$canonical' is under a protected path (credentials or drydock state)"
 	fi
 
@@ -756,7 +756,7 @@ cmd_link() {
 		_first_comp="${container_target#/}"
 		_first_comp="${_first_comp%%/*}"
 		case "$_first_comp" in
-		etc|bin|sbin|usr|lib|lib32|lib64|boot|root|opt|proc|sys|dev|run|var|tmp)
+		etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
 			err "rejected: container target '$container_target' is under a system directory (/$_first_comp)"
 			;;
 		esac
@@ -833,12 +833,12 @@ cmd_link() {
 			if [ -n "$existing_target_norm" ] && [ "$existing_target_norm" = "$container_target" ]; then
 				err "container target collision: '$container_target' is already used by '$existing_host'"
 			fi
-		done < "$list_file"
+		done <"$list_file"
 	fi
 
 	# Append entry (create dir+file if absent)
 	mkdir -p "$(dirname "$list_file")"
-	printf '%s|%s|\n' "$canonical" "$container_target" >> "$list_file"
+	printf '%s|%s|\n' "$canonical" "$container_target" >>"$list_file"
 	ok "linked: $canonical → $container_target (ro)"
 }
 
@@ -883,7 +883,7 @@ cmd_unlink() {
 	# R4-FIX-6: wrap awk in an explicit error path. set -euo pipefail aborts on
 	# awk failure (rare under resource pressure) leaving tmp_file on disk.
 	# Mirror the mv-failure pattern: rm the tmp and call err.
-	if ! awk -F'|' -v c="$canonical" '$1!=c' "$list_file" > "$tmp_file"; then
+	if ! awk -F'|' -v c="$canonical" '$1!=c' "$list_file" >"$tmp_file"; then
 		rm -f "$tmp_file"
 		err "awk failed while rewriting link list"
 	fi
@@ -909,5 +909,5 @@ cmd_links() {
 	while IFS='|' read -r host target _; do
 		[ -z "$host" ] && continue
 		printf '%s -> %s\n' "$host" "$target"
-	done < "$list_file"
+	done <"$list_file"
 }

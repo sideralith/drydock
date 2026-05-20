@@ -257,7 +257,7 @@ generate_links_overlay() {
 		# one line per entry, no blank lines between.
 		body+=$(printf '      - "%s:%s:ro"\n' "$host" "$target")
 		body+=$'\n'
-	done < "$list_file"
+	done <"$list_file"
 
 	[ -n "$body" ] || return 0
 
@@ -266,7 +266,7 @@ generate_links_overlay() {
 		printf '  drydock:\n'
 		printf '    volumes:\n'
 		printf '%s' "$body"
-	} > "$LINKS_OVERLAY"
+	} >"$LINKS_OVERLAY"
 }
 
 # Print one compose -f arg per line, in order. Caller assembles into array.
