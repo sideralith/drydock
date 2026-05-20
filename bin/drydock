@@ -99,8 +99,8 @@ main() {
 	links) cmd_links "$@" ;;
 	version | --version | -v) echo "drydock $DRYDOCK_VERSION" ;;
 	help | --help | -h) usage ;;
-	onboard) err "renombrado: usá 'drydock init' (semántica git-style per-project)" ;;
-	*) err "comando desconocido: $cmd — corré: drydock help" ;;
+	onboard) err "renamed: use 'drydock init' (git-style per-project semantics)" ;;
+	*) err "unknown command: $cmd — run: drydock help" ;;
 	esac
 }
 

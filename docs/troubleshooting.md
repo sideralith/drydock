@@ -3,7 +3,7 @@
 Common failures and fixes. Run `drydock doctor` first — it shows versions,
 paths, mount detection, and GIDs.
 
-## "Claude configuration file not found at: /home/rai/.claude.json" / settings don't persist
+## "Claude configuration file not found at: ~/.claude.json" / settings don't persist
 
 Claude Code reads config from TWO locations: the `~/.claude/` **directory**
 (skills, plugins, `settings.json`, `CLAUDE.md`, hooks) AND the `~/.claude.json`
@@ -23,7 +23,7 @@ cp -a ~/.claude.json ~/.claude-container.json    # repair the prototype; or: dry
 `drydock setup` auto-creates the prototype. `drydock sync` refreshes it from
 host. The compose file mounts a per-session `~/.claude-container-<disc>.json`
 (seeded from the `~/.claude-container.json` prototype) at
-`/home/rai/.claude.json:rw`.
+`~/.claude.json:rw`.
 
 ## `docker exec` from inside the container fails with permission denied
 
@@ -392,7 +392,7 @@ standard link flow. The table below covers error classes specific to RW mode.
 |---|---|---|
 | **Deploy key missing** | A previously generated key was deleted from `~/.config/drydock/keys/` and the sibling was already unlinked | Re-run `drydock link --rw <path>`. A new ed25519 key pair is generated; you will need to add the new public key as a deploy key on GitHub for that repo. |
 | **Basename collision (cross-project)** | `drydock link --rw` exits with "basename '<name>' is already used as an RW sibling in project '<other>'" | Two projects are trying to link siblings with the same basename (e.g. both link `~/git/shared-lib`). Deploy keys are scoped by basename; sharing would create a key conflict. Use an explicit `<container-target>` with a unique basename for one of them, e.g. `drydock link --rw ~/git/shared-lib /workspace-siblings/shared-lib-projectB`. |
-| **Non-canonical remote URL** | `drydock link --rw` exits with "remote.origin.url is not a github.com HTTPS or SSH remote" | drydock rewrites the sibling's `remote.origin.url` to route through its managed SSH alias. It only supports `github.com` remotes (SSH: `git@github.com:…`, HTTPS: `https://github.com/…`). Other remotes (GitLab, Bitbucket, self-hosted) are not supported by the URL-rewrite step. Use RO mode (`drydock link` without `--rw`) for non-GitHub siblings. |
+| **Non-canonical remote URL** | `drydock link --rw` exits with "only canonical 'git@github.com:owner/repo[.git]' SSH URLs supported (HTTPS / non-GitHub remotes are out of scope)" | drydock rewrites the sibling's `remote.origin.url` to route through its managed SSH alias. Only `git@github.com:owner/repo[.git]` SSH URLs are supported. HTTPS remotes (`https://github.com/…`) and non-GitHub hosts (GitLab, Bitbucket, self-hosted) are explicitly rejected. Use RO mode (`drydock link` without `--rw`) for siblings with unsupported remote URLs. |
 | **Already linked as a different mode** | `drydock link --rw <path>` on a path already in the list with `flags=` (RO) | Remove the existing entry first: `drydock unlink <path>`, then re-link with `--rw`. Upgrading from RO to RW in-place is not supported. |
 | **Partial-state self-heal** | Previous `drydock link --rw` was interrupted after key generation but before the list file was updated (or vice versa) | Re-run `drydock link --rw <path>`. The key generation step is idempotent (existing key is reused); the list-write and URL-rewrite steps will complete. |
 

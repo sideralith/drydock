@@ -544,7 +544,7 @@ export_compose_env() {
 			export DRYDOCK_GPG_SIGNING_HOME="$_signing_home"
 			export DRYDOCK_GPG_SIGNINGKEY="$_fpr"
 		else
-			warn "$_signing_home existe pero no contiene clave secreta — firma GPG no activada"
+			warn "$_signing_home exists but contains no secret key — GPG signing not enabled"
 		fi
 	fi
 
@@ -717,9 +717,9 @@ image_exists() {
 }
 
 ensure_prereqs() {
-	command -v docker >/dev/null || err "docker no está en PATH"
-	[ -S /var/run/docker.sock ] || err "docker socket no encontrado en /var/run/docker.sock"
-	[ -f "$COMPOSE_BASE" ] || err "compose base no encontrado: $COMPOSE_BASE"
+	command -v docker >/dev/null || err "docker not on PATH"
+	[ -S /var/run/docker.sock ] || err "docker socket not found at /var/run/docker.sock"
+	[ -f "$COMPOSE_BASE" ] || err "compose base not found: $COMPOSE_BASE"
 }
 
 ensure_runtime_dirs() {
@@ -741,7 +741,7 @@ ensure_runtime_dirs() {
 		[ ! -d "$CONTAINER_ENGRAM" ] && _needs_setup=1
 	fi
 	if [ "$_needs_setup" -eq 1 ]; then
-		note "runtime state faltante — ejecutando 'drydock setup' automáticamente"
+		note "runtime state missing — running 'drydock setup' automatically"
 		cmd_setup
 	fi
 }

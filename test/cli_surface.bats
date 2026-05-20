@@ -13,22 +13,22 @@ drydock() {
   run bash -c '"$1" "$@"' -- "$DRYDOCK_HOME/bin/drydock" "$@" 2>&1
 }
 
-@test "drydock version exits 0 and prints exactly 'drydock 0.1.2' (v0.1.2)" {
+@test "drydock version exits 0 and prints exactly 'drydock 0.2.0' (v0.2.0)" {
   run "$DRYDOCK_HOME/bin/drydock" version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.1.2" ]
+  [ "$output" = "drydock 0.2.0" ]
 }
 
 @test "drydock --version exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" --version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.1.2" ]
+  [ "$output" = "drydock 0.2.0" ]
 }
 
 @test "drydock -v exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" -v
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.1.2" ]
+  [ "$output" = "drydock 0.2.0" ]
 }
 
 @test "drydock help exits 0 and contains command list" {
@@ -57,9 +57,9 @@ drydock() {
   [ "$status" -ne 0 ]
 }
 
-@test "drydock unknown command output contains 'comando desconocido'" {
+@test "drydock unknown command output contains 'unknown command'" {
   run bash -c '"$1" thisisnotacommand 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
-  [[ "$output" == *"comando desconocido"* ]]
+  [[ "$output" == *"unknown command"* ]]
 }
 
 @test "drydock onboard exits non-zero" {

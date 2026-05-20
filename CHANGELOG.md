@@ -5,6 +5,53 @@ All notable changes to drydock are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-20
+
+Managed-settings layer, concurrent-session isolation, destructive-command guardrails,
+auto-sync, RW sibling mode, and several hardening + polish rollups.
+
+### Added
+- **self-awareness** (#8): image bakes a `drydock-release` marker file and a
+  `SessionStart` hook that notifies the agent it is running inside a drydock container.
+- **install-interactive** (#14): `install.sh` now detects a live TTY and presents
+  interactive prompts for engram-shared mode and GPG commit-signing toggles; non-TTY
+  installs remain fully unattended.
+- **auto-sync** (#15): `drydock run` and `drydock shell` automatically sync
+  `~/.claude/` into the container-specific state directory at launch, removing the
+  need to run `drydock setup` after each host-side config change.
+- **managed-settings layer**: policy drop-ins (`deny` rules + `SessionStart` hook
+  entry) are now baked into the image under `/etc/claude-code/managed-settings.d/`
+  and owned by root — tamper-proof, not overridable from project settings (INV-3).
+- **destructive-command guardrails** (#30): two-tier defense — declarative
+  `Bash(...)` deny patterns for the highest-risk commands (A1 class) plus a
+  `PreToolUse` hook (`drydock-block-destructive.sh`) for residue rules that need
+  context-aware matching (C1-residue, C12, C17, C18, C20).
+- **concurrent-sessions** (#9): each `drydock run`/`drydock shell` invocation
+  generates a 4-character hex discriminator and mounts its own
+  `~/.claude-container-<disc>/` directory and `~/.claude-container-<disc>.json`,
+  preventing `~/.claude.json` last-writer-wins clobber and OAuth-token refresh
+  races across concurrent same-project sessions (INV-2).
+- **link-sibling-projects** (#13): `drydock link`, `drydock unlink`, and
+  `drydock links` commands for read-only cross-project sibling mounts; INV-1 deny
+  rule rewritten to `//**/`-anchored patterns.
+- **rw-sibling-mode** (#47): `drydock link --rw` provisions per-sibling deploy
+  keys, writes managed SSH `Host` aliases, and rewrites `remote.origin.url` so the
+  agent can push to sibling repositories without touching host SSH identity (INV-1).
+
+### Changed
+- Agent policy (deny rules + hook entry) moved from per-project `settings.json` to
+  image-layer managed-settings drop-ins; the per-project file no longer carries
+  policy (INV-3 hardening).
+- `export_compose_env()` generates and exports per-session discriminator paths
+  (`DRYDOCK_SESSION_CLAUDE_DIR`, `DRYDOCK_SESSION_CLAUDE_JSON`) for every
+  invocation.
+
+### Fixed
+- Quoted-target bypass in `drydock-block-destructive.sh` (#31): hook now strips
+  surrounding quotes before pattern-matching the tool target path.
+- `GITHUB_PERSONAL_ACCESS_TOKEN` passthrough documented in `docs/security.md` (#22).
+- Several judgment-day follow-up polish items (#51 #52 #53 #54).
+
 ## [0.1.2] - 2026-05-16
 
 Project name sanitization, running-container diagnostic, and constitution correction.
@@ -118,5 +165,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.2.0]: https://github.com/sideralith/drydock/releases/tag/v0.2.0
+[0.1.2]: https://github.com/sideralith/drydock/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sideralith/drydock/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sideralith/drydock/releases/tag/v0.1.0

@@ -79,13 +79,13 @@ cmd_setup() {
 			if [ ! -d "$CONTAINER_ENGRAM" ]; then
 				if [ -d "$HOST_ENGRAM" ]; then
 					cp -a "$HOST_ENGRAM" "$CONTAINER_ENGRAM"
-					ok "$CONTAINER_ENGRAM inicializado como copia de $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+					ok "$CONTAINER_ENGRAM initialized as copy of $HOST_ENGRAM ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
 				else
 					mkdir -p "$CONTAINER_ENGRAM"
-					ok "$CONTAINER_ENGRAM creado vacío (no había $HOST_ENGRAM para copiar)"
+					ok "$CONTAINER_ENGRAM created empty ($HOST_ENGRAM did not exist to copy from)"
 				fi
 			else
-				ok "$CONTAINER_ENGRAM ya existe ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+				ok "$CONTAINER_ENGRAM already exists ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
 			fi
 		fi
 	else
@@ -97,7 +97,7 @@ cmd_setup() {
 	fi
 
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
-		note "Copiando $HOST_CLAUDE → $CONTAINER_CLAUDE (excluyendo session state)..."
+		note "Copying $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)..."
 		cp -a "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
 		# Purge immediately — closes the credential window between cp -a and the
 		# deferred unconditional purge below (which covers the upgrade path).
@@ -107,9 +107,9 @@ cmd_setup() {
 		done
 		rm -f "$CONTAINER_CLAUDE/.last-cleanup" "$CONTAINER_CLAUDE/scheduled_tasks.lock"
 		mkdir -p "$CONTAINER_CLAUDE"/{sessions,projects,file-history,shell-snapshots,cache,backups,telemetry,plans,tasks,paste-cache}
-		ok "$CONTAINER_CLAUDE inicializado ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
+		ok "$CONTAINER_CLAUDE initialized ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	else
-		ok "$CONTAINER_CLAUDE ya existe ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
+		ok "$CONTAINER_CLAUDE already exists ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	fi
 	# Purge any stale OAuth token unconditionally — covers both the fresh-init
 	# and the upgrade (already-exists) path.  Uses the fail-safe ${VAR:?} form
@@ -131,13 +131,13 @@ cmd_setup() {
 				jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
 					"$HOST_CLAUDE_JSON" >"$CONTAINER_CLAUDE_JSON"
 			fi
-			ok "$CONTAINER_CLAUDE_JSON inicializado como copia de $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
+			ok "$CONTAINER_CLAUDE_JSON initialized as copy of $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 		else
 			echo '{}' >"$CONTAINER_CLAUDE_JSON"
-			ok "$CONTAINER_CLAUDE_JSON creado mínimo (no había $HOST_CLAUDE_JSON para copiar)"
+			ok "$CONTAINER_CLAUDE_JSON created minimal ($HOST_CLAUDE_JSON did not exist to copy from)"
 		fi
 	else
-		ok "$CONTAINER_CLAUDE_JSON ya existe ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
+		ok "$CONTAINER_CLAUDE_JSON already exists ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 	fi
 
 	# MCP filter belt-and-suspenders: remove mcp/engram.json from the container
@@ -162,7 +162,7 @@ cmd_init() {
 	local project_dir_arg=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		-*) err "drydock init: opción desconocida: $1" ;;
+		-*) err "drydock init: unknown option: $1" ;;
 		*) project_dir_arg="$1" ;;
 		esac
 		shift
@@ -177,17 +177,17 @@ cmd_init() {
 
 	if [ ! -f "$settings" ]; then
 		cp "$DEFAULT_SETTINGS_TEMPLATE" "$settings"
-		ok "$settings creado"
+		ok "$settings created"
 	else
-		warn "$settings ya existe — no lo sobrescribo"
-		note "Template baseline en: $DEFAULT_SETTINGS_TEMPLATE"
+		warn "$settings already exists — not overwriting"
+		note "Template baseline at: $DEFAULT_SETTINGS_TEMPLATE"
 	fi
 
 	if [ -f "$project_dir/.gitignore" ] && ! grep -q '\.claude/settings\.local\.json' "$project_dir/.gitignore"; then
-		note "Tip: agregar '.claude/settings.local.json' a .gitignore (settings personales no compartidas)"
+		note "Tip: add '.claude/settings.local.json' to .gitignore (personal, unshared settings)"
 	fi
 
-	ok "Done. Lanzá Claude con: cd $project_dir && drydock"
+	ok "Done. Launch Claude with: cd $project_dir && drydock"
 }
 
 cmd_build() {
@@ -208,7 +208,7 @@ cmd_build() {
 cmd_sync() {
 	ensure_prereqs
 	ensure_image
-	note "Sync $HOST_CLAUDE → $CONTAINER_CLAUDE (excluyendo session state)"
+	note "Sync $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)"
 	# MCP filter: when engram is not usable in the container, exclude
 	# mcp/engram.json from the rsync so the container config doesn't reference
 	# a non-functional binary.

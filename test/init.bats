@@ -58,22 +58,22 @@ setup() {
   # First run.
   "$DRYDOCK_HOME/bin/drydock" init "$TEST_PROJECT_DIR"
 
-  # Second run must emit a warn message.
+  # Second run must emit a warn message naming the existing settings file.
   run bash -c '"$1" init "$2" 2>&1' -- "$DRYDOCK_HOME/bin/drydock" "$TEST_PROJECT_DIR"
-  [[ "$output" == *"warn"* ]] || [[ "$output" == *"ya existe"* ]]
+  [[ "$output" == *"already exists"* ]]
 }
 
 
 @test "drydock init: unknown flag errors" {
   run bash -c '"$1" init --bogus "$2" 2>&1' -- "$DRYDOCK_HOME/bin/drydock" "$TEST_PROJECT_DIR"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"opción desconocida"* ]]
+  [[ "$output" == *"unknown option"* ]]
 }
 
 @test "drydock init: --update flag errors as unknown option" {
   run bash -c '"$1" init --update "$2" 2>&1' -- "$DRYDOCK_HOME/bin/drydock" "$TEST_PROJECT_DIR"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"opción desconocida"* ]]
+  [[ "$output" == *"unknown option"* ]]
 }
 
 # ── stub content assertions (design D4, D5, D6) ──────────────────────────────
