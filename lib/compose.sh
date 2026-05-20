@@ -246,16 +246,24 @@ generate_links_overlay() {
 	[ -f "$list_file" ] || return 0
 
 	local body=""
-	local host target
-	while IFS='|' read -r host target _; do
+	local host target _flags _mode
+	while IFS='|' read -r host target _flags; do
 		[ -z "$host" ] && continue
 		# FIX #8: skip malformed lines with an empty target field to prevent
 		# a broken "host::ro" volume spec from entering the compose overlay.
 		[ -z "$target" ] && continue
+		# Read mount mode from field 3: only "rw" produces :rw; everything
+		# else (empty, unknown, corrupt) falls back to :ro for safety (SR-8,
+		# RW-OVL-3).
+		if [ "${_flags:-}" = "rw" ]; then
+			_mode="rw"
+		else
+			_mode="ro"
+		fi
 		# Idiom (see generate_submount_overlay for the full rationale): $() strips
 		# printf's trailing newline; body+=$'\n' restores exactly one — net is
 		# one line per entry, no blank lines between.
-		body+=$(printf '      - "%s:%s:ro"\n' "$host" "$target")
+		body+=$(printf '      - "%s:%s:%s"\n' "$host" "$target" "$_mode")
 		body+=$'\n'
 	done <"$list_file"
 
@@ -267,6 +275,115 @@ generate_links_overlay() {
 		printf '    volumes:\n'
 		printf '%s' "$body"
 	} >"$LINKS_OVERLAY"
+}
+
+# _regenerate_managed_ssh_config(primary_project, list_file) → config_path
+#
+# Full regeneration of the managed SSH config from the .list file. Idempotent
+# (byte-identical for identical inputs). Insertion order from .list preserved
+# (NO sort) so D11 byte-equality holds across re-links of the same sibling set.
+# Atomic mv + chmod 600 (ssh refuses group-readable configs).
+#
+# Config layout: specific (alias) blocks FIRST, fallback general block LAST.
+# Returns the config path on stdout.
+_regenerate_managed_ssh_config() {
+	local primary="$1"
+	local list_file="$2"
+	local config_path
+	config_path="$(_managed_ssh_config_path "$primary")"
+	mkdir -p "$(dirname "$config_path")"
+
+	local tmp
+	tmp="$(mktemp "${config_path}.XXXXXX")" || err "mktemp failed for managed ssh config"
+
+	{
+		printf '# drydock-managed — regenerated on link/unlink. Do not edit.\n'
+		printf '# Source of truth: %s\n\n' "$list_file"
+
+		# Specific (alias) blocks FIRST, fallback general block LAST.
+		# OpenSSH first-match-wins per option; with literal patterns,
+		# ordering does not change semantics, but "specific before general"
+		# is the conventional layout.
+		if [ -f "$list_file" ]; then
+			local _host _target _flags _name _key
+			while IFS='|' read -r _host _target _flags; do
+				[ -z "$_host" ] && continue
+				[ "${_flags:-}" = "rw" ] || continue
+				# Sibling without .git/ — skip (D10).
+				[ -d "${_host}/.git" ] || continue
+				_name="$(sanitize_project_name "$(basename "$_host")")"
+				_key="$(_sibling_deploy_key_path "$_name")"
+				# Defensive: if the key vanished skip; primary push won't break.
+				[ -f "$_key" ] || continue
+				printf 'Host github.com-%s\n' "$_name"
+				printf '  HostName github.com\n'
+				printf '  User git\n'
+				printf '  IdentityFile %s\n' "$_key"
+				printf '  IdentitiesOnly yes\n\n'
+			done <"$list_file"
+		fi
+
+		# Fallback for the primary's canonical URL (D12-b).
+		local _primary_key="$HOME/.config/drydock/keys/${primary}_deploy"
+		if [ -f "$_primary_key" ]; then
+			printf 'Host github.com\n'
+			printf '  User git\n'
+			printf '  IdentityFile %s\n' "$_primary_key"
+			printf '  IdentitiesOnly yes\n'
+		fi
+	} >"$tmp" || {
+		rm -f "$tmp"
+		err "failed to write managed ssh config"
+	}
+
+	# ssh REFUSES configs with group/world-readable bits (Bad owner or
+	# permissions). Chmod BEFORE rename so the visible file is always 600.
+	if ! chmod 600 "$tmp"; then
+		rm -f "$tmp"
+		err "chmod 600 failed on managed ssh config"
+	fi
+	if ! mv -f "$tmp" "$config_path"; then
+		rm -f "$tmp"
+		err "atomic mv failed for managed ssh config"
+	fi
+
+	printf '%s' "$config_path"
+}
+
+# _maybe_export_ssh_config(primary_project)
+#
+# Checks if either the primary deploy key OR any RW entry in .list exists.
+# If so, regenerates the managed SSH config and exports DRYDOCK_SSH_CONFIG.
+# Called from export_compose_env after the existing deploy-key block.
+_maybe_export_ssh_config() {
+	local primary="$1"
+	local list_file="$HOME/.config/drydock/links/${primary}.list"
+	local primary_key="$HOME/.config/drydock/keys/${primary}_deploy"
+
+	local should_activate=0
+
+	# Trigger 1: primary key exists
+	if [ -f "$primary_key" ]; then
+		should_activate=1
+	fi
+
+	# Trigger 2: any RW entry in .list
+	if [ "$should_activate" -eq 0 ] && [ -f "$list_file" ]; then
+		local _h _t _f
+		while IFS='|' read -r _h _t _f; do
+			[ -z "$_h" ] && continue
+			if [ "${_f:-}" = "rw" ]; then
+				should_activate=1
+				break
+			fi
+		done <"$list_file"
+	fi
+
+	[ "$should_activate" -eq 1 ] || return 0
+
+	local config_path
+	config_path="$(_regenerate_managed_ssh_config "$primary" "$list_file")"
+	export DRYDOCK_SSH_CONFIG="$config_path"
 }
 
 # Print one compose -f arg per line, in order. Caller assembles into array.
@@ -291,7 +408,9 @@ compose_files() {
 	fi
 	# Optional, host opt-in — these vars are set by export_compose_env (called
 	# before this fn) so the -f list and the overlay YAMLs share one decision.
-	if [ -n "${DRYDOCK_SSH_DEPLOY_KEY:-}" ]; then
+	# Gate on DRYDOCK_SSH_CONFIG (set by _maybe_export_ssh_config) which activates
+	# when EITHER the primary deploy key OR any RW sibling exists (SR-9, SR-11).
+	if [ -n "${DRYDOCK_SSH_CONFIG:-}" ]; then
 		printf '%s\n' "-f" "$COMPOSE_SSH"
 	fi
 	if [ -n "${DRYDOCK_GPG_SIGNINGKEY:-}" ]; then
@@ -411,6 +530,10 @@ export_compose_env() {
 	if [ -f "$_deploy_key" ]; then
 		export DRYDOCK_SSH_DEPLOY_KEY="$_deploy_key"
 	fi
+	# Managed SSH config: regenerated when primary key OR any RW sibling exists.
+	# Exports DRYDOCK_SSH_CONFIG (used by compose_files to activate the SSH overlay
+	# and by docker-compose.ssh.yml for the GIT_SSH_COMMAND -F flag).
+	_maybe_export_ssh_config "$PROJECT_NAME"
 	# Sandbox GPG signing key: ~/.config/drydock/signing/ → GitHub-Verified commits
 	# (consumed by docker-compose.gpg.yml: bind-mount rw + GNUPGHOME + GIT_CONFIG_*).
 	local _signing_home="$HOME/.config/drydock/signing"

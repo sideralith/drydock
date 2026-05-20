@@ -103,6 +103,33 @@ support in v0.2.0 (see [INV-2](../CLAUDE.md)). Without the `*` glob, per-session
 credential files (`.claude-container-<disc>/.credentials.json`) would be
 uncovered — a gap identified and closed in the v0.2.0 re-verify.
 
+### RW links and the keys directory — expanded surface
+
+When `drydock link --rw` is used, drydock mounts the **entire**
+`~/.config/drydock/keys/` directory `:ro` into the container. This is necessary
+so the managed SSH config can reference any sibling deploy key by absolute path.
+Previously (RO-only links) only the primary project's deploy key was mounted.
+
+**Surface expansion.** The blast radius of an accidental Bash read command goes
+from one key file to all deploy keys under `~/.config/drydock/keys/`. A
+command like `cat ~/.config/drydock/keys/*_deploy` to debug something would
+expose every sibling's private key in one shot.
+
+**Defense-in-depth.** `00-secrets.json` (image-baked, root-owned) now includes
+`Bash(...)` deny patterns covering the most common read commands (`cat`, `less`,
+`more`, `head`, `tail`, `od`, `xxd`, `strings`, `bat`, `rg`) targeting that
+path. `bat` and `rg` are explicitly covered because drydock's global agent
+convention prefers `bat`/`rg` over `cat`/`grep`; failing to deny them would
+leave a normal-tool-usage hole (`rg . <key-file>` dumps content just as
+effectively as `cat`).
+Under Threat Model A (accidents — INV-7) this is sufficient: the deny rules
+block inadvertent tool invocations. They do NOT block every conceivable
+reading mechanism (`python`, `dd`, `awk`, `perl`, custom scripts, etc.) — a
+determined adversary is explicitly out of scope.
+
+**If you need stricter isolation:** do not enable the SSH overlay
+(`docker-compose.ssh.yml`). RO-only links mount no key material at all.
+
 ### Upstream enforcement caveat
 
 drydock ships the deny rules; **Claude Code is the enforcer**. If an agent

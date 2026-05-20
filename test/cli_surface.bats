@@ -92,10 +92,12 @@ drydock() {
   [[ "$output" == *"links"* ]]
 }
 
-@test "drydock link --rw exits non-zero and mentions 'not yet implemented'" {
+@test "drydock link --rw exits non-zero for non-existent path (SP-1: --rw implemented)" {
+  # SP-1 supersedes SP-3: --rw is now implemented; it should fail on a
+  # non-existent path (realpath fails), not with 'not yet implemented'.
   run bash -c '"$1" link --rw /tmp/no-such-path 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not yet implemented"* ]]
+  [[ "$output" != *"not yet implemented"* ]]
 }
 
 @test "drydock links exits 0 without running container (SP-12)" {

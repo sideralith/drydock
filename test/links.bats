@@ -22,6 +22,7 @@ _links_setup() {
 	source "$DRYDOCK_HOME/lib/common.sh"
 	source "$DRYDOCK_HOME/lib/paths.sh"
 	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/sibling_ssh.sh"
 	source "$DRYDOCK_HOME/lib/commands.sh"
 }
 
@@ -102,23 +103,19 @@ _links_setup() {
 
 # ── T4-RED: cmd_link rejection guards ────────────────────────────────────────
 
-@test "cmd_link: SP-3 --rw exits non-zero, stderr contains 'not yet implemented'" {
+@test "cmd_link: SP-1 (supersedes SP-3) --rw executes without 'not yet implemented' error" {
 	_links_setup
 
-	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-sp1"
 	mkdir -p "$sibling_dir"
-
-	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	# Plain directory (no .git) — exercises the no-.git/ RW path
 
 	(
 		cd "$PROJECT_DIR"
 		run cmd_link --rw "$sibling_dir"
-		[ "$status" -ne 0 ]
-		[[ "$output" == *"not yet implemented"* ]]
+		[ "$status" -eq 0 ]
+		[[ "$output" != *"not yet implemented"* ]]
 	)
-
-	# List MUST NOT have been mutated
-	[ ! -f "$list_file" ] || ! grep -qF "$sibling_dir" "$list_file"
 }
 
 @test "cmd_link: SP-6 rejects \$HOME exactly" {
@@ -1321,3 +1318,556 @@ _links_setup() {
 
 # ── R4-FIX-7: R3-FIX-6 test validates the correct invariant ─────────────────
 # (Test-only fix; no new test added here — the existing test is rewritten below.)
+
+# ── WU6: T12-RED — SP-3-NEW: cmd_link --rw wire-up ───────────────────────────
+
+# Helper: set up a fake git repo as a sibling with a canonical remote
+_make_git_sibling() {
+	local dir="$1"
+	local url="${2:-git@github.com:owner/myrepo.git}"
+	mkdir -p "$dir"
+	git -C "$dir" init -b main >/dev/null 2>&1
+	git -C "$dir" remote add origin "$url"
+}
+
+@test "SP-3-NEW: cmd_link --rw <git-repo> exits 0 and .list entry has flags=rw" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/rw-sibling"
+	_make_git_sibling "$sibling_dir"
+
+	# Create a primary key for managed SSH config generation
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+		# No "not yet implemented" message
+		[[ "$output" != *"not yet implemented"* ]]
+	)
+
+	[ -f "$list_file" ]
+	# .list entry must have flags=rw (field 3)
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	grep -qF "${canonical}|" "$list_file"
+	local flags
+	flags="$(awk -F'|' -v c="$canonical" '$1==c{print $3}' "$list_file")"
+	[ "$flags" = "rw" ]
+}
+
+@test "OQ-A-1: cmd_link --rw creates deploy key (0600) and pubkey (0644)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/rw-key-sibling"
+	_make_git_sibling "$sibling_dir"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	local key_path="$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy"
+	[ -f "$key_path" ]
+	[ -f "${key_path}.pub" ]
+	[ "$(stat -c '%a' "$key_path")" = "600" ]
+	[ "$(stat -c '%a' "${key_path}.pub")" = "644" ]
+}
+
+@test "OQ-A-2: cmd_link --rw generates managed SSH config with both alias and fallback blocks; chmod 600" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/rw-cfg-sibling"
+	_make_git_sibling "$sibling_dir"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+	chmod 600 "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	local config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
+	[ -f "$config" ]
+
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	grep -q "Host github.com-${sanitized}" "$config"
+	grep -q "Host github.com$" "$config"
+	[ "$(stat -c '%a' "$config")" = "600" ]
+}
+
+@test "OQ-A-3: cmd_link --rw rewrites sibling remote.origin.url to alias form" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/rw-url-sibling"
+	_make_git_sibling "$sibling_dir" "git@github.com:owner/repo.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$url" = "git@github.com-${sanitized}:owner/repo.git" ]
+}
+
+@test "D10: cmd_link --rw <plain-dir> (no .git/) mounts RW, skips key-gen + URL rewrite" {
+	_links_setup
+
+	local plain_dir="$BATS_TEST_TMPDIR/plain-dir"
+	mkdir -p "$plain_dir"
+	# No .git/ subdirectory
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$plain_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Must have rw entry
+	local canonical
+	canonical="$(realpath "$plain_dir")"
+	local flags
+	flags="$(awk -F'|' -v c="$canonical" '$1==c{print $3}' "$list_file")"
+	[ "$flags" = "rw" ]
+
+	# No key should be created
+	local sanitized
+	sanitized="$(basename "$plain_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	local key_path="$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy"
+	[ ! -f "$key_path" ]
+}
+
+@test "D11: re-running cmd_link --rw on same path is idempotent — key unchanged, URL no-op" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/rw-idempotent"
+	_make_git_sibling "$sibling_dir" "git@github.com:owner/repo.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	local key_path="$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	local mtime1
+	mtime1="$(stat -c '%Y' "$key_path" 2>/dev/null || echo 0)"
+	sleep 1
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	local mtime2
+	mtime2="$(stat -c '%Y' "$key_path" 2>/dev/null || echo 0)"
+	[ "$mtime1" = "$mtime2" ]
+
+	# URL must still be the aliased form
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$url" = "git@github.com-${sanitized}:owner/repo.git" ]
+}
+
+@test "D5: cmd_link --rw with same sanitized basename from different path — rejected" {
+	_links_setup
+
+	# First: link /tmp/.../sibling-a
+	local sibling_a="$BATS_TEST_TMPDIR/my-lib"
+	_make_git_sibling "$sibling_a" "git@github.com:owner/my-lib.git"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_a"
+	)
+
+	# Second: try to link a DIFFERENT path with the same basename
+	local sibling_b="$BATS_TEST_TMPDIR/other-loc/my-lib"
+	_make_git_sibling "$sibling_b" "git@github.com:owner2/my-lib.git"
+
+	local canonical_a
+	canonical_a="$(realpath "$sibling_a")"
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	local entry_count_before
+	entry_count_before="$(wc -l <"$list_file" || echo 0)"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$sibling_b"
+		[ "$status" -ne 0 ]
+	)
+
+	# .list must be unchanged (only the first sibling)
+	local entry_count_after
+	entry_count_after="$(wc -l <"$list_file" || echo 0)"
+	[ "$entry_count_before" = "$entry_count_after" ]
+}
+
+@test "PRIMARY-URL-INTACT: after link --rw <sibling>, primary repo URL is unchanged" {
+	_links_setup
+
+	# Set up primary as a git repo
+	git -C "$PROJECT_DIR" init -b main >/dev/null 2>&1
+	git -C "$PROJECT_DIR" remote add origin "git@github.com:owner/primary.git"
+
+	local sibling_dir="$BATS_TEST_TMPDIR/rw-primary-intact"
+	_make_git_sibling "$sibling_dir" "git@github.com:owner/sibling.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	# Primary URL must be unchanged
+	local primary_url
+	primary_url="$(git -C "$PROJECT_DIR" remote get-url origin)"
+	[ "$primary_url" = "git@github.com:owner/primary.git" ]
+}
+
+@test "SR-10: cmd_link --rw rejects HTTPS remote — non-zero exit, no key created" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/https-sibling"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "https://github.com/owner/repo.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -ne 0 ]
+	)
+
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	[ ! -f "$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy" ]
+}
+
+# ── WU7: T20-RED — RW-UNLINK-1 ───────────────────────────────────────────────
+
+@test "RW-UNLINK-1: unlink on RW-linked sibling — removes entry, restores URL, leaves key, dual hint" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/unlink-rw-sibling"
+	_make_git_sibling "$sibling_dir" "git@github.com:owner/repo.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+	chmod 600 "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	local key_path="$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy"
+	[ -f "$key_path" ]
+
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_unlink "$sibling_dir"
+		[ "$status" -eq 0 ]
+		# Must print BOTH local key hint AND GitHub revocation hint
+		[[ "$output" =~ "$key_path" ]] || [[ "$output" =~ "${key_path}.pub" ]]
+		[[ "$output" =~ "GitHub" ]] || [[ "$output" =~ "github.com" ]]
+	)
+
+	# .list entry must be removed
+	if [ -f "$list_file" ]; then
+		run grep -F "${canonical}|" "$list_file"
+		[ "$status" -ne 0 ]
+	fi
+
+	# Key must still exist on disk (D6)
+	[ -f "$key_path" ]
+
+	# URL must be restored to canonical form
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$url" = "git@github.com:owner/repo.git" ]
+
+	# Managed SSH config must not contain alias block for this sibling
+	local config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
+	if [ -f "$config" ]; then
+		run grep "Host github.com-${sanitized}" "$config"
+		[ "$status" -ne 0 ]
+	fi
+}
+
+@test "SR-6 symmetric: unlink --rw on RW sibling behaves same as unlink (flag ignored)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/unlink-rw-flag"
+	_make_git_sibling "$sibling_dir" "git@github.com:owner/repo.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_unlink --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Entry must be removed
+	if [ -f "$list_file" ]; then
+		run grep -F "${canonical}|" "$list_file"
+		[ "$status" -ne 0 ]
+	fi
+}
+
+@test "SR-6 symmetric: unlink --rw on RO sibling performs standard RO unlink" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/unlink-ro-sibling"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"  # RO link
+	)
+
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	# Verify it was linked (RO)
+	grep -qF "${canonical}|" "$list_file"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_unlink --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Must be unlinked
+	if [ -f "$list_file" ]; then
+		run grep -F "${canonical}|" "$list_file"
+		[ "$status" -ne 0 ]
+	fi
+}
+
+# ── WU8: T22-RED — RW-LIST-1 ─────────────────────────────────────────────────
+
+@test "RW-LIST-1: drydock links shows (rw) for RW sibling and (ro) for RO sibling" {
+	_links_setup
+
+	local ro_dir="$BATS_TEST_TMPDIR/ro-sibling-list"
+	local rw_dir="$BATS_TEST_TMPDIR/rw-sibling-list"
+	mkdir -p "$ro_dir"
+	_make_git_sibling "$rw_dir" "git@github.com:owner/repo.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$ro_dir"
+		cmd_link --rw "$rw_dir"
+	)
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_links
+		[ "$status" -eq 0 ]
+		[[ "$output" =~ "(rw)" ]]
+		[[ "$output" =~ "(ro)" ]]
+	)
+}
+
+# ── WU9: T23-RED — RO regression: link without --rw has empty flags ───────────
+
+@test "RO-regression: cmd_link without --rw produces empty flags field in .list" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ro-no-flags"
+	mkdir -p "$sibling_dir"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+	)
+
+	[ -f "$list_file" ]
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	# Field 3 (flags) must be empty for a plain RO link
+	local flags
+	flags="$(awk -F'|' -v c="$canonical" '$1==c{print $3}' "$list_file")"
+	[ -z "$flags" ]
+
+	# No deploy key created
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	[ ! -f "$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy" ]
+}
+
+# ── JD1-AB-RED: idempotent check must consider flags field ────────────────────
+
+@test "JD1-AB-1: link RO then link --rw same path → mode-mismatch error, non-zero, unlink hint" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-1"
+	mkdir -p "$sibling_dir"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link "$sibling_dir"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"already linked as"*"ro"* ]]
+		[[ "$output" == *"drydock unlink"* ]]
+	)
+}
+
+@test "JD1-AB-2: link --rw then link (no flag) same path → mode-mismatch error, non-zero, unlink hint" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-2"
+	_make_git_sibling "$sibling_dir"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+		run cmd_link "$sibling_dir"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"already linked as"*"rw"* ]]
+		[[ "$output" == *"drydock unlink"* ]]
+	)
+}
+
+@test "JD1-AB-3: link --rw then link --rw same path → idempotent success, single .list entry" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-3"
+	_make_git_sibling "$sibling_dir"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Exactly one entry in .list for this canonical path
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	local count
+	count="$(grep -cF "$canonical" "$list_file")"
+	[ "$count" -eq 1 ]
+
+	# SSH config still has alias block
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	local ssh_config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
+	[ -f "$ssh_config" ]
+	grep -q "Host github.com-${sanitized}" "$ssh_config"
+
+	# Key file still present
+	[ -f "$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy" ]
+
+	# URL still aliased
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[[ "$url" == *"github.com-${sanitized}"* ]]
+}
+
+@test "JD1-AB-4: partial-state self-heal — .list entry exists but SSH config absent, re-link --rw completes mutations" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-4"
+	_make_git_sibling "$sibling_dir"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	local canonical
+	canonical="$(realpath "$sibling_dir")"
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+
+	# Simulate partial state: .list has the RW entry, but no SSH config exists
+	# and URL is still canonical (as if steps 4+5 never ran).
+	mkdir -p "$(dirname "$list_file")"
+	printf '%s|/workspace-siblings/%s|rw\n' "$canonical" "$(basename "$sibling_dir")" >"$list_file"
+	local ssh_config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
+	rm -f "$ssh_config"
+	# URL left at canonical (not aliased)
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# SSH config must now have the alias block
+	[ -f "$ssh_config" ]
+	grep -q "Host github.com-${sanitized}" "$ssh_config"
+
+	# URL must be aliased now
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[[ "$url" == *"github.com-${sanitized}"* ]]
+
+	# Still exactly one entry in .list
+	local count
+	count="$(grep -cF "$canonical" "$list_file")"
+	[ "$count" -eq 1 ]
+}
