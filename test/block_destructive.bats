@@ -480,3 +480,89 @@ teardown() {
     run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -i .git"}}'
     [ "$status" -eq 0 ]
 }
+
+# ── FIX-31: quoted-target normalization ───────────────────────────────────────
+#
+# Issue #31: the space-anchored regex checks in C1-residue / C17 / C18 miss
+# quoted destructive targets (`rm -rf "/etc"`, `rm -rf "."`, etc.) because
+# the path token is preceded by `"` instead of ` `. Under threat model A the
+# real-world impact is low (accidental typos do not produce matched quotes
+# around a path), but a guardrail that misses `rm -rf "/etc"` is an honesty
+# gap worth closing. Approach: normalize a single layer of matched single
+# and double quote pairs around tokens before applying the anchored checks.
+# Content stays intact; only the quote chars are replaced with spaces.
+
+# C1-residue: quoted system-path targets
+@test "block_destructive: FIX-31 blocks 'rm -rf \"/etc\"' (double-quoted system path)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \"/etc\""}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31 blocks \"rm -rf '/etc'\" (single-quoted system path)" {
+    run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf '/etc'\"}}"
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31 blocks 'rm -rf \"/\"' (double-quoted root)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \"/\""}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31 blocks 'rm -rf \"/usr\"' (double-quoted /usr)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \"/usr\""}}'
+    [ "$status" -eq 2 ]
+}
+
+# C17: quoted current-dir and .git targets
+@test "block_destructive: FIX-31 blocks 'rm -rf \".\"' (double-quoted dot)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \".\""}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31 blocks \"rm -rf '.git'\" (single-quoted .git)" {
+    run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf '.git'\"}}"
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31 blocks 'rm -rf \".git/\"' (double-quoted .git/ with slash)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \".git/\""}}'
+    [ "$status" -eq 2 ]
+}
+
+# C18: quoted parent-traversal targets
+@test "block_destructive: FIX-31 blocks 'rm -rf \"../foo\"' (double-quoted traversal)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \"../foo\""}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: FIX-31 blocks \"rm -rf '../sibling'\" (single-quoted traversal)" {
+    run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf '../sibling'\"}}"
+    [ "$status" -eq 2 ]
+}
+
+# Allow counter-examples: quoted non-targets must NOT trigger
+@test "block_destructive: FIX-31 allows 'echo \"hello world\"' (quoted non-target)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"echo \"hello world\""}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: FIX-31 allows 'rm -rf \"/home/user/project\"' (quoted but not system root)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \"/home/user/project\""}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: FIX-31 allows 'rm -rf \"./dist\"' (quoted relative non-traversal)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \"./dist\""}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: FIX-31 allows 'rm -rf \".gitignore\"' (quoted file with .git prefix — not .git boundary match)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf \".gitignore\""}}'
+    [ "$status" -eq 0 ]
+}
+
+# Segmented + quoted: rule must catch dangerous target in second segment
+@test "block_destructive: FIX-31 blocks 'cd /tmp && rm -rf \"/etc\"' (quoted in segment)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"cd /tmp && rm -rf \"/etc\""}}'
+    [ "$status" -eq 2 ]
+}
