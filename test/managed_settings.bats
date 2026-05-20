@@ -805,10 +805,11 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     # __HOME__/.config/drydock/keys/*. The pattern form matches existing entries:
     # Bash(<cmd> *__HOME__/.config/drydock/keys/*)
     #
-    # JD2-AB: bat is mandated by drydock's global agent convention
+    # JD2-AB: bat and rg are mandated by drydock's global agent convention
     # ("Use bat/rg/fd/sd/eza instead of cat/grep/find/sed/ls"); failing to
-    # cover it leaves a normal-tool-usage hole the agent is most likely to hit.
-    for cmd in cat less more head tail od xxd strings bat; do
+    # cover them leaves the normal-tool-usage hole the agent is most likely
+    # to hit. rg can dump arbitrary file content via `rg . <file>`.
+    for cmd in cat less more head tail od xxd strings bat rg; do
         local pattern="Bash($cmd *__HOME__/.config/drydock/keys/*)"
         jq -e --arg p "$pattern" \
             '.permissions.deny | map(select(. == $p)) | length >= 1' \
