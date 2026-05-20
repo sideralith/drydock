@@ -176,6 +176,42 @@ sub-shell not mediated by the Bash tool, or a base64-obfuscated tool invocation
 for destructive commands: drydock defends against accidents, not against an
 adversarial agent that is actively trying to circumvent its own permission layer.
 
+## Host token passthrough (`GITHUB_PERSONAL_ACCESS_TOKEN`)
+
+drydock's `docker-compose.yml` forwards `GITHUB_PERSONAL_ACCESS_TOKEN` from
+the invoking shell into the container so the GitHub MCP server and `gh` PAT
+authentication work end-to-end:
+
+```yaml
+environment:
+  - GITHUB_PERSONAL_ACCESS_TOKEN
+```
+
+The key-only form is intentional under [INV-7](../CLAUDE.md) (threat model A —
+accidents, not adversaries): the token is the user's own, on the user's own
+machine, and normal drydock operation (`drydock run`, `compose up`) never
+prints it. drydock itself does not invoke `docker compose config` (verified —
+no occurrence in `bin/`, `lib/`).
+
+**The one debug command that does render the value:** `docker compose config`
+resolves the env passthrough and prints the token in plaintext to stdout. If
+you need to debug the rendered config (or pipe it to a tool that does),
+**always pass `--no-interpolate`**:
+
+```bash
+# UNSAFE — prints the token value:
+docker compose config
+
+# SAFE — renders the structure with `${VAR}` placeholders unresolved:
+docker compose config --no-interpolate
+```
+
+This is a zero-cost mitigation already supported by `docker compose`; no
+drydock change required. Structural alternatives (Docker secrets, an
+`env_file` with mode `600`) were evaluated and deferred — under threat
+model A they trade contributor friction for a hazard the
+documented-and-flagged debug step already neutralizes.
+
 ## Destructive-command guardrail layer (v0.2.0+)
 
 drydock ships a two-tier defense against accident-class destructive commands.

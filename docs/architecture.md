@@ -72,6 +72,8 @@ the container — the only host env var drydock passes through. `docker compose
 run` does not inherit the host environment, so this is an explicit
 `environment:` entry in `docker-compose.yml`. `~/.config/gh` (mounted above)
 covers `gh` CLI OAuth separately; the env var covers tools that read it directly.
+See [security.md — host token passthrough](security.md#host-token-passthrough-github_personal_access_token)
+for the `docker compose config --no-interpolate` debug-rendering guidance.
 
 ## Two config locations
 
