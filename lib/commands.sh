@@ -85,7 +85,7 @@ cmd_setup() {
 					ok "$CONTAINER_ENGRAM created empty ($HOST_ENGRAM did not exist to copy from)"
 				fi
 			else
-				ok "$CONTAINER_ENGRAM ya existe ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
+				ok "$CONTAINER_ENGRAM already exists ($(du -sh "$CONTAINER_ENGRAM" | cut -f1))"
 			fi
 		fi
 	else
@@ -109,7 +109,7 @@ cmd_setup() {
 		mkdir -p "$CONTAINER_CLAUDE"/{sessions,projects,file-history,shell-snapshots,cache,backups,telemetry,plans,tasks,paste-cache}
 		ok "$CONTAINER_CLAUDE initialized ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	else
-		ok "$CONTAINER_CLAUDE ya existe ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
+		ok "$CONTAINER_CLAUDE already exists ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	fi
 	# Purge any stale OAuth token unconditionally — covers both the fresh-init
 	# and the upgrade (already-exists) path.  Uses the fail-safe ${VAR:?} form
@@ -137,7 +137,7 @@ cmd_setup() {
 			ok "$CONTAINER_CLAUDE_JSON created minimal ($HOST_CLAUDE_JSON did not exist to copy from)"
 		fi
 	else
-		ok "$CONTAINER_CLAUDE_JSON ya existe ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
+		ok "$CONTAINER_CLAUDE_JSON already exists ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 	fi
 
 	# MCP filter belt-and-suspenders: remove mcp/engram.json from the container
@@ -179,8 +179,8 @@ cmd_init() {
 		cp "$DEFAULT_SETTINGS_TEMPLATE" "$settings"
 		ok "$settings created"
 	else
-		warn "$settings ya existe — no lo sobrescribo"
-		note "Template baseline en: $DEFAULT_SETTINGS_TEMPLATE"
+		warn "$settings already exists — not overwriting"
+		note "Template baseline at: $DEFAULT_SETTINGS_TEMPLATE"
 	fi
 
 	if [ -f "$project_dir/.gitignore" ] && ! grep -q '\.claude/settings\.local\.json' "$project_dir/.gitignore"; then
