@@ -246,3 +246,96 @@ _ssh_setup() {
 	run _check_sibling_basename_collision_rw "/projects/newsibling" "newsibling" "$list_file"
 	[ "$status" -eq 0 ]
 }
+
+# ── FIX-1-RED: _validate_sibling_remote_url is read-only (partial-link guard) ─
+#
+# The original cmd_link --rw flow called _rewrite_sibling_remote_url before
+# key-gen and SSH config regen — leaving the sibling .git/config pointing at
+# an alias whose key/SSH block did not yet exist if any later step failed.
+# Fix: extract a read-only validator so cmd_link can validate FIRST and rewrite
+# LAST. The validator MUST NOT mutate the sibling .git/config.
+
+@test "FIX-1: _validate_sibling_remote_url exists and is callable" {
+	_ssh_setup
+	# Existence + minimal happy-path call (canonical URL, returns 0)
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-validate-exists"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "git@github.com:owner/repo.git"
+
+	run _validate_sibling_remote_url "$sibling_dir" "sibling-validate-exists"
+	[ "$status" -eq 0 ]
+}
+
+@test "FIX-1: _validate_sibling_remote_url does NOT mutate URL on canonical input" {
+	_ssh_setup
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-validate-canonical"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "git@github.com:owner/repo.git"
+
+	local before
+	before="$(git -C "$sibling_dir" remote get-url origin)"
+
+	_validate_sibling_remote_url "$sibling_dir" "sibling-validate-canonical"
+
+	local after
+	after="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$before" = "$after" ]
+	[ "$after" = "git@github.com:owner/repo.git" ]
+}
+
+@test "FIX-1: _validate_sibling_remote_url is idempotent on already-aliased same-alias URL" {
+	_ssh_setup
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-validate-idempotent"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "git@github.com-sibling-validate-idempotent:owner/repo.git"
+
+	local before
+	before="$(git -C "$sibling_dir" remote get-url origin)"
+
+	_validate_sibling_remote_url "$sibling_dir" "sibling-validate-idempotent"
+
+	local after
+	after="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$before" = "$after" ]
+}
+
+@test "FIX-1: _validate_sibling_remote_url rejects different-alias URL without mutating" {
+	_ssh_setup
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-validate-foreign"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "git@github.com-other-sibling:owner/repo.git"
+
+	local before
+	before="$(git -C "$sibling_dir" remote get-url origin)"
+
+	run _validate_sibling_remote_url "$sibling_dir" "expected-alias"
+	[ "$status" -ne 0 ]
+	[[ "$output" =~ "other-sibling" ]] || [[ "$output" =~ "manual cleanup" ]]
+
+	# .git/config URL must remain unmodified
+	local after
+	after="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$before" = "$after" ]
+}
+
+@test "FIX-1: _validate_sibling_remote_url rejects HTTPS URL without mutating" {
+	_ssh_setup
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-validate-https"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "https://github.com/owner/repo.git"
+
+	local before
+	before="$(git -C "$sibling_dir" remote get-url origin)"
+
+	run _validate_sibling_remote_url "$sibling_dir" "https-sibling"
+	[ "$status" -ne 0 ]
+
+	local after
+	after="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$before" = "$after" ]
+}
