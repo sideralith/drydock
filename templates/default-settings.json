@@ -1,4 +1,0 @@
-{
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "_comment": "Per-project Claude Code settings — created by `drydock init`. drydock's own agent policy (secret/git-safety denies + the SessionStart hook) now lives in a tamper-proof managed-settings layer baked into the drydock image; it applies automatically and cannot be weakened from here. This file is yours: extend it with project-specific permissions, hooks, or env."
-}

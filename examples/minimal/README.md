@@ -1,26 +1,28 @@
 # drydock — minimal example
 
-What's here: an empty project. The point — drydock works on ANY directory.
+What's here: an empty project. The point — drydock works on ANY directory, with
+no per-project setup.
 
 ## TL;DR
 
 ```
-drydock init .
 drydock
 ```
 
 ## Run
 
 ```bash
-drydock init .    # materializes .claude/settings.json from the template
 drydock           # launches Claude Code inside the drydock container
 ```
 
 ## What this proves
 
 - drydock works against a bare directory with no source code (the workspace IS the value).
-- `drydock init` substitutes `$HOME` paths into `.claude/settings.json` deny lists.
-- No project-specific configuration required to start.
+- No project-specific configuration required to start — drydock's safety policy
+  ships image-baked (`/etc/claude-code/managed-settings.d/`, INV-3) and applies
+  to every project automatically.
+- `.claude/settings.json` is optional; Claude Code creates it lazily if/when you
+  add MCP servers, hooks, or permissions through normal Claude Code commands.
 
 ## Next steps
 

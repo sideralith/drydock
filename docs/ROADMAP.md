@@ -209,9 +209,15 @@ Dockerfile at `/etc/claude-code/managed-settings.d/` (root-owned) and `__HOME__`
 is resolved via a `RUN sed` at build time. The non-root container user cannot write
 to `/etc/`, so the policy is tamper-proof by image-layer ownership. Claude Code loads
 managed settings at highest precedence; the rules cannot be weakened from project
-settings. `drydock init` is reshaped to a lightweight stub-seeder (no deny entries,
-no hook wiring — the stub is for project-specific customization only); the
-`--update` flag (whose deny-merge logic is now obsolete) is removed.
+settings.
+
+**Follow-up note (v0.2.1).** With the deny entries and hook wiring relocated to
+managed-settings, `drydock init` was reshaped to a stub-seeder for project-only
+customization. v0.2.1 went further and removed `drydock init` entirely once it
+lost its load-bearing role — Claude Code creates `.claude/settings.json` lazily
+when the user adds MCP servers, hooks, or permissions through its own commands.
+The `--update` flag (whose deny-merge logic became obsolete in v0.2.0) was also
+removed.
 
 **Why this scope.** Security / correctness. Closes an existing INV-3-spirit gap:
 today the hook *script* is RO but the deny *list* and hook *entry* sit in a RW

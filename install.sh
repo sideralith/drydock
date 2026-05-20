@@ -70,9 +70,9 @@ step_fail() {
 
 print_next_steps() {
 	if [ "$IS_TTY" = "1" ]; then
-		printf '\n  next steps:\n\n    drydock build                   # ~5 min, first time\n    cd <project> && drydock init .  # per-project setup\n    cd <project> && drydock         # launch claude, sandboxed\n\n'
+		printf '\n  next steps:\n\n    drydock build              # ~5 min, first time\n    cd <project> && drydock    # launch claude, sandboxed\n\n'
 	else
-		printf '\nnext steps:\n  drydock build                   (5 min first time)\n  cd <project> && drydock init .  (per-project setup)\n  cd <project> && drydock         (launch claude, sandboxed)\n\n'
+		printf '\nnext steps:\n  drydock build              (5 min first time)\n  cd <project> && drydock    (launch claude, sandboxed)\n\n'
 	fi
 }
 
@@ -287,8 +287,11 @@ _host_shared_safe() {
 
 # ask_engram_mode — on native Linux: prompt to enable shared engram mode (INV-5).
 # WSL2 and macOS: silently skip (unsafe fcntl locks). Non-interactive: skip.
+# Engram not on PATH: silently skip — no point asking about a tool the user
+# doesn't have (INV-4: engram is optional).
 ask_engram_mode() {
 	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+	command -v engram >/dev/null 2>&1 || return 0
 	_host_shared_safe || return 0
 
 	ask "Share engram DB with host session (native Linux only)? (INV-5)" n

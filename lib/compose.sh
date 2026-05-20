@@ -21,8 +21,6 @@ COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
 COMPOSE_MCP_AUTH="$DRYDOCK_HOME/docker-compose.mcp-auth.yml"
 COMPOSE_CCSTATUSLINE="$DRYDOCK_HOME/docker-compose.ccstatusline.yml"
 COMPOSE_HARDENING="$DRYDOCK_HOME/docker-compose.hardening.yml"
-# shellcheck disable=SC2034  # used in lib/commands.sh (cmd_init)
-DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
 

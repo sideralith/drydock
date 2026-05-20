@@ -79,8 +79,22 @@ Read(//**/.docker/config.json)
 Read(//**/.claude/.credentials.json)
 Read(//**/.claude-container*/.credentials.json)
 Read(__HOME__/.config/drydock/**)
+Read(//**/.env)
+Read(//**/.env.local)
+Read(//**/.env.production)
+Read(//**/.env.development)
+Read(//**/.env.test)
+Read(//**/.env.staging)
 # Edit(...) and Write(...) variants present for every entry — see 00-secrets.json
 ```
+
+**Why explicit `.env*` variants instead of a `.env.*` glob.** `.env.example`,
+`.env.template`, and `.env.sample` are conventional template files that should
+remain readable — they hold variable names and dummy values, not secrets. A
+glob like `Read(//**/.env.*)` would also block those templates and break a
+common onboarding flow. Enumerating the secret variants individually keeps
+the templates accessible. If your project uses an unusual `.env`-style name
+(e.g. `.env.private`), add a project-level deny in `.claude/settings.json`.
 
 The `//**/` prefix matches **at any mount depth**: a `.ssh/` directory inside a
 sibling at `/workspace-siblings/other-repo/.ssh/` is denied by the same rule
@@ -353,11 +367,17 @@ root-equivalent (see below) — INV-8 is additive defense in depth, not a replac
 - **Agent committing nonsense to the project tree** — `$PROJECT_DIR` is
   mounted RW. The agent can write anything in it. (That's the point — it
   needs to do its job.) Use git review discipline.
-- **Agent reading anything inside `$PROJECT_DIR`, including `.env`** —
-  mitigated, not prevented, by a `Read(.env)` deny in your global
-  `~/.claude/settings.json` (you set that up yourself; it's not part of
-  drydock — though drydock's managed-settings layer does add `Read(~/.ssh/**)` etc.
-  as image-baked policy that applies automatically to every container session).
+- **Agent reading arbitrary content inside `$PROJECT_DIR`** — the project
+  tree is mounted RW and the agent can read any file in it for legitimate
+  work. Drydock's `00-secrets.json` does cover the **common secret-file
+  conventions** automatically: `.env`, `.env.local`, `.env.production`,
+  `.env.development`, `.env.test`, `.env.staging`, plus `.ssh/**`, `.aws/**`,
+  `.gnupg/**`, `.kube/**`, `.docker/config.json` at any mount depth — that's
+  what the managed-settings layer ships, no per-user setup required.
+  `.env.example` and similar template suffixes are intentionally NOT denied
+  (they hold variable names and dummy values, not secrets). If your project
+  stores secrets under non-conventional filenames (custom `.creds`,
+  `.env.private`, etc.) add a project-level deny in `.claude/settings.json`.
 - **Network exfiltration** — the container shares the host's network
   namespace (`network_mode: host`). The agent can make arbitrary outbound
   connections.

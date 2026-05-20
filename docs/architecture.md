@@ -270,12 +270,17 @@ the declarative deny cannot express.
 outside `$HOME`. It is drydock-owned policy config, not host `~/.claude/` state. The
 host/container state-split boundary (INV-2) is never crossed.
 
-**INV-3 strengthening.** Before v0.2.0, the deny block and hook entry lived in the
-per-project `settings.json` seeded by `drydock init` — a writable file the agent
-could overwrite. The managed-settings layer closes this gap: the same policy is now
-structural (image-layer immutable) rather than advisory. The hooks RO overlay (hook
-*scripts*) and the managed-settings layer (policy *rules* + hook *wiring*) together
-make drydock's full tier-1 defense structural.
+**INV-3 strengthening.** Before v0.2.0, the deny block and hook entry lived in a
+per-project `settings.json` (then seeded by a `drydock init` command) — a writable
+file the agent could overwrite. The managed-settings layer closes this gap: the
+same policy is now structural (image-layer immutable) rather than advisory. The
+hooks RO overlay (hook *scripts*) and the managed-settings layer (policy *rules*
++ hook *wiring*) together make drydock's full tier-1 defense structural.
+Per-project `.claude/settings.json` no longer carries any drydock policy and is
+fully optional from v0.2.1 onward — Claude Code creates it on demand when the
+user adds MCP servers, hooks, or permissions through its own commands. The
+`drydock init` command (which previously seeded the empty stub) was removed in
+v0.2.1 once it lost its load-bearing role.
 
 **Refresh cadence.** Policy updates (new deny entries, hook changes) take effect after
 `drydock build`. Users already rebuild after pulling drydock when Dockerfile or MCP

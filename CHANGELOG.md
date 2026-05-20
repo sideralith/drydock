@@ -5,6 +5,98 @@ All notable changes to drydock are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- **`drydock init` command** — removed entirely. Pre-v0.2.0 it was load-bearing
+  (it seeded `.claude/settings.json` with drydock's full deny policy + the
+  `SessionStart` hook). In v0.2.0 the policy moved to the image-baked
+  managed-settings layer (`/etc/claude-code/managed-settings.d/`, INV-3),
+  leaving init as a vestigial empty-stub creator with no remaining
+  load-bearing role. Claude Code creates `.claude/settings.json` on demand
+  when the user adds MCP servers, hooks, or permissions through its own
+  commands — so a dedicated drydock command for it no longer adds value.
+  Cleaned up: removed `cmd_init` function, the dispatch case in
+  `bin/drydock`, the `init` row from `usage()`, the `onboard` redirect
+  (which pointed at init), the `templates/default-settings.json` file, the
+  `DEFAULT_SETTINGS_TEMPLATE` constant in `lib/compose.sh`, the `drydock
+  init .` line from `install.sh`'s next-steps output, and the corresponding
+  tests (`test/init.bats` removed; `test/examples.bats`,
+  `test/cli_surface.bats`, `test/source_guard.bats`, and
+  `test/managed_settings.bats` cleaned up). `drydock doctor` no longer
+  warns when `.claude/settings.json` is missing — it's reported as info,
+  not a missing-piece. drydock is pre-1.0 with no known users yet, so no
+  deprecation stub was kept.
+
+### Added
+- **Homebrew packaging**: `packaging/homebrew/drydock.rb` formula source and
+  `scripts/publish-homebrew-tap.sh` to publish/refresh the
+  `sideralith/homebrew-tap` tap. Users install with
+  `brew install sideralith/tap/drydock` once the tap is published. The
+  generic `homebrew-tap` repo name (vs. `homebrew-drydock`) keeps the
+  install command clean (`sideralith/tap/drydock` instead of the
+  double-named `sideralith/drydock/drydock`) and leaves room for future
+  sideralith formulae under the same tap.
+- **`.env` secret protection**: `00-secrets.json` now denies `Read`, `Edit`,
+  and `Write` on the common `.env` filename variants (`.env`, `.env.local`,
+  `.env.production`, `.env.development`, `.env.test`, `.env.staging`) at any
+  mount depth via `//**/`-anchored patterns. `.env.example` and other
+  template suffixes are intentionally not covered (they should be readable).
+  Closes the gap previously documented in `docs/security.md`'s "what drydock
+  does NOT protect against" section.
+
+### Changed
+- **`install.sh`**: the shared-engram-mode prompt now skips silently when
+  `engram` is not on `PATH`. Previously the prompt appeared on every native
+  Linux install regardless — useless for users without engram (INV-4: engram
+  is optional). Also adds a comment explaining the gate.
+- **README quick start**: the clone-first install path is now explicitly
+  framed as the recommended audit-before-run option for security-conscious
+  users; the curl one-liner remains for quick installs but now points back
+  to the clone flow as an inspection alternative.
+- **`drydock doctor` / `drydock status` / `drydock help` — modern visual
+  redesign.** Switched to a hierarchical layout: uppercase section headers,
+  indented items with consistent status icons (`✓` ok, `·` info, `⚠`
+  warning, `✗` error), dim metadata column, and TTY-aware coloring. Pipes
+  / non-TTY output is plain text. Respects the `NO_COLOR` env var
+  convention (any non-empty value disables color). No Nerd-Font glyphs —
+  uses Unicode-standard symbols so every UTF-8 terminal renders the same.
+  Implementation: four reusable helpers (`_dr_init_style`, `_dr_section`,
+  `_dr_item`, `_dr_help_row`) keep formatting consistent across all three
+  commands.
+- **`drydock doctor`** content expanded with four new sections:
+  - **Linked siblings** — lists the `~/.config/drydock/links/<project>.list`
+    entries for the current project (the same data `drydock links` prints).
+    Empty case: `(none linked)` hint.
+  - **Active drydock sessions (this project)** — surfaces any running
+    `drydock-<project>-<disc>` (and `-shell` companion) containers for the
+    current project. Awareness signal for concurrent-sessions (INV-2).
+  - **Compose overlays that would activate now** — replicates the conditions
+    in `compose_files()` (without side-effects — no temp overlays written)
+    and prints which compose files would be included for an invocation from
+    the current `cwd`/env. Surfaces base, hardening, sub-mounts, links, SSH,
+    GPG, engram, mcp-auth, and ccstatusline overlays.
+  - **`drydock` env flags (non-default)** — lists any `DRYDOCK_*` env var
+    currently set (`DRYDOCK_NO_HARDENING`, `DRYDOCK_TMPFS_SIZE`,
+    `DRYDOCK_ENGRAM_SHARED`, `DRYDOCK_SKIP_AUTOSYNC`). Safety-loosening
+    flags marked `⚠`, neutral tunables `✓`. Empty: `(none — defaults
+    active)`.
+
+### Documentation
+- **TTY latency on WSL2 and macOS**: new `docs/troubleshooting.md` section
+  explaining the PTY chain (containerd → daemon → CLI → terminal) and why
+  WSL2 + Docker Desktop / macOS + Docker Desktop add a per-byte VM-bridge
+  hop. Includes a mitigations table (Docker Engine inside WSL2 for the
+  biggest payoff; OrbStack/Colima/virtiofs notes for macOS).
+- **`docs/security.md`**: the "what drydock does NOT protect against"
+  section is updated — `.env` and common variants are now covered by the
+  managed-settings deny, no per-user setup required.
+- **README Requirements section**: new section between "What problem it
+  solves" and "Quick start" that lists host OS support matrix, mandatory
+  host tooling (Docker, `docker compose` v2, Bash ≥ 4, `git`, `jq`,
+  `rsync`, `curl`), the strong recommendation to have Claude Code already
+  installed on host, and the optional pieces (`engram`, `gh`, GPG).
+
 ## [0.2.0] - 2026-05-20
 
 Managed-settings layer, concurrent-session isolation, destructive-command guardrails,
