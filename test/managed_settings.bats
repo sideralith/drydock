@@ -795,6 +795,51 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     done
 }
 
+# T19-C: Bash() deny rules for the per-sibling keys directory in the running
+# image. Mirrors T19-A/T19-B: gated by DRYDOCK_INTEGRATION=1 and a built
+# drydock:latest image. Honest-but-toothless without rebuild + integration
+# flag — the value is regression catch when someone runs the integration
+# suite, not local CI coverage. Unit-side equivalent is the JD1-C test
+# (template form, runs always).
+#
+# Crucial difference vs T19-A: the source template uses __HOME__ as a
+# placeholder, which the Dockerfile substitutes to the container's actual
+# $HOME at image-build time (see Dockerfile sed). The literal-equality
+# style of T19-A would silently always fail here. We resolve $HOME inside
+# the container first, then build literal expected patterns.
+
+@test "00-secrets: Bash deny rules for keys dir baked into running image (integration)" {
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
+
+    # Resolve the actual $HOME inside the container — the template's
+    # __HOME__ placeholder is substituted at image-build time.
+    run docker run --rm drydock:latest sh -c 'printf %s "$HOME"'
+    [ "$status" -eq 0 ]
+    local container_home="$output"
+    [ -n "$container_home" ]
+
+    run docker run --rm drydock:latest \
+        cat /etc/claude-code/managed-settings.d/00-secrets.json
+    [ "$status" -eq 0 ]
+
+    local deployed_json="$output"
+
+    # Each Bash deny entry takes the form:
+    #   Bash(<cmd> *<container_home>/.config/drydock/keys/*)
+    # The 10 commands below mirror the JD1-C unit test iteration list:
+    # cat/less/more/head/tail/od/xxd/strings (Round 1 fix-pass) + bat/rg
+    # (Round 2 + Round 3 fix-passes — both mandated by drydock's global
+    # tool convention).
+    for cmd in cat less more head tail od xxd strings bat rg; do
+        local rule="Bash($cmd *${container_home}/.config/drydock/keys/*)"
+        echo "$deployed_json" | jq -e --arg r "$rule" \
+            '.permissions.deny | map(select(. == $r)) | length >= 1' \
+            >/dev/null \
+            || { echo "MISSING in deployed image: $rule"; return 1; }
+    done
+}
+
 # ── JD1-C-RED: Bash deny coverage for keys dir ────────────────────────────────
 #
 # Glob convention. The `Bash(<cmd> *<path>*)` form uses Claude Code's
