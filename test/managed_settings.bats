@@ -827,11 +827,11 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 
     # Each Bash deny entry takes the form:
     #   Bash(<cmd> *<container_home>/.config/drydock/keys/*)
-    # The 10 commands below mirror the JD1-C unit test iteration list:
+    # The 12 commands below mirror the JD1-C unit test iteration list:
     # cat/less/more/head/tail/od/xxd/strings (Round 1 fix-pass) + bat/rg
     # (Round 2 + Round 3 fix-passes — both mandated by drydock's global
-    # tool convention).
-    for cmd in cat less more head tail od xxd strings bat rg; do
+    # tool convention) + nl/tac (JD Round 1 suspects fix-pass).
+    for cmd in cat less more head tail od xxd strings bat rg nl tac; do
         local rule="Bash($cmd *${container_home}/.config/drydock/keys/*)"
         echo "$deployed_json" | jq -e --arg r "$rule" \
             '.permissions.deny | map(select(. == $r)) | length >= 1' \
@@ -865,7 +865,9 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     # ("Use bat/rg/fd/sd/eza instead of cat/grep/find/sed/ls"); failing to
     # cover them leaves the normal-tool-usage hole the agent is most likely
     # to hit. rg can dump arbitrary file content via `rg . <file>`.
-    for cmd in cat less more head tail od xxd strings bat rg; do
+    # JD Round 1 suspects: nl and tac also read file content line by line;
+    # nl numbers lines (nl <file>), tac reverses them — both dump key material.
+    for cmd in cat less more head tail od xxd strings bat rg nl tac; do
         local pattern="Bash($cmd *__HOME__/.config/drydock/keys/*)"
         jq -e --arg p "$pattern" \
             '.permissions.deny | map(select(. == $p)) | length >= 1' \
