@@ -1662,9 +1662,15 @@ _setup_wiring_home() {
 
 	_regenerate_managed_ssh_config "$primary" "$list_file"
 
-	# No .XXXXXX tmp files should remain
+	# No .XXXXXX tmp files should remain. mktemp produces a 6-character
+	# suffix from the [A-Za-z0-9] alphabet (GNU coreutils + util-linux);
+	# the prior "ssh-config-*.tmp*" pattern matched zero files always,
+	# making the assertion vacuous. The character class below matches
+	# only the actual mktemp output shape.
 	local tmp_count
-	tmp_count=$(find "$fake_home/.config/drydock" -name "ssh-config-*.tmp*" 2>/dev/null | wc -l)
+	tmp_count=$(find "$fake_home/.config/drydock" \
+		-name 'ssh-config-*.[a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9][a-zA-Z0-9]' \
+		2>/dev/null | wc -l)
 	[ "$tmp_count" -eq 0 ]
 }
 
