@@ -48,6 +48,8 @@ CONTAINER_CLAUDE_JSON="$HOME/.claude-container.json"
 HOST_ENGRAM="$HOME/.engram"
 # shellcheck disable=SC2034  # used in lib/commands.sh
 CONTAINER_ENGRAM="$HOME/.engram-container"
+# shellcheck disable=SC2034  # used in lib/commands.sh
+DRYDOCK_OAUTH_TOKEN="$HOME/.config/drydock/claude-oauth-token"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
 

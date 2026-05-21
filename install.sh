@@ -76,9 +76,9 @@ step_fail() {
 
 print_next_steps() {
 	if [ "$IS_TTY" = "1" ]; then
-		printf '\n  next steps:\n\n    drydock build              # ~5 min, first time\n    cd <project> && drydock    # launch claude, sandboxed\n\n'
+		printf '\n  next steps:\n\n    drydock build              # ~5 min, first time\n    drydock setup-token        # optional: skip the per-session login\n    cd <project> && drydock    # launch claude, sandboxed\n\n'
 	else
-		printf '\nnext steps:\n  drydock build              (5 min first time)\n  cd <project> && drydock    (launch claude, sandboxed)\n\n'
+		printf '\nnext steps:\n  drydock build              (5 min first time)\n  drydock setup-token        (optional: skip the per-session login)\n  cd <project> && drydock    (launch claude, sandboxed)\n\n'
 	fi
 }
 

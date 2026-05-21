@@ -488,6 +488,132 @@ _setup_pr2_engram_and_linux() {
 	unset DRYDOCK_ENGRAM_SHARED
 }
 
+# ── OAuth token overlay (compose gate) ───────────────────────────────────────
+
+@test "compose_files: DRYDOCK_OAUTH_TOKEN_VALUE unset — oauth overlay absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.oauth.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_OAUTH_TOKEN_VALUE set — oauth overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export DRYDOCK_OAUTH_TOKEN_VALUE="sk-ant-oat-v1-testtoken1234567890123456789012345678"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" == *"docker-compose.oauth.yml"* ]]
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+}
+
+# ── export_compose_env OAuth token block ──────────────────────────────────────
+
+@test "export_compose_env: token file present with valid content — DRYDOCK_OAUTH_TOKEN_VALUE exported" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-present-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	printf 'sk-ant-oat-v1-testtoken1234567890123456789012345678' >"$fakehome/.config/drydock/claude-oauth-token"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -n "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+	[ "$DRYDOCK_OAUTH_TOKEN_VALUE" = "sk-ant-oat-v1-testtoken1234567890123456789012345678" ]
+}
+
+@test "export_compose_env: token file with trailing newline — exported value is trimmed" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-newline-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	printf 'sk-ant-oat-v1-testtoken1234567890123456789012345678\n' >"$fakehome/.config/drydock/claude-oauth-token"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ "$DRYDOCK_OAUTH_TOKEN_VALUE" = "sk-ant-oat-v1-testtoken1234567890123456789012345678" ]
+}
+
+@test "export_compose_env: multi-line token file — only first line exported, second line not concatenated (Fix6)" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-multiline-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	# Two-line file: first line is the real token; second is junk that must NOT appear.
+	printf 'sk-ant-oat-v1-testtoken1234567890123456789012345678\nsecond-line-should-be-ignored\n' \
+		>"$fakehome/.config/drydock/claude-oauth-token"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -n "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+	[ "$DRYDOCK_OAUTH_TOKEN_VALUE" = "sk-ant-oat-v1-testtoken1234567890123456789012345678" ]
+}
+
+@test "export_compose_env: token file absent — DRYDOCK_OAUTH_TOKEN_VALUE unset" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-absent-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	# Explicitly no token file
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+}
+
+@test "export_compose_env: token file present but empty — DRYDOCK_OAUTH_TOKEN_VALUE not exported" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-empty-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	printf '' >"$fakehome/.config/drydock/claude-oauth-token"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+}
+
+@test "export_compose_env: token file absent but DRYDOCK_OAUTH_TOKEN_VALUE pre-set stale — unset after call (Fix6 idempotency)" {
+	# Regression: export_compose_env must unset DRYDOCK_OAUTH_TOKEN_VALUE at the
+	# top of its OAuth block so re-invocations re-derive state from the file.
+	# A stale var from a previous call (e.g. after revoke-token) must NOT survive.
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-stale-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	# No token file — but a stale env var from a prior invocation.
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	export DRYDOCK_OAUTH_TOKEN_VALUE="stale-token-from-previous-session"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+}
+
+@test "export_compose_env: token file contains only a newline — DRYDOCK_OAUTH_TOKEN_VALUE not exported (Fix7 whitespace-only)" {
+	# Regression guard: a file containing only a newline is whitespace-only after
+	# head -1 | tr -d '[:space:]' — must behave the same as empty (no export).
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-newline-only-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	printf '\n' >"$fakehome/.config/drydock/claude-oauth-token"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+}
+
 # ── image_exists (via DOCKER mock) ────────────────────────────────────────────
 
 @test "image_exists: mock exits 0 — function returns 0" {

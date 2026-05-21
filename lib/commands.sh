@@ -7,6 +7,11 @@
 #           lib/paths.sh (resolve_project_dir, path constants),
 #           lib/compose.sh (image_exists, ensure_*, compose_files, DOCKER).
 
+# ── CLAUDE_BIN seam ───────────────────────────────────────────────────────────
+# Override in tests: export CLAUDE_BIN=/path/to/fake-claude before sourcing.
+# Matches the DOCKER/UNAME/DRYDOCK_DISCRIMINATOR_FN seam idiom.
+: "${CLAUDE_BIN:=claude}"
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -36,6 +41,8 @@ usage() {
 	_dr_help_row "status" "Short health snapshot"
 	_dr_help_row "doctor" "Detailed diagnostics + current-project context"
 	_dr_help_row "setup" "(advanced) One-time host setup — auto-runs when needed"
+	_dr_help_row "setup-token" "(advanced) Generate a 1-year Claude OAuth token for container auth"
+	_dr_help_row "revoke-token" "Delete the local OAuth token file (server-side: claude.ai settings)"
 	_dr_help_row "link [--rw] PATH [TGT]" "Mount a sibling project inside the container"
 	_dr_help_row "unlink [--rw] PATH" "Remove a sibling mount from the project list"
 	_dr_help_row "links" "Show all linked siblings for the current project"
@@ -712,6 +719,13 @@ cmd_doctor() {
 	if engram_usable; then
 		_dr_item "✓" "docker-compose.engram.yml" "" "engram on PATH"
 	fi
+	# OAuth token overlay: a non-empty first line (after whitespace stripping)
+	# drives inclusion — matches the export_compose_env / compose_files
+	# activation gate (head -1 | tr -d '[:space:]'). Both zero-byte AND
+	# whitespace-only token files must NOT be reported as active here.
+	if [ -n "$(head -1 "$DRYDOCK_OAUTH_TOKEN" 2>/dev/null | tr -d '[:space:]')" ]; then
+		_dr_item "✓" "docker-compose.oauth.yml" "" "OAuth token present"
+	fi
 	# Optional user-config opt-in overlays (auto-detected from host directories).
 	# Tilde-literals in the meta column are display text (not paths to expand);
 	# disable SC2088 explicitly for the two affected calls.
@@ -816,6 +830,119 @@ _check_path_metachar() {
 	if [[ "$_p" =~ [[:cntrl:]] ]]; then
 		err "rejected: $_label contains a control character (including newline)"
 	fi
+}
+
+# ── cmd_setup_token ───────────────────────────────────────────────────────────
+
+# cmd_setup_token [--force]
+# Runs `claude setup-token` interactively on the host (user sees the browser
+# flow and the printed token), then prompts the user to paste the token.
+# Validates it and writes it atomically to DRYDOCK_OAUTH_TOKEN (0600).
+# Refuses to overwrite an existing token without --force.
+cmd_setup_token() {
+	local force=0
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--force)
+			force=1
+			shift
+			;;
+		-*)
+			err "unknown option: $1"
+			;;
+		*)
+			err "unexpected argument: $1"
+			;;
+		esac
+	done
+
+	# SR-1: fail early with install guidance if the claude binary is not on PATH.
+	command -v "$CLAUDE_BIN" >/dev/null 2>&1 || err "claude (Claude Code CLI) not found — install Claude Code CLI before running 'drydock setup-token'"
+
+	# Ensure the target directory exists before attempting mktemp inside it.
+	# FIX 4: create with 0700 so a fresh directory is not world-readable.
+	# mkdir -p is a no-op (and does not change mode) when the directory already
+	# exists — acceptable; this only tightens fresh creation.
+	(
+		umask 077
+		mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
+	) || err "failed to create token directory $(dirname "$DRYDOCK_OAUTH_TOKEN") — check permissions"
+
+	# Overwrite guard: refuse without --force when file already exists (SR-5a).
+	# Print the file's age in days so the user knows whether the token is stale.
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ] && [ "$force" -eq 0 ]; then
+		local _mtime _now _age_days
+		_mtime="$(stat -c %Y "$DRYDOCK_OAUTH_TOKEN")"
+		_now="$(date +%s)"
+		_age_days=$(((_now - _mtime) / 86400))
+		err "token file already exists at $DRYDOCK_OAUTH_TOKEN (${_age_days} day(s) old) — pass --force to overwrite"
+	fi
+
+	# Run claude setup-token fully unredirected: the user sees the authorization
+	# URL, completes the browser flow, and sees the token printed by claude.
+	# Capture only the exit code; do not capture stdout or stderr.
+	local _rc=0
+	"$CLAUDE_BIN" setup-token || _rc=$?
+	if [ "$_rc" -ne 0 ]; then
+		err "claude setup-token exited with status $_rc — token not saved"
+	fi
+
+	# Prompt the user to paste the token claude just printed above.
+	# Explicit EOF guard: if stdin is closed (Ctrl-D / non-interactive invocation),
+	# read returns non-zero. Catch it and emit a clear diagnostic rather than
+	# falling silently into the regex check with an empty string.
+	local _token
+	IFS= read -s -r -p "Paste the token printed above: " _token ||
+		err "no token pasted (EOF / Ctrl-D) — re-run 'drydock setup-token' and paste the token when prompted"
+	printf '\n' >&2
+
+	# Validate: token must match the sk-ant- prefix format.
+	# [:graph:] matches printable non-whitespace characters (POSIX) — accepts
+	# '.', '+', '/', '=' (base64/JWT-style tokens) while still rejecting any
+	# embedded whitespace. [:print:] would include space and must NOT be used.
+	if [[ ! "$_token" =~ ^sk-ant-[[:graph:]]{20,}$ ]]; then
+		err "pasted value does not look like a valid Claude OAuth token (expected sk-ant- prefix) — retry 'drydock setup-token'"
+	fi
+
+	# Atomic 0600 write: umask is set before mktemp so the temp file is created
+	# 0600 by intent. Inline cleanup on each failure path removes the temp file
+	# before calling err — no shell-level EXIT trap is touched (see convention at
+	# lib/commands.sh comment near cmd_unlink: EXIT trap persists process-wide and
+	# fires after the function returns, which can confuse callers; inline cleanup
+	# is the documented pattern for this file).
+	local _tmp
+	_tmp="$(
+		umask 077
+		mktemp "$(dirname "$DRYDOCK_OAUTH_TOKEN")/.oauth-XXXXXX"
+	)" || err "failed to create a temporary file in $(dirname "$DRYDOCK_OAUTH_TOKEN") — check disk space and permissions"
+	if ! printf '%s\n' "$_token" >"$_tmp"; then
+		rm -f "$_tmp"
+		err "failed to write token to temporary file"
+	fi
+	if ! mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN"; then
+		rm -f "$_tmp"
+		err "failed to save token to $DRYDOCK_OAUTH_TOKEN — token not written"
+	fi
+
+	ok "OAuth token saved to $DRYDOCK_OAUTH_TOKEN"
+	note "This token is valid for approximately 1 year. To refresh: drydock setup-token --force"
+	note "To fully revoke: run 'drydock revoke-token', then visit claude.ai → Settings to revoke server-side"
+}
+
+# ── cmd_revoke_token ──────────────────────────────────────────────────────────
+
+# cmd_revoke_token
+# Removes the local OAuth token file (idempotent). Prints a mandatory notice
+# that server-side revocation requires claude.ai → Settings (SR-7).
+cmd_revoke_token() {
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
+		rm -f "$DRYDOCK_OAUTH_TOKEN"
+		ok "Local OAuth token removed from $DRYDOCK_OAUTH_TOKEN"
+	else
+		note "No local token file to remove (already absent)"
+	fi
+	note "IMPORTANT: drydock cannot revoke the token server-side. To fully revoke, visit claude.ai → Settings and revoke the token there."
 }
 
 # ── cmd_link ──────────────────────────────────────────────────────────────────

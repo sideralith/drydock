@@ -1,0 +1,23 @@
+# drydock — optional Claude OAuth token overlay.
+#
+# Auto-included by the drydock CLI when ~/.config/drydock/claude-oauth-token
+# exists on the host (see DRYDOCK_OAUTH_TOKEN_VALUE, set by export_compose_env
+# in lib/compose.sh). Delivers a 1-year OAuth token into the container as
+# CLAUDE_CODE_OAUTH_TOKEN so Claude Code starts without a browser login prompt.
+#
+# IMPORTANT — high-value secret: this token grants ~1 year of Claude account
+# access. The token file is stored at ~/.config/drydock/claude-oauth-token with
+# mode 0600. It is already covered by the deny rule
+# Read(__HOME__/.config/drydock/**) in the managed-settings drop-in — the agent
+# inside the container cannot read it. The token VALUE reaches the container
+# exclusively via this environment variable (never via a bind-mount).
+#
+# Setup (one-time):
+#   drydock setup-token
+#
+# To remove: drydock revoke-token  (also revoke at claude.ai → Settings)
+
+services:
+  drydock:
+    environment:
+      CLAUDE_CODE_OAUTH_TOKEN: "${DRYDOCK_OAUTH_TOKEN_VALUE:-}"

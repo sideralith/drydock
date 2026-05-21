@@ -208,6 +208,8 @@ scripts, a justfile) runs the same way.
 | `drydock build` | Build/rebuild `drydock:latest` |
 | `drydock status` / `doctor` | Health snapshot / full diagnostics |
 | `drydock setup` | (advanced) Force host-side init — auto-triggered; rarely explicit |
+| `drydock setup-token` | (advanced) One-time: generate a 1-year Claude OAuth token so container sessions start without a login prompt. See [Persistent auth](#persistent-auth-oauth-token). |
+| `drydock revoke-token` | Delete the local OAuth token file. Also revoke server-side at claude.ai → Settings. |
 | `drydock version` / `help` | Self-explanatory |
 
 ## Multi-mount projects
@@ -247,6 +249,41 @@ If a sub-mount does not appear inside the container, see
 > **Optional — engram memory:** drydock integrates the [engram](docs/engram.md)
 > persistent-memory MCP server if it is already installed on your host. Entirely
 > optional — see [docs/engram.md](docs/engram.md).
+
+## Persistent auth (OAuth token)
+
+By default each drydock session starts with a login prompt — the container's
+Claude credentials are isolated from the host's (INV-2: prevents OAuth refresh
+races). To skip the login prompt across all sessions, generate a 1-year OAuth
+token once:
+
+```bash
+drydock setup-token
+```
+
+drydock runs `claude setup-token` interactively — you complete the browser flow
+and see the token printed by claude. drydock then prompts you to paste that
+token, validates it, and writes it atomically to
+`~/.config/drydock/claude-oauth-token` with mode `0600`. Every future session
+auto-includes the token via `docker-compose.oauth.yml`.
+
+Note: the token is visible in plaintext via `docker inspect` — see [docs/security.md](docs/security.md#claude-oauth-token-docker-composeoauthyml) for details and mitigations.
+
+**When to use it:** you want frictionless session starts and don't need per-session
+credential isolation for this particular host.
+
+**Revoking:**
+
+```bash
+drydock revoke-token               # removes the local token file
+# Then also: claude.ai → Settings → revoke the token server-side
+```
+
+`drydock revoke-token` only removes the local file. To fully revoke the token
+(prevent any client using it from authenticating), visit claude.ai → Settings and
+revoke it there. drydock has no API surface to do this server-side.
+
+See [docs/troubleshooting.md](docs/troubleshooting.md#claude-prompts-for-login-every-session) for the full setup walkthrough.
 
 ## Two rules to know
 

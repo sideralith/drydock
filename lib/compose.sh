@@ -21,6 +21,7 @@ COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
 COMPOSE_MCP_AUTH="$DRYDOCK_HOME/docker-compose.mcp-auth.yml"
 COMPOSE_CCSTATUSLINE="$DRYDOCK_HOME/docker-compose.ccstatusline.yml"
 COMPOSE_HARDENING="$DRYDOCK_HOME/docker-compose.hardening.yml"
+COMPOSE_OAUTH="$DRYDOCK_HOME/docker-compose.oauth.yml"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
 
@@ -417,6 +418,9 @@ compose_files() {
 	if [ -n "${DRYDOCK_ENGRAM_SOURCE:-}" ]; then
 		printf '%s\n' "-f" "$COMPOSE_ENGRAM"
 	fi
+	if [ -n "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]; then
+		printf '%s\n' "-f" "$COMPOSE_OAUTH"
+	fi
 	# Auto-detect user-config opt-in overlays based on host directory presence.
 	# Activated only when the user has actually configured the tool — never
 	# creates empty dirs on hosts that don't use these tools. To opt in for the
@@ -569,6 +573,23 @@ export_compose_env() {
 			fi
 		else
 			export DRYDOCK_ENGRAM_SOURCE="$HOME/.engram-container"
+		fi
+	fi
+
+	# ── optional Claude OAuth token (host opt-in) ─────────────────────────────
+	# Token file: ~/.config/drydock/claude-oauth-token (DRYDOCK_OAUTH_TOKEN).
+	# File-absent → no export, no warn — matches SSH/GPG "feature off" pattern.
+	# Read only the first non-empty line then strip whitespace: a manually edited
+	# multi-line file is not silently concatenated into a garbled token.
+	# Empty-after-trim → no export (empty token must not activate the overlay).
+	# Unset first so re-invocations (e.g. after revoke-token in the same shell)
+	# re-derive state from the file rather than inheriting a stale var value.
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
+		local _oauth_token
+		_oauth_token="$(head -1 "$DRYDOCK_OAUTH_TOKEN" | tr -d '[:space:]')"
+		if [ -n "$_oauth_token" ]; then
+			export DRYDOCK_OAUTH_TOKEN_VALUE="$_oauth_token"
 		fi
 	fi
 
