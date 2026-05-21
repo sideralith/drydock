@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deprecation stub was kept.
 
 ### Added
+- **`drydock setup-token` / `drydock revoke-token`**: frictionless persistent
+  auth for container sessions. `drydock setup-token` runs `claude setup-token`
+  on the host, captures the resulting 1-year OAuth token, and writes it
+  atomically with mode `0600` to `~/.config/drydock/claude-oauth-token`. From
+  then on a new `docker-compose.oauth.yml` overlay auto-injects the token as
+  `CLAUDE_CODE_OAUTH_TOKEN` so every session starts without a browser login
+  prompt. `drydock revoke-token` removes the local token file (also revoke
+  server-side at claude.ai → Settings). `drydock doctor` shows the overlay as
+  active when the file is present. Closes #58.
 - **Homebrew packaging**: `packaging/homebrew/drydock.rb` formula source and
   `scripts/publish-homebrew-tap.sh` to publish/refresh the
   `sideralith/homebrew-tap` tap. Users install with

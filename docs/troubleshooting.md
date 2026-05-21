@@ -3,6 +3,46 @@
 Common failures and fixes. Run `drydock doctor` first — it shows versions,
 paths, mount detection, and GIDs.
 
+## Claude prompts for login every session
+
+By design, each drydock container does not inherit the host's OAuth credentials
+(`~/.claude/.credentials.json` is not synced into the container — INV-2 prevents
+the concurrent-write race that would cause both sessions to get logged out).
+
+**Friction-free fix — generate a 1-year OAuth token once:**
+
+```bash
+drydock setup-token
+```
+
+This runs `claude setup-token` (interactive browser flow on the host), captures
+the resulting token, and writes it atomically to
+`~/.config/drydock/claude-oauth-token` with mode `0600`. From then on drydock
+auto-includes a `docker-compose.oauth.yml` overlay that injects the token as
+`CLAUDE_CODE_OAUTH_TOKEN` — every session starts without a prompt.
+
+**If you prefer not to generate a long-lived token:** just log in when the prompt
+appears. The credentials are stored in the per-session container config and
+persist for the duration of that container's lifetime.
+
+**Revoking the token:**
+
+```bash
+drydock revoke-token
+```
+
+This removes the local token file. The token itself remains valid server-side until
+you revoke it at claude.ai → Settings. Always do both steps to fully revoke.
+
+**Security note:** the OAuth token grants approximately 1 year of Claude account
+access. It is stored at `~/.config/drydock/claude-oauth-token` (`0600`) and is
+already covered by the deny rule `Read(__HOME__/.config/drydock/**)` in the
+image-baked managed-settings layer — the agent inside the container cannot read
+the file. The token value reaches the container only via the `CLAUDE_CODE_OAUTH_TOKEN`
+environment variable; no bind-mount of the token file is ever created.
+
+See also: [docs/security.md](security.md#claude-oauth-token-docker-composeoauthyml).
+
 ## "Claude configuration file not found at: ~/.claude.json" / settings don't persist
 
 Claude Code reads config from TWO locations: the `~/.claude/` **directory**

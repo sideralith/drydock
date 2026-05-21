@@ -230,6 +230,36 @@ token would persist on disk, be discoverable via `find`, and not be scoped to
 the shell session. Docker secrets were evaluated and deferred; under threat
 model A the documented-and-flagged debug step already neutralizes the hazard.
 
+## Claude OAuth token (`docker-compose.oauth.yml`)
+
+When `drydock setup-token` is run, the resulting token is written to
+`~/.config/drydock/claude-oauth-token` with mode `0600`. This token grants
+approximately **1 year of Claude account access** — treat it as a high-value
+secret, at the same tier as a GitHub personal access token.
+
+### Mitigations in place
+
+| Mitigation | Detail |
+|---|---|
+| `0600` permissions | Written via `umask 077` + atomic `mktemp` + `mv` — never world-readable, not even transiently |
+| Location under `~/.config/drydock/` | Already covered by the image-baked deny rule `Read(__HOME__/.config/drydock/**)` in `00-secrets.json`. The agent inside the container cannot read the file via Claude Code's Read tool. |
+| Env-var-only delivery | The token value reaches the container exclusively as `CLAUDE_CODE_OAUTH_TOKEN` via the compose overlay. No bind-mount of the token file is ever created (SP-1 in the spec). |
+| No agent-path exposure | `docker-compose.oauth.yml` has no `volumes:` block — the file never appears at a path inside the container. |
+
+### Revocation is two-step
+
+`drydock revoke-token` removes the local file and deactivates the overlay for
+future sessions. The token itself remains valid server-side until revoked at
+claude.ai → Settings. Always do both steps to fully revoke.
+
+### Under the hood
+
+`export_compose_env()` reads the token file once per invocation, exports
+`DRYDOCK_OAUTH_TOKEN_VALUE`, and `compose_files()` includes the overlay only
+when that var is non-empty. The overlay injects the value as
+`CLAUDE_CODE_OAUTH_TOKEN` — Claude Code picks it up at precedence level 5
+(above `.credentials.json`), so sessions start without a browser login prompt.
+
 ## Destructive-command guardrail layer (v0.2.0+)
 
 drydock ships a two-tier defense against accident-class destructive commands.
