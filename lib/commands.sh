@@ -735,8 +735,14 @@ cmd_doctor() {
 	local _flag_count=0
 	case "${DRYDOCK_NO_HARDENING:-}" in
 	"") ;;
-	"1") _dr_item "⚠" "DRYDOCK_NO_HARDENING" "=1" "INV-8 hardening overlay disabled"; _flag_count=$((_flag_count + 1)) ;;
-	*) _dr_item "⚠" "DRYDOCK_NO_HARDENING" "=$DRYDOCK_NO_HARDENING" 'set but inert — only literal "1" disables'; _flag_count=$((_flag_count + 1)) ;;
+	"1")
+		_dr_item "⚠" "DRYDOCK_NO_HARDENING" "=1" "INV-8 hardening overlay disabled"
+		_flag_count=$((_flag_count + 1))
+		;;
+	*)
+		_dr_item "⚠" "DRYDOCK_NO_HARDENING" "=$DRYDOCK_NO_HARDENING" 'set but inert — only literal "1" disables'
+		_flag_count=$((_flag_count + 1))
+		;;
 	esac
 	if [ -n "${DRYDOCK_TMPFS_SIZE:-}" ]; then
 		_dr_item "✓" "DRYDOCK_TMPFS_SIZE" "=$DRYDOCK_TMPFS_SIZE" "tmpfs /tmp size override"
@@ -744,13 +750,25 @@ cmd_doctor() {
 	fi
 	case "${DRYDOCK_ENGRAM_SHARED:-}" in
 	"") ;;
-	"force") _dr_item "⚠" "DRYDOCK_ENGRAM_SHARED" "=force" "INV-5 fcntl-lock safety override"; _flag_count=$((_flag_count + 1)) ;;
-	*) _dr_item "⚠" "DRYDOCK_ENGRAM_SHARED" "=$DRYDOCK_ENGRAM_SHARED" 'set but inert — only literal "force" overrides'; _flag_count=$((_flag_count + 1)) ;;
+	"force")
+		_dr_item "⚠" "DRYDOCK_ENGRAM_SHARED" "=force" "INV-5 fcntl-lock safety override"
+		_flag_count=$((_flag_count + 1))
+		;;
+	*)
+		_dr_item "⚠" "DRYDOCK_ENGRAM_SHARED" "=$DRYDOCK_ENGRAM_SHARED" 'set but inert — only literal "force" overrides'
+		_flag_count=$((_flag_count + 1))
+		;;
 	esac
 	case "${DRYDOCK_SKIP_AUTOSYNC:-}" in
 	"" | "0") ;;
-	"1") _dr_item "⚠" "DRYDOCK_SKIP_AUTOSYNC" "=1" "host→container auto-sync disabled"; _flag_count=$((_flag_count + 1)) ;;
-	*) _dr_item "⚠" "DRYDOCK_SKIP_AUTOSYNC" "=$DRYDOCK_SKIP_AUTOSYNC" 'set but inert — only literal "1" disables'; _flag_count=$((_flag_count + 1)) ;;
+	"1")
+		_dr_item "⚠" "DRYDOCK_SKIP_AUTOSYNC" "=1" "host→container auto-sync disabled"
+		_flag_count=$((_flag_count + 1))
+		;;
+	*)
+		_dr_item "⚠" "DRYDOCK_SKIP_AUTOSYNC" "=$DRYDOCK_SKIP_AUTOSYNC" 'set but inert — only literal "1" disables'
+		_flag_count=$((_flag_count + 1))
+		;;
 	esac
 	if [ "$_flag_count" -eq 0 ]; then
 		_dr_item "·" "(none — defaults active)" ""
