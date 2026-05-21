@@ -719,10 +719,11 @@ cmd_doctor() {
 	if engram_usable; then
 		_dr_item "✓" "docker-compose.engram.yml" "" "engram on PATH"
 	fi
-	# OAuth token overlay: non-empty token file drives inclusion (matches the
-	# export_compose_env / compose_files activation gate — a zero-byte file
-	# must not be reported as active here either).
-	if [ -s "$DRYDOCK_OAUTH_TOKEN" ]; then
+	# OAuth token overlay: a non-empty first line (after whitespace stripping)
+	# drives inclusion — matches the export_compose_env / compose_files
+	# activation gate (head -1 | tr -d '[:space:]'). Both zero-byte AND
+	# whitespace-only token files must NOT be reported as active here.
+	if [ -n "$(head -1 "$DRYDOCK_OAUTH_TOKEN" 2>/dev/null | tr -d '[:space:]')" ]; then
 		_dr_item "✓" "docker-compose.oauth.yml" "" "OAuth token present"
 	fi
 	# Optional user-config opt-in overlays (auto-detected from host directories).

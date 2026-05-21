@@ -2342,6 +2342,46 @@ STUB
 	rm -rf "$tmpdir"
 }
 
+@test "cmd_doctor: whitespace-only token file — OAuth overlay NOT reported as active (FIX1 whitespace gate)" {
+	# Regression: a token file containing only whitespace (e.g. '   \n') must NOT
+	# activate the OAuth overlay in cmd_doctor. The activation gate uses head -1 |
+	# tr -d '[:space:]' to strip whitespace before testing non-empty — matching
+	# the same gate in export_compose_env / compose_files. Both zero-byte AND
+	# whitespace-only files must leave the OAuth overlay row silent.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a whitespace-only token file — [ -s ] is true (file has bytes),
+	# but the activation gate strips whitespace and tests non-empty.
+	mkdir -p "$fakehome/.config/drydock"
+	printf '   \n' >"$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# A whitespace-only token file must NOT make the doctor report the overlay as active.
+	[[ "$output" != *"OAuth token present"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
 # ── cmd_setup_token ───────────────────────────────────────────────────────────
 
 # Helper: set up a fake HOME with the minimum structure and a fake claude binary.
