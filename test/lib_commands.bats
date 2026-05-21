@@ -2303,6 +2303,45 @@ STUB
 	[ "$output" = "$fakehome/.config/drydock/keys/my-lib_deploy" ]
 }
 
+# ── cmd_doctor: OAuth overlay row (Fix3 zero-byte gate) ──────────────────────
+
+@test "cmd_doctor: zero-byte token file — OAuth overlay NOT reported as active (Fix3)" {
+	# Regression: cmd_doctor must only report the OAuth overlay active when the
+	# token file has non-empty content (matching the overlay-activation gate in
+	# export_compose_env / compose_files). A zero-byte file must NOT show as active.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a zero-byte token file ([ -f ] matches, but [ -s ] does not).
+	mkdir -p "$fakehome/.config/drydock"
+	printf '' >"$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# A zero-byte token file must NOT make the doctor report the overlay as active.
+	[[ "$output" != *"OAuth token present"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
 # ── cmd_setup_token ───────────────────────────────────────────────────────────
 
 # Helper: set up a fake HOME with the minimum structure and a fake claude binary.

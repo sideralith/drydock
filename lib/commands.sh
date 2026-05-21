@@ -719,8 +719,10 @@ cmd_doctor() {
 	if engram_usable; then
 		_dr_item "✓" "docker-compose.engram.yml" "" "engram on PATH"
 	fi
-	# OAuth token overlay: token file presence drives inclusion.
-	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
+	# OAuth token overlay: non-empty token file drives inclusion (matches the
+	# export_compose_env / compose_files activation gate — a zero-byte file
+	# must not be reported as active here either).
+	if [ -s "$DRYDOCK_OAUTH_TOKEN" ]; then
 		_dr_item "✓" "docker-compose.oauth.yml" "" "OAuth token present"
 	fi
 	# Optional user-config opt-in overlays (auto-detected from host directories).
@@ -864,7 +866,7 @@ cmd_setup_token() {
 	(
 		umask 077
 		mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
-	)
+	) || err "failed to create token directory $(dirname "$DRYDOCK_OAUTH_TOKEN") — check permissions"
 
 	# Overwrite guard: refuse without --force when file already exists (SR-5a).
 	# Print the file's age in days so the user knows whether the token is stale.
