@@ -20,4 +20,4 @@
 services:
   drydock:
     environment:
-      CLAUDE_CODE_OAUTH_TOKEN: "${DRYDOCK_OAUTH_TOKEN_VALUE}"
+      CLAUDE_CODE_OAUTH_TOKEN: "${DRYDOCK_OAUTH_TOKEN_VALUE:-}"
