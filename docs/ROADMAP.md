@@ -36,12 +36,14 @@ file.
 | [managed-settings-layer](#managed-settings-layer) | v0.2.0 | — | Done |
 | [destructive-command-guardrails](#destructive-command-guardrails) | v0.2.0 | [#30][i30] | Done |
 | [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Done |
+| [claude-oauth-token](#claude-oauth-token) | v0.2.1 | [#58][i58] | Done |
+| [doctor-staleness-warning](#doctor-staleness-warning) | v0.2.1 | [#60][i60] | Done |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.3.0 | [#17][i17] | Planned |
 | [agent-adapter](#agent-adapter) | v0.4.0 | [#18][i18] | Planned |
 
-Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene ·
+Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene & post-v0.2.0 polish ·
 **v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
 agent-agnostic infrastructure.
 
@@ -61,6 +63,8 @@ Order for later releases is not yet decided.
 [i30]: https://github.com/sideralith/drydock/issues/30
 [i31]: https://github.com/sideralith/drydock/issues/31
 [i47]: https://github.com/sideralith/drydock/issues/47
+[i58]: https://github.com/sideralith/drydock/issues/58
+[i60]: https://github.com/sideralith/drydock/issues/60
 
 ---
 
@@ -306,7 +310,43 @@ not reuse or kill the first.
 
 ---
 
-## v0.2.1 — CI hygiene
+## v0.2.1 — CI hygiene & post-v0.2.0 polish
+
+### claude-oauth-token
+
+**Status.** Done — shipped in v0.2.1 (issue #58 closed by PR #59).
+
+**Problem.** Every `drydock run` session required a browser-based login to
+authenticate Claude Code. There was no way to persist a Claude account OAuth
+token so sessions start pre-authenticated.
+
+**What shipped.** `drydock setup-token` prompts for a Claude OAuth token and
+writes it to `~/.config/drydock/claude-oauth-token` with mode `0600`. A new
+compose overlay (`docker-compose.oauth.yml`) injects the value as
+`CLAUDE_CODE_OAUTH_TOKEN` when the token file is present and non-empty — Claude
+Code picks it up at precedence level 5 (above `.credentials.json`). `drydock
+revoke-token` removes the local file; full revocation also requires visiting
+claude.ai → Settings. The token file is covered by the image-baked
+`Read(__HOME__/.config/drydock/**)` deny rule — the agent cannot read it.
+See [security.md — Claude OAuth token](security.md#claude-oauth-token-docker-composeoauthyml)
+for the full security discussion.
+
+**Provenance.** Issue [#58][i58], PR #59.
+
+### doctor-staleness-warning
+
+**Status.** Done — shipped in v0.2.1 (issue #60 closed by PR #61).
+
+**Problem.** The Claude OAuth token (`claude-oauth-token`) has a ~1-year
+lifetime. There was no built-in prompt for the approaching expiry — users
+would discover it only when sessions stopped authenticating.
+
+**What shipped.** `drydock doctor` (the existing health-check command) gained a
+D9 check that reads the token file's mtime. When the file is over 330 days old
+(~35-day runway before expiry), the row shows `⚠` instead of `✓` and points
+the user at `drydock setup-token --force` to refresh.
+
+**Provenance.** Issue [#60][i60], PR #61.
 
 ### ci-commit-lint
 

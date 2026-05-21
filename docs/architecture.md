@@ -189,7 +189,9 @@ Reasons (Claude config split — always applies):
 
 2. **OAuth refresh**: `~/.claude/.credentials.json` and `~/.claude.json`
    carry auth state. Concurrent refresh from two sessions = one invalidates
-   the other. Per-session copies avoid this.
+   the other. Per-session copies avoid this. `docker-compose.oauth.yml` is an
+   orthogonal, INV-2-compliant channel for persistent Claude account auth — it
+   injects the token as an env var rather than sharing any `~/.claude*` path.
 
 3. **Plugin install isolation**: `/plugin install foo` from inside the
    container lands in `~/.claude-container-<disc>/plugins/` only — the host
@@ -332,6 +334,24 @@ a documented non-goal per INV-6 and INV-7 — drydock defends against accidents,
 not adversaries.
 
 ## How drydock decides what to mount
+
+`compose_files()` assembles the `-f` list in a fixed order. The named static
+overlays and their activation conditions:
+
+| Overlay | Activates when |
+|---|---|
+| `docker-compose.yml` | always (base) |
+| `docker-compose.hardening.yml` | always, unless `DRYDOCK_NO_HARDENING=1` (INV-8 nuclear opt-out) |
+| `docker-compose.ssh.yml` | a primary deploy key or any RW sibling exists (`DRYDOCK_SSH_CONFIG` set) |
+| `docker-compose.gpg.yml` | a GPG signing key is configured (`DRYDOCK_GPG_SIGNINGKEY` set) |
+| `docker-compose.engram.yml` | engram is usable (`DRYDOCK_ENGRAM_SOURCE` set) |
+| `docker-compose.oauth.yml` | the OAuth token file is present and non-empty (`DRYDOCK_OAUTH_TOKEN_VALUE` set) |
+| `docker-compose.mcp-auth.yml` | the host directory `~/.mcp-auth` exists |
+| `docker-compose.ccstatusline.yml` | the host directory `~/.config/ccstatusline` exists |
+
+Ephemeral overlays (generated per-launch into `${TMPDIR}/drydock-*.yml` and
+cleaned up on exit) are described below alongside the mechanisms that produce
+them: sub-mount propagation and sibling links.
 
 Each `drydock run` invocation reads the **current project directory** (cwd or
 arg) and exports it as `PROJECT_DIR` to compose. The compose file uses
