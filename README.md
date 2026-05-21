@@ -67,21 +67,85 @@ Debian 12 slim container that:
 
 These raise the floor against agent *accidents* — not an adversarial sandbox. Full detail in [docs/security.md](docs/security.md).
 
+## Requirements
+
+### Host OS
+
+| Platform | Support |
+|----------|---------|
+| **Linux** (native) | First-class. Tested on Debian/Ubuntu. |
+| **WSL2** (Linux distro inside Windows) | First-class. Engineered around its quirks (9P FS, drvfs path translation). |
+| **macOS** | Supported but **not first-class** — community-tested. Expect rougher edges around bind-mount performance and TTY latency (see [troubleshooting](docs/troubleshooting.md#claude-code-output-feels-slightly-slower-than-running-on-host-tty-latency)). |
+| **Windows** (native, no WSL2) | NOT supported. Use WSL2 instead. |
+
+### Host tooling (mandatory)
+
+| Tool | Why | How to check |
+|------|-----|--------------|
+| **Docker** running on host | drydock is Docker-out-of-Docker; the container needs the host daemon. Use Docker Engine on Linux/WSL2 (recommended for performance), Docker Desktop on macOS. | `docker info` returns successfully |
+| **`docker compose` v2** | drydock uses `docker compose` (subcommand), not the legacy `docker-compose` binary. Ships with modern Docker installs. | `docker compose version` works |
+| **Bash ≥ 4** | The CLI (`bin/drydock`), the installer (`install.sh`), and lib scripts use arrays + modern parameter expansion. | `bash --version` |
+| **`git`** | The clone/curl install paths both clone the repo. | `git --version` |
+| **`jq`** | Used by drydock to filter the engram MCP entry out of the container's `.claude.json` when engram is unavailable (INV-4). | `jq --version` |
+| **`rsync`** | Used by `drydock sync` / `ensure_synced` to refresh the container's Claude config from the host. | `rsync --version` |
+| **`curl`** | Only needed if you use the one-line installer. | `curl --version` |
+
+The Homebrew install path (`brew install sideralith/tap/drydock`) handles
+`jq` and `rsync` automatically as formula deps. The clone and curl install
+paths assume both are already on `PATH` and exit clearly if not.
+
+### Claude Code on host (strongly recommended)
+
+drydock seeds the container's Claude config from the host's `~/.claude/`.
+Most users already have Claude Code installed on host — that's the
+expected starting point. Without a host `~/.claude/`, drydock still
+bootstraps but the container starts with no inherited settings, no MCP
+servers, no project list. You'd have to configure those inside the
+container by hand. Install Claude Code on host first.
+
+OAuth credentials (`~/.claude/.credentials.json`) are deliberately NOT
+synced into the container (INV-2 — prevents OAuth refresh race). Each
+session inside drydock logs in once — see
+[troubleshooting](docs/troubleshooting.md) for why.
+
+### Optional
+
+| Tool | What it adds |
+|------|--------------|
+| **`engram`** on host `PATH` | Persistent memory MCP server. Auto-detected per INV-4; everything works without it. |
+| **`gh`** CLI authenticated | Needed if you want the agent (or you) to do GitHub work from inside the container. Also required by the Homebrew tap publish script for maintainers. |
+| **GPG agent** + key | Only needed if you want signed commits inside the container; enabled via the GPG overlay. |
+
 ## Quick start
 
 drydock is a per-user, host-side tool — no system-wide install.
 
-**Recommended — interactive install (real terminal):**
+**Recommended — clone first, then install (real terminal):**
 
 ```bash
 git clone https://github.com/sideralith/drydock.git ~/drydock
 cd ~/drydock && ./install.sh
 ```
 
-When run in a terminal, the installer prompts to: (a) enable shared engram
-mode (native Linux only — INV-5), (b) build the Docker image now (~5 min),
-and (c) add `~/.local/bin` to your shell rc file. Every prompt defaults to
+This is the preferred path for security-conscious users: you can audit
+`install.sh`, the compose files, and the managed-settings drop-ins before
+running anything. When run in a terminal, the installer prompts to:
+(a) enable shared engram mode (native Linux only — INV-5),
+(b) build the Docker image now (~5 min), and
+(c) add `~/.local/bin` to your shell rc file. Every prompt defaults to
 "no" — pressing Enter keeps the safe defaults.
+
+**Via Homebrew (macOS + Linux, from v0.2.1):**
+
+```bash
+brew tap sideralith/tap
+brew install sideralith/tap/drydock
+```
+
+Brew handles `jq`/`rsync` deps and PATH; Docker is not a brew dep — install
+it separately (Docker Desktop on macOS, Docker Engine on Linux). After
+install, run `drydock build` once. The Homebrew tap source and the
+publish script live at `packaging/homebrew/`.
 
 **One-line / fresh-machine install:**
 
@@ -92,8 +156,10 @@ curl -fsSL https://raw.githubusercontent.com/sideralith/drydock/main/install.sh 
 The piped install is fully non-interactive — no prompts. It clones the repo
 and creates the symlink, then stops. Run `drydock build` and add
 `~/.local/bin` to PATH yourself (the installer prints the exact export line).
+If you'd rather inspect the installer before executing it, use the clone
+flow above.
 
-**After either install:**
+**After any install:**
 
 ```bash
 cd <project> && drydock   # launches Claude Code in this project, sandboxed
@@ -109,12 +175,8 @@ call `drydock setup` directly unless you want to.
 ## Usage
 
 ```bash
-# Existing project (already has .claude/settings.json):
+# In any project — drydock works out of the box, no per-project setup needed:
 cd ~/git/myproject && drydock
-
-# New project — seed a minimal .claude/settings.json stub (git-init mental model):
-drydock init ~/git/newproject
-cd ~/git/newproject && drydock
 
 # Other commands:
 drydock shell [DIR]      # bash inside the container — for debugging
@@ -124,6 +186,12 @@ drydock sync             # refresh container's ~/.claude/ + ~/.claude.json from 
 drydock build            # rebuild the image
 ```
 
+drydock's safety policy is image-baked (`/etc/claude-code/managed-settings.d/`,
+INV-3) and applies to every project automatically. You don't need to "initialize"
+a project before launching `drydock` in it — `.claude/settings.json` is created
+by Claude Code on demand (when you add MCP servers, hooks, or permissions),
+and stays optional.
+
 Inside the container, everything works as on host: `docker compose` against
 your stack, `docker exec` into a service, `curl http://localhost:PORT/...`,
 `git`, `gh`, etc. Whatever your project wraps those in (a Makefile, npm
@@ -132,7 +200,6 @@ scripts, a justfile) runs the same way.
 | Command | What it does |
 |---|---|
 | `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed — run it again for the same project to get a second concurrent session |
-| `drydock init [DIR]` | Per-project setup: seed a minimal `.claude/settings.json` stub for your own customization (drydock's deny policy is image-baked, applies automatically) |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
 | `drydock link [--rw] <PATH> [CONTAINER-PATH]` | Mount a sibling project inside the container at `/workspace-siblings/<name>` (or a custom path). Without `--rw`: read-only mount, no key needed. With `--rw`: read-write mount; generates a per-sibling deploy key and managed SSH config so the agent can `git push` from the sibling without exposing `~/.ssh/`. |
 | `drydock unlink PATH` | Remove a sibling mount from the current project's list |
@@ -230,8 +297,9 @@ See [docs/security.md](docs/security.md) for the cap list rationale.
 **Managed-settings layer (v0.2.0+):** drydock's tier-1 agent policy ships image-baked as Claude Code
 managed-settings drop-ins (`/etc/claude-code/managed-settings.d/`, root-owned). It applies
 automatically with zero per-project setup and cannot be weakened from a project's
-`.claude/settings.json`. `drydock init` seeds a minimal per-project stub for your own
-customization; the policy itself lives in the image.
+`.claude/settings.json`. A per-project `.claude/settings.json` is optional — Claude Code
+creates it lazily when you add MCP servers, hooks, or permissions, and the image-baked
+policy applies regardless of whether the file exists.
 
 The policy includes a **destructive-command guardrail layer**: a declarative deny set
 (`10-git-safety.json`, `30-os-safety.json`) covering protected-branch ops, history-rewrite,

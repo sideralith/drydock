@@ -31,6 +31,12 @@ IS_TTY=0
 # UNAME / OSRELEASE_FILE: OS-detection seams (same pattern as lib/paths.sh:20-21)
 : "${UNAME:=uname}"
 : "${OSRELEASE_FILE:=/proc/sys/kernel/osrelease}"
+# DRYDOCK_ENGRAM_BIN: name of the engram binary ask_engram_mode probes for on
+# PATH (INV-4 gate — no point prompting about engram the user doesn't have).
+# Seam for tests: point it at a stub name to simulate "engram present", or a
+# bogus name to exercise the "engram absent" branch — neither requires
+# installing engram on the CI runner.
+: "${DRYDOCK_ENGRAM_BIN:=engram}"
 # _DRYDOCK_TTY: input source seam; default /dev/tty
 
 # ── ANSI palette (mirrors lib/common.sh:12-18) ────────────────────────────────
@@ -70,9 +76,9 @@ step_fail() {
 
 print_next_steps() {
 	if [ "$IS_TTY" = "1" ]; then
-		printf '\n  next steps:\n\n    drydock build                   # ~5 min, first time\n    cd <project> && drydock init .  # per-project setup\n    cd <project> && drydock         # launch claude, sandboxed\n\n'
+		printf '\n  next steps:\n\n    drydock build              # ~5 min, first time\n    cd <project> && drydock    # launch claude, sandboxed\n\n'
 	else
-		printf '\nnext steps:\n  drydock build                   (5 min first time)\n  cd <project> && drydock init .  (per-project setup)\n  cd <project> && drydock         (launch claude, sandboxed)\n\n'
+		printf '\nnext steps:\n  drydock build              (5 min first time)\n  cd <project> && drydock    (launch claude, sandboxed)\n\n'
 	fi
 }
 
@@ -287,8 +293,12 @@ _host_shared_safe() {
 
 # ask_engram_mode — on native Linux: prompt to enable shared engram mode (INV-5).
 # WSL2 and macOS: silently skip (unsafe fcntl locks). Non-interactive: skip.
+# Engram not on PATH: silently skip — no point asking about a tool the user
+# doesn't have (INV-4: engram is optional). The probed binary name is the
+# DRYDOCK_ENGRAM_BIN seam (defaults to `engram`).
 ask_engram_mode() {
 	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
+	command -v "$DRYDOCK_ENGRAM_BIN" >/dev/null 2>&1 || return 0
 	_host_shared_safe || return 0
 
 	ask "Share engram DB with host session (native Linux only)? (INV-5)" n

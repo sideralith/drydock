@@ -4,10 +4,11 @@
 # Verifies the managed-settings drop-in directory structure (A-1..A-6)
 # and the Dockerfile bake step (T5, integration-only / skipped in unit mode).
 #
-# DRYDOCK_CANONICAL_SESSION_HOOK_CMD is the byte-identical command string that
-# cmd_init historically stamped into project settings.json files (resolved form).
-# Design D3 / spec R-7a require the managed-settings drop-in to carry the same
-# string so Claude Code's dedup fires against stale project files.
+# DRYDOCK_CANONICAL_SESSION_HOOK_CMD is the byte-identical command string used
+# by the SessionStart hook in `templates/managed-settings.d/20-hooks.json`
+# (resolved form). Design D3 / spec R-7a require the managed-settings drop-in
+# to carry exactly this string so Claude Code's hook-entry dedup fires against
+# any stale project-level files predating the v0.2.0 managed-settings layer.
 #
 # ── A-VERIFY-1: Claude Code Bash(...) wildcard semantics ─────────────────────
 # Verified 2026-05-18 from primary source:
@@ -42,7 +43,7 @@ load "helpers/load"
 
 # Canonical hook command (resolved form — uses /opt/drydock/, no __HOME__).
 # Must be byte-identical to:
-#   jq -r '.hooks.SessionStart[0].hooks[0].command' templates/default-settings.json
+#   jq -r '.hooks.SessionStart[0].hooks[0].command' templates/managed-settings.d/20-hooks.json
 DRYDOCK_CANONICAL_SESSION_HOOK_CMD="sh -c '[ -x /opt/drydock/hooks/drydock-session-start.sh ] && exec /opt/drydock/hooks/drydock-session-start.sh || exit 0'"
 export DRYDOCK_CANONICAL_SESSION_HOOK_CMD
 
@@ -727,10 +728,31 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     [ "$home_cred_rules" -eq 0 ]
 }
 
-@test "00-secrets: SCOPE GUARD — no .env rule in deny list" {
-    local env_rules
-    env_rules="$(jq '[.permissions.deny[] | select(test("\\.(env)\"?$|/\\.env"))] | length' "$SECRETS_FILE")"
-    [ "$env_rules" -eq 0 ]
+@test "00-secrets: R/E/W deny for .env and its common variants" {
+    # v0.2.1+: .env-family files are denied by drydock's managed-settings layer.
+    # Conservative variant enumeration — explicit names instead of a .env.* glob
+    # so .env.example / .env.template / .env.sample (template files, not secrets)
+    # remain readable. Closes the gap previously documented in security.md's
+    # "what drydock does NOT protect against" section.
+    local variant verb
+    for verb in "Read" "Edit" "Write"; do
+        for variant in ".env" ".env.local" ".env.production" ".env.development" ".env.test" ".env.staging"; do
+            jq -e --arg rule "${verb}(//**/${variant})" \
+                '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+                "$SECRETS_FILE" >/dev/null
+        done
+    done
+}
+
+@test "00-secrets: SCOPE GUARD — no broad .env.* glob in deny list (preserve .env.example readability)" {
+    # The .env coverage uses explicit variant enumeration, NOT a wildcard glob.
+    # A rule like Read(//**/.env.*) would also block .env.example / .env.template
+    # / .env.sample — conventional template files that should remain readable.
+    # This guard catches a future regression that tries to "simplify" the deny
+    # block with a glob.
+    local glob_rules
+    glob_rules="$(jq '[.permissions.deny[] | select(test("\\.env\\.\\*\\)$"))] | length' "$SECRETS_FILE")"
+    [ "$glob_rules" -eq 0 ]
 }
 
 # ── T19: INV-1 runtime integration — //**/ rules baked into the running image ───

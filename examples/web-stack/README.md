@@ -16,7 +16,6 @@ cp .env.example .env && docker compose up -d && curl http://localhost:18080/heal
 
 ```bash
 cp .env.example .env      # demo credentials; edit for non-demo use
-drydock init .            # materialize .claude/settings.json
 drydock                   # enter the drydock container
 
 # inside the container:

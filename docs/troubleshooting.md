@@ -107,6 +107,75 @@ docker image rm drydock:latest
 drydock build
 ```
 
+## Claude Code output feels slightly slower than running on host (TTY latency)
+
+If you notice Claude Code's streaming text output is **a bit slower inside
+drydock than running `claude` directly on the host**, this is a known
+side effect of the container's PTY chain — not something drydock can
+remove from its side without breaking the design.
+
+### The chain
+
+drydock launches each session via `docker compose run --rm` (see
+`lib/commands.sh`). Every byte the `claude` process writes flows through:
+
+```
+claude (container)
+  → containerd PTY
+  → Docker daemon
+  → docker compose CLI (host)
+  → your terminal
+```
+
+On native Linux with a local Docker Engine, every hop in that chain lives
+in the same kernel — added latency is microseconds, imperceptible.
+On WSL2 + Docker Desktop or macOS + Docker Desktop, the Docker daemon
+runs inside a **separate Linux VM** (HyperV on Windows, virtio on macOS).
+That adds one extra IPC bridge per byte:
+
+```
+claude (container)
+  → containerd PTY
+  → Docker daemon IN VM
+  → VM ↔ host bridge   ← extra hop here
+  → docker compose CLI (host)
+  → your terminal
+```
+
+Per-byte RTT goes up by ~5-15 ms depending on the bridge implementation.
+Claude Code emits many small streamed chunks, so the sum is perceptible
+as "feels a touch slower."
+
+### Mitigations
+
+| Host OS | Bridge | Best mitigation |
+|---------|--------|-----------------|
+| **Linux native** | None — same kernel | Already optimal. |
+| **WSL2** (with Docker Desktop) | HyperV VM, 9P/named-pipe | Switch to **Docker Engine inside the WSL2 distro** (install `docker-ce` in WSL2 and disable Docker Desktop's WSL2 integration). Removes the HyperV hop. Largest payoff of any mitigation listed. |
+| **macOS** (Docker Desktop, virtiofs) | virtio-VM | Modern Docker Desktop already uses **virtiofs** (much better than legacy gRPC-FUSE). Alternatives: **OrbStack** (paid, fast Rosetta-backed VM) or **Colima** (free, lima/QEMU). All still have a VM hop — macOS has no equivalent to "Linux in a Linux VM" so the bridge is unavoidable. |
+| **macOS Apple Silicon** | virtio-VM | Same as above; ensure Docker Desktop uses VirtualizationFramework (Settings → General → "Use Virtualization framework"), not the legacy QEMU backend. |
+
+### What drydock cannot easily change
+
+A long-running container per project with `docker exec` per session would
+save the container creation cost (one-off, ~1 s) but **does not reduce
+per-byte TTY latency** — the daemon-to-host bridge is unchanged. It also
+sacrifices the `--rm` ephemeral-container design that backs INV-2 (each
+session a clean state). drydock keeps `compose run --rm` deliberately.
+
+### What to check first
+
+If the latency feels worse than the description above (multi-second pauses,
+not just a faint streaming feel), the cause is probably **not** the PTY
+chain. Look for:
+
+- **`drydock build` not yet run** — the auto-sync step on first invocation
+  can take seconds the first time.
+- **Engram shared-mode misconfigured** on WSL2/macOS — should never trigger
+  (INV-5 force-downgrade), but verify with `drydock doctor`.
+- **A heavy MCP server in `~/.claude.json`** — every Claude Code start
+  loads MCP servers in parallel; a slow one delays first output.
+
 ## A command was unexpectedly blocked by the guardrail layer
 
 drydock ships a two-tier guardrail layer. Both tiers are tamper-proof — Tier 1
@@ -274,6 +343,14 @@ preserved.
 **`.env` is gitignored**: ensure your project's `.gitignore` includes
 `.env` (this is the standard pattern). drydock's marker block contains
 host-specific paths and should never be committed.
+
+**Interaction with the managed-settings `.env` deny.** Since v0.2.1
+`00-secrets.json` denies `Read`/`Edit`/`Write` on `.env` and its common
+variants via Claude Code's tool layer. drydock's marker-block auto-edit
+is unaffected: the drydock CLI writes the marker block via direct shell
+file I/O (not through Claude Code's `Write` tool), so the deny does not
+apply. The deny only blocks the agent from reading or modifying `.env`
+through Claude Code's tools — which is the intended protection.
 
 **Opt out**: set `DRYDOCK_SKIP_ENV_WRITE=1` in your environment to disable
 the `.env` auto-edit. The overlay environment passthrough (item 2 above)

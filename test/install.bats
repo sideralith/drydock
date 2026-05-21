@@ -88,6 +88,19 @@ setup() {
 	make_osrelease_fixture "$OSRELEASE_DIR/wsl2" "5.15.167.4-microsoft-standard-WSL2"
 	# macOS is simulated via UNAME stub (no osrelease on macOS)
 	make_uname_stub "$FAKE_BIN" "Darwin"
+
+	# engram stub on PATH — ask_engram_mode gates the shared-engram prompt on
+	# `command -v $DRYDOCK_ENGRAM_BIN` (INV-4). CI runners have no engram, so
+	# without this stub the native-Linux prompt would silently skip and the
+	# fixed answer sequences in the interactive tests would shift. A dedicated
+	# dir (NOT $FAKE_BIN, which carries the Darwin uname stub) keeps the PATH
+	# addition limited to `engram`. The "engram absent" branch of the gate is
+	# covered explicitly by the dedicated test below via DRYDOCK_ENGRAM_BIN.
+	ENGRAM_STUB_DIR="$BATS_TEST_TMPDIR/engram-stub"
+	mkdir -p "$ENGRAM_STUB_DIR"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$ENGRAM_STUB_DIR/engram"
+	chmod +x "$ENGRAM_STUB_DIR/engram"
+	export PATH="$ENGRAM_STUB_DIR:$PATH"
 }
 
 # Case 1: happy_path_fresh
@@ -200,6 +213,30 @@ setup() {
 		bash "$INSTALL_SH"
 	assert_success
 	assert [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
+@test "ask_engram_mode: engram absent on PATH — no prompt, sentinel NOT created (INV-4 gate)" {
+	# Native Linux (so _host_shared_safe would say "safe" — isolating the skip
+	# to the engram-presence gate), interactive, TTY says 'y'. DRYDOCK_ENGRAM_BIN
+	# points at a binary that does not exist → ask_engram_mode skips the prompt
+	# before reaching _host_shared_safe → sentinel never written even though the
+	# OS would allow shared mode and the user "said yes".
+	local _home="$BATS_TEST_TMPDIR/home-no-engram"
+	local _tty="$BATS_TEST_TMPDIR/tty-no-engram"
+	printf 'y\n' >"$_tty" # would say yes if the prompt appeared
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		DRYDOCK_ENGRAM_BIN=__drydock_no_such_engram__ \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
 }
 
 @test "ask(): empty input (newline only) applies default n — sentinel not created" {

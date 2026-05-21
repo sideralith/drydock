@@ -251,7 +251,8 @@ setup() {
 	image_exists() { return 1; }
 
 	run cmd_status
-	[[ "$output" == *"not detected (opt-in)"* ]]
+	[[ "$output" == *"not detected"* ]]
+	[[ "$output" == *"opt-in"* ]]
 }
 
 @test "cmd_status: engram usable + isolated — output contains 'isolated (~/.engram-container)'" {
@@ -270,7 +271,9 @@ setup() {
 	image_exists() { return 1; }
 
 	run cmd_status
-	[[ "$output" == *"isolated (~/.engram-container)"* ]]
+	# New layout puts "isolated" and "~/.engram-container" in separate columns.
+	[[ "$output" == *"isolated"* ]]
+	[[ "$output" == *"~/.engram-container"* ]]
 }
 
 # ── MCP filter: cmd_setup × ~/.claude-container.json ─────────────────────────
@@ -1573,6 +1576,258 @@ _setup_ensure_synced() {
 
 	cd - >/dev/null
 	rm -rf "$tmpdir"
+}
+
+# ── cmd_doctor: linked-siblings section ──────────────────────────────────────
+# G-3: doctor must surface linked siblings for the current project (the same
+#      data `drydock links` prints). Two cases: empty/missing list → "(none
+#      linked)" hint; populated list → one line per entry with mode suffix.
+
+@test "usage: help output contains expected sections + version + key commands" {
+	# Smoke test for the help styling. Doesn't pin exact ANSI codes — just
+	# verifies the new section structure rendered correctly under non-TTY
+	# (plain text), and that all command names that bin/drydock dispatches on
+	# appear in the help.
+	source "$DRYDOCK_HOME/lib/common.sh"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	run usage
+	[ "$status" -eq 0 ]
+	# Title line
+	[[ "$output" == *"drydock $DRYDOCK_VERSION"* ]]
+	[[ "$output" == *"containerized Claude Code sandbox"* ]]
+	# Section headers
+	[[ "$output" == *"USAGE"* ]]
+	[[ "$output" == *"COMMANDS"* ]]
+	[[ "$output" == *"EXAMPLES"* ]]
+	[[ "$output" == *"ENV"* ]]
+	# A sampling of command names — failures here mean a dispatch target was
+	# accidentally dropped from help.
+	for _cmd in "run" "shell" "build" "sync" "status" "doctor" "setup" \
+		"link" "unlink" "links" "version" "help"; do
+		[[ "$output" == *"$_cmd"* ]] || {
+			echo "missing command '$_cmd' in help output" >&2
+			false
+		}
+	done
+}
+
+@test "cmd_doctor: linked-siblings section shows '(none linked)' when no list file exists" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"LINKED SIBLINGS"* ]]
+	[[ "$output" == *"(none linked)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: env-flags section shows '(none — defaults active)' with no DRYDOCK_* set" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Defensive unset — these may leak in from the developer shell.
+	unset DRYDOCK_NO_HARDENING DRYDOCK_TMPFS_SIZE DRYDOCK_ENGRAM_SHARED DRYDOCK_SKIP_AUTOSYNC
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"ENV FLAGS"* ]]
+	[[ "$output" == *"(none — defaults active)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: env-flags section surfaces DRYDOCK_NO_HARDENING when set" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	unset DRYDOCK_TMPFS_SIZE DRYDOCK_ENGRAM_SHARED DRYDOCK_SKIP_AUTOSYNC
+	export DRYDOCK_NO_HARDENING=1
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"DRYDOCK_NO_HARDENING"* ]]
+	[[ "$output" == *"=1"* ]]
+	# Hardening overlay must be reported as DISABLED, not active.
+	[[ "$output" == *"DISABLED"* ]]
+	[[ "$output" != *"(none — defaults active)"* ]]
+
+	unset DRYDOCK_NO_HARDENING
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: compose-overlays section lists base + hardening by default" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	unset DRYDOCK_NO_HARDENING
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"COMPOSE OVERLAYS"* ]]
+	[[ "$output" == *"docker-compose.yml"* ]]
+	[[ "$output" == *"base"* ]]
+	[[ "$output" == *"docker-compose.hardening.yml"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: active-sessions section shows '(none running)' when no docker container matches" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Stub DOCKER seam to emit no rows.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-empty-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$stub_dir/docker"
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"ACTIVE SESSIONS"* ]]
+	[[ "$output" == *"(none running)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: linked-siblings section lists entries from the project's list file" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Seed a list file at the path cmd_doctor will resolve via
+	# _links_list_file → _current_project_name → sanitize(basename(pwd)).
+	local proj_dir="$BATS_TEST_TMPDIR/myproj"
+	mkdir -p "$proj_dir"
+	mkdir -p "$fakehome/.config/drydock/links"
+	printf '%s|%s|\n' "/host/path/sibling-a" "/workspace-siblings/sibling-a" \
+		>"$fakehome/.config/drydock/links/myproj.list"
+	printf '%s|%s|rw\n' "/host/path/sibling-b" "/workspace-siblings/sibling-b" \
+		>>"$fakehome/.config/drydock/links/myproj.list"
+
+	cd "$proj_dir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"LINKED SIBLINGS"* ]]
+	[[ "$output" == *"/host/path/sibling-a"* ]]
+	[[ "$output" == *"/workspace-siblings/sibling-a"* ]]
+	# Mode appears as the dim metadata suffix ("· ro" / "· rw") in the new layout.
+	[[ "$output" == *"ro"* ]]
+	[[ "$output" == *"/host/path/sibling-b"* ]]
+	[[ "$output" == *"rw"* ]]
+	# Empty-state hint must NOT appear when entries exist.
+	[[ "$output" != *"(none linked)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$proj_dir"
 }
 
 # ── cmd_run / cmd_shell name tests (concurrent-sessions, PR 2 Wire-in) ────────

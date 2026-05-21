@@ -47,10 +47,6 @@ setup() {
   declare -f detect_submounts > /dev/null
 }
 
-@test "cmd_init is defined after sourcing" {
-  declare -f cmd_init > /dev/null
-}
-
 @test "main is defined after sourcing" {
   declare -f main > /dev/null
 }
