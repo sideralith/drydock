@@ -683,7 +683,25 @@ cmd_doctor() {
 		while IFS='|' read -r _sess_name _sess_status; do
 			[ -z "$_sess_name" ] && continue
 			_dr_item "✓" "$_sess_name" "$_sess_status"
+			# Resume cheat-sheet — the command to re-enter this LIVE container
+			# and recover the work. A -shell companion reattaches into bash; a
+			# run session reattaches Claude's conversation history via
+			# `claude --continue`. Both only work while the container is still
+			# running — this is not a way to revive a session whose container
+			# has already exited.
+			case "$_sess_name" in
+			*-shell)
+				_dr_item "·" "  re-enter" "docker exec -it $_sess_name bash"
+				;;
+			*)
+				_dr_item "·" "  resume" "docker exec -it $_sess_name claude --continue"
+				;;
+			esac
 		done <<<"$_sess_lines"
+		# INV-2 caveat: exec'ing a second Claude into a live run session puts
+		# two writers on the same per-session config (~/.claude.json + the
+		# session JSONL). Surface the hazard here rather than hiding it.
+		_dr_item "⚠" "  caveat" "" "re-entering a live run starts a 2nd Claude on one config (INV-2)"
 	fi
 
 	# ── COMPOSE OVERLAYS ───────────────────────────────────────────────────────

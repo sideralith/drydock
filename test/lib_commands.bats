@@ -1785,6 +1785,94 @@ _setup_ensure_synced() {
 	rm -rf "$tmpdir"
 }
 
+@test "cmd_doctor: active-sessions lists the resume command for a running run session" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Stub DOCKER ps to emit one running run session for project "myproj".
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-runsess-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-a1b2c3d4|Up 5 minutes\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	local tmpdir="$BATS_TEST_TMPDIR/myproj"
+	mkdir -p "$tmpdir"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"drydock-myproj-a1b2c3d4"* ]]
+	# Resume cheat-sheet: the exec command to re-enter this live session.
+	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4 claude --continue"* ]]
+	# INV-2 caveat must be surfaced, not hidden.
+	[[ "$output" == *"INV-2"* ]]
+
+	cd - >/dev/null
+}
+
+@test "cmd_doctor: active-sessions lists a bash re-enter command for a -shell session" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Stub DOCKER ps to emit one running -shell companion for project "myproj".
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-shellsess-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-a1b2c3d4-shell|Up 2 minutes\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	local tmpdir="$BATS_TEST_TMPDIR/myproj"
+	mkdir -p "$tmpdir"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"drydock-myproj-a1b2c3d4-shell"* ]]
+	# A -shell companion reattaches into an interactive bash, not claude.
+	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4-shell bash"* ]]
+
+	cd - >/dev/null
+}
+
 @test "cmd_doctor: linked-siblings section lists entries from the project's list file" {
 	setup_no_engram_on_path
 	setup_plain_linux_seams
