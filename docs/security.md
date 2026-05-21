@@ -245,6 +245,7 @@ secret, at the same tier as a GitHub personal access token.
 | Location under `~/.config/drydock/` | Already covered by the image-baked deny rule `Read(__HOME__/.config/drydock/**)` in `00-secrets.json`. The agent inside the container cannot read the file via Claude Code's Read tool. |
 | Env-var-only delivery | The token value reaches the container exclusively as `CLAUDE_CODE_OAUTH_TOKEN` via the compose overlay. No bind-mount of the token file is ever created (SP-1 in the spec). |
 | No agent-path exposure | `docker-compose.oauth.yml` has no `volumes:` block — the file never appears at a path inside the container. |
+| Staleness warning | `drydock doctor` checks the token file's mtime; once the file is over 330 days old it shows a `⚠` row instead of `✓`, pointing at `drydock setup-token --force` to refresh. This gives ~35 days of runway before the ~1-year token expires. |
 
 ### docker inspect renders the token in plaintext
 
