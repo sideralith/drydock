@@ -853,6 +853,9 @@ cmd_setup_token() {
 		esac
 	done
 
+	# SR-1: fail early with install guidance if the claude binary is not on PATH.
+	command -v "$CLAUDE_BIN" >/dev/null 2>&1 || err "claude (Claude Code CLI) not found — install Claude Code CLI before running 'drydock setup-token'"
+
 	# Ensure the target directory exists before attempting mktemp inside it.
 	mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
 

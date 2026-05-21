@@ -2430,6 +2430,30 @@ STUB
 	run cmd_setup_token
 	[ "$status" -ne 0 ]
 	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+	# SR-1: error output must instruct the user to install Claude Code CLI (W1).
+	[[ "$output" == *"install"* ]]
+}
+
+@test "cmd_setup_token: whitespace token rejected — non-zero exit, no file written (SR-2c)" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-ws-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-ws-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\necho "this token has internal spaces"\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
 }
 
 # ── cmd_revoke_token ──────────────────────────────────────────────────────────
