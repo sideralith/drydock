@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does NOT protect against" section.
 
 ### Changed
+- **`drydock doctor` — OAuth token staleness warning**: when the OAuth token
+  file is present, `doctor` now computes its age from the file mtime and shows
+  a `⚠` row instead of the `✓` row once the token is over 330 days old
+  (~35-day runway before the ~1-year token expires), pointing the user at
+  `drydock setup-token --force` to refresh. Closes #60.
 - **`install.sh`**: the shared-engram-mode prompt now skips silently when
   `engram` is not on `PATH`. Previously the prompt appeared on every native
   Linux install regardless — useless for users without engram (INV-4: engram
