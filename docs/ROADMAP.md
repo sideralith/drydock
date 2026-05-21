@@ -342,7 +342,7 @@ lifetime. There was no built-in prompt for the approaching expiry — users
 would discover it only when sessions stopped authenticating.
 
 **What shipped.** `drydock doctor` (the existing health-check command) gained a
-D9 check that reads the token file's mtime. When the file is over 330 days old
+check that reads the token file's mtime. When the file is over 330 days old
 (~35-day runway before expiry), the row shows `⚠` instead of `✓` and points
 the user at `drydock setup-token --force` to refresh.
 
