@@ -34,9 +34,8 @@ dir_allows_exec() {
 
 tmpdir=${TMPDIR:-/tmp}
 if ! dir_allows_exec "$tmpdir"; then
-	# $HOME is writable and exec-allowed inside the container; ~/.cache is not
-	# (it is created root-owned during the image build), so redirect straight
-	# into $HOME rather than under ~/.cache.
+	# $HOME is writable and exec-allowed inside the container; redirect bats's
+	# run-tmpdir straight into $HOME (~/.bats-tmp) rather than the noexec /tmp.
 	exec_tmp="${HOME:?HOME must be set to redirect a noexec TMPDIR}/.bats-tmp"
 	mkdir -p "$exec_tmp"
 	if ! dir_allows_exec "$exec_tmp"; then
