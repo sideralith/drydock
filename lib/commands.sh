@@ -712,6 +712,10 @@ cmd_doctor() {
 	if engram_usable; then
 		_dr_item "✓" "docker-compose.engram.yml" "" "engram on PATH"
 	fi
+	# OAuth token overlay: token file presence drives inclusion.
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
+		_dr_item "✓" "docker-compose.oauth.yml" "" "OAuth token present"
+	fi
 	# Optional user-config opt-in overlays (auto-detected from host directories).
 	# Tilde-literals in the meta column are display text (not paths to expand);
 	# disable SC2088 explicitly for the two affected calls.
