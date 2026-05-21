@@ -53,6 +53,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template suffixes are intentionally not covered (they should be readable).
   Closes the gap previously documented in `docs/security.md`'s "what drydock
   does NOT protect against" section.
+- **`drydock doctor` — resume cheat-sheet for active sessions.** The ACTIVE
+  SESSIONS section now prints, under each running container, the `docker exec`
+  command to re-enter that live session and recover the work — `claude
+  --continue` for run sessions, `bash` for `-shell` companions. Handy for
+  rejoining a session whose terminal was closed. A `⚠` caveat notes that
+  re-entering a live run session starts a second Claude against one shared
+  per-session config (INV-2).
+
+### Fixed
+- **Root-owned `~/.cache` and `~/.config` inside the container.** Docker
+  creates any missing parent directory of a bind-mount target as `root:root`.
+  The base compose mounts `~/.config/gh` and the ccstatusline overlay mounts
+  `~/.cache/ccstatusline`, so their parent directories were created
+  root-owned — leaving the non-root agent unable to write any other subdir
+  under them (e.g. the Playwright MCP downloading Chromium to
+  `~/.cache/ms-playwright`). The `Dockerfile` now pre-creates `~/.cache` and
+  `~/.config` owned by the container user before the `USER` switch;
+  bind-mounting into an already-existing directory leaves its ownership
+  intact.
 
 ### Changed
 - **`drydock doctor` — OAuth token staleness warning**: when the OAuth token

@@ -39,13 +39,14 @@ file.
 | [claude-oauth-token](#claude-oauth-token) | v0.2.1 | [#58][i58] | Done |
 | [doctor-staleness-warning](#doctor-staleness-warning) | v0.2.1 | [#60][i60] | Done |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
+| [session-persistence](#session-persistence) | v0.2.2 | [#64][i64] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.3.0 | [#17][i17] | Planned |
 | [agent-adapter](#agent-adapter) | v0.4.0 | [#18][i18] | Planned |
 
 Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene & post-v0.2.0 polish ·
-**v0.3.0**: per-project environment customization · **v0.4.0**: drydock as
-agent-agnostic infrastructure.
+**v0.2.2**: session persistence & ergonomics · **v0.3.0**: per-project environment customization ·
+**v0.4.0**: drydock as agent-agnostic infrastructure.
 
 Resolution order — **v0.2.0**: install-interactive → auto-sync →
 concurrent-sessions → link-sibling-projects.
@@ -65,6 +66,7 @@ Order for later releases is not yet decided.
 [i47]: https://github.com/sideralith/drydock/issues/47
 [i58]: https://github.com/sideralith/drydock/issues/58
 [i60]: https://github.com/sideralith/drydock/issues/60
+[i64]: https://github.com/sideralith/drydock/issues/64
 
 ---
 
@@ -367,6 +369,53 @@ the v0.2.0 feature story and shipped as a small hygiene patch.
 check.
 
 **Provenance.** The §5 enforcement gap; this session; issue [#10][i10].
+
+---
+
+## v0.2.2 — Session persistence & ergonomics
+
+### session-persistence
+
+**Status: Planned (v0.2.2, issue #64).**
+
+**Problem.** A `drydock run` session does not reliably survive the host
+terminal closing. `cmd_run` launches Claude via `docker compose run --rm`
+attached to the terminal; on terminal close the outcome is nondeterministic —
+a clean `SIGHUP` is forwarded to `claude` (session dies, `--rm` removes the
+container), an abrupt teardown is not (the container survives orphaned in the
+Docker VM). Survival is luck, not design.
+
+**Proposed solution.** Make persistence deterministic: run Claude inside a
+detach-capable layer in the container so `SIGHUP` cannot kill it — closing the
+terminal merely detaches. A `drydock attach` command reattaches to a live
+session; the container is torn down only when Claude itself exits, making
+`/exit` the single end condition. Leading substrate: **Zellij** (over
+`abduco` / `dtach` — detach-only, no path to a later session UI — and `tmux` —
+breaks mouse scroll in alternate-screen TUIs). Interim mitigation already
+shipped: `drydock doctor` prints a `docker exec` resume cheat-sheet per live
+session.
+
+**Why this scope.** Ergonomics — the in-container equivalent of `tmux` on the
+host. Squarely threat model A (INV-7): a closed terminal losing an in-progress
+agent task is the footgun class drydock exists to catch.
+
+**Invariants touched.** INV-2 — the detach layer must wrap Claude inside the
+*same* per-session `~/.claude-container-<disc>/` config; no new write-sharing.
+INV-7 — ergonomics only, no adversarial protection, no invariant amendment.
+
+**Open questions.** Substrate confirmation (Zellij vs. alternatives); the
+`drydock attach` command name and UX; the container teardown-on-exit
+mechanism; how `--rm` semantics change. Resolved in the SDD.
+
+**Non-goals.** The session-management UI (sidebar of sessions, tabs to switch
+between concurrent sessions) and the programmatic orchestrator / dashboard
+layer are out of scope. Each is a separate effort with its own issue and SDD,
+building on the multiplexer substrate this item establishes — not folded in
+here.
+
+**Provenance.** This session; issue [#64][i64]. Surfaced from a container
+permissions audit that also fixed root-owned `~/.cache` / `~/.config` and added
+the doctor resume cheat-sheet.
 
 ---
 
