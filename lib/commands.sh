@@ -7,6 +7,11 @@
 #           lib/paths.sh (resolve_project_dir, path constants),
 #           lib/compose.sh (image_exists, ensure_*, compose_files, DOCKER).
 
+# ── CLAUDE_BIN seam ───────────────────────────────────────────────────────────
+# Override in tests: export CLAUDE_BIN=/path/to/fake-claude before sourcing.
+# Matches the DOCKER/UNAME/DRYDOCK_DISCRIMINATOR_FN seam idiom.
+: "${CLAUDE_BIN:=claude}"
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -820,6 +825,88 @@ _check_path_metachar() {
 	if [[ "$_p" =~ [[:cntrl:]] ]]; then
 		err "rejected: $_label contains a control character (including newline)"
 	fi
+}
+
+# ── cmd_setup_token ───────────────────────────────────────────────────────────
+
+# cmd_setup_token [--force]
+# Runs `claude setup-token` on the host, captures the resulting OAuth token,
+# validates it, and writes it atomically to DRYDOCK_OAUTH_TOKEN (0600).
+# Refuses to overwrite an existing token without --force.
+cmd_setup_token() {
+	local force=0
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--force)
+			force=1
+			shift
+			;;
+		-*)
+			err "unknown option: $1"
+			;;
+		*)
+			err "unexpected argument: $1"
+			;;
+		esac
+	done
+
+	# Ensure the target directory exists before attempting mktemp inside it.
+	mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
+
+	# Overwrite guard: refuse without --force when file already exists.
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ] && [ "$force" -eq 0 ]; then
+		err "token file already exists at $DRYDOCK_OAUTH_TOKEN — pass --force to overwrite"
+	fi
+
+	# Run claude setup-token. Capture stdout; let stderr flow to the terminal so
+	# the user sees the interactive browser flow and any upstream errors.
+	# Explicit exit-code capture prevents set -e from aborting before we can
+	# emit a clean error message on non-zero exit (SR-3: user abort).
+	local _out _rc=0
+	_out="$("$CLAUDE_BIN" setup-token 2>/dev/null)" || _rc=$?
+	if [ "$_rc" -ne 0 ]; then
+		err "claude setup-token exited with status $_rc — token not saved"
+	fi
+
+	# Token parse — the single point to update if claude setup-token output format drifts.
+	# Primary: match sk-ant- prefix (known current format).
+	# Fallback: first line that looks like a bare token (40+ contiguous word chars).
+	local _token
+	_token="$(printf '%s' "$_out" | grep -oE 'sk-ant-[A-Za-z0-9_-]{20,}' | head -1 || true)"
+	if [ -z "$_token" ]; then
+		_token="$(printf '%s' "$_out" | grep -E '^[A-Za-z0-9._-]{40,}$' | head -1 || true)"
+	fi
+
+	if [ -z "$_token" ]; then
+		err "could not parse a token from 'claude setup-token' output — output format may have changed; retry 'drydock setup-token'"
+	fi
+
+	# Atomic 0600 write: umask 077 ensures the temp file is never world-readable,
+	# even transiently. mv -f is atomic on POSIX filesystems so a SIGINT mid-write
+	# never leaves a partial token.
+	local _tmp
+	_tmp="$(mktemp "$(dirname "$DRYDOCK_OAUTH_TOKEN")/.oauth-XXXXXX")"
+	(umask 077; printf '%s\n' "$_token" >"$_tmp") && mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN"
+
+	ok "OAuth token saved to $DRYDOCK_OAUTH_TOKEN"
+	note "This token is valid for approximately 1 year. To refresh: drydock setup-token --force"
+	note "To fully revoke: run 'drydock revoke-token', then visit claude.ai → Settings to revoke server-side"
+}
+
+# ── cmd_revoke_token ──────────────────────────────────────────────────────────
+
+# cmd_revoke_token
+# Removes the local OAuth token file (idempotent). Prints a mandatory notice
+# that server-side revocation requires claude.ai → Settings (SR-7).
+cmd_revoke_token() {
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
+		rm -f "$DRYDOCK_OAUTH_TOKEN"
+		ok "Local OAuth token removed from $DRYDOCK_OAUTH_TOKEN"
+	else
+		note "No local token file to remove (already absent)"
+	fi
+	note "IMPORTANT: drydock cannot revoke the token server-side. To fully revoke, visit claude.ai → Settings and revoke the token there."
 }
 
 # ── cmd_link ──────────────────────────────────────────────────────────────────

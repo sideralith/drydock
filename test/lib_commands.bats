@@ -2302,3 +2302,166 @@ STUB
 	[ "$status" -eq 0 ]
 	[ "$output" = "$fakehome/.config/drydock/keys/my-lib_deploy" ]
 }
+
+# ── cmd_setup_token ───────────────────────────────────────────────────────────
+
+# Helper: set up a fake HOME with the minimum structure and a fake claude binary.
+# The fake-claude script echoes a canned token on stdout.
+_setup_token_env() {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Fake claude binary: emits a known token to stdout.
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-bin-$$"
+	mkdir -p "$fake_bin"
+	cat >"$fake_bin/fake-claude" <<'STUB'
+#!/usr/bin/env bash
+echo "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
+STUB
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+}
+
+@test "cmd_setup_token: happy path — file written at correct path, mode 0600, content equals token" {
+	_setup_token_env
+	run cmd_setup_token
+	[ "$status" -eq 0 ]
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	[ -f "$token_file" ]
+	local perms
+	perms="$(stat -c '%a' "$token_file")"
+	[ "$perms" = "600" ]
+	local content
+	content="$(cat "$token_file")"
+	[ "$content" = "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6" ]
+}
+
+@test "cmd_setup_token: refuse overwrite without --force — non-zero exit, existing file untouched" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'existing-token-content\n' >"$token_file"
+	chmod 600 "$token_file"
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	# Existing file must be untouched.
+	local content
+	content="$(cat "$token_file")"
+	[ "$content" = "existing-token-content" ]
+}
+
+@test "cmd_setup_token: --force overwrite — overwrites with new token, exit 0" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'old-token-content\n' >"$token_file"
+	chmod 600 "$token_file"
+	run cmd_setup_token --force
+	[ "$status" -eq 0 ]
+	local content
+	content="$(cat "$token_file")"
+	[ "$content" = "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6" ]
+}
+
+@test "cmd_setup_token: --force with no pre-existing file — succeeds as first-time setup" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	rm -f "$token_file"
+	run cmd_setup_token --force
+	[ "$status" -eq 0 ]
+	[ -f "$token_file" ]
+}
+
+@test "cmd_setup_token: parse failure (stub emits garbage) — non-zero exit, no file written" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-fail-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-garbage-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\necho "this is not a token"\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: claude absent from PATH (empty CLAUDE_BIN) — non-zero exit, no file written" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-nobin-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	export CLAUDE_BIN="$BATS_TEST_TMPDIR/nonexistent-claude-$$"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+# ── cmd_revoke_token ──────────────────────────────────────────────────────────
+
+_setup_revoke_env() {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-revoke-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+}
+
+@test "cmd_revoke_token: file present — removes it, exit 0" {
+	_setup_revoke_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'some-token\n' >"$token_file"
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+	[ ! -f "$token_file" ]
+}
+
+@test "cmd_revoke_token: file absent — exit 0 (idempotent)" {
+	_setup_revoke_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	rm -f "$token_file"
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+}
+
+@test "cmd_revoke_token: second run on absent file — exit 0 (idempotent, run twice)" {
+	_setup_revoke_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	rm -f "$token_file"
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+}
+
+@test "cmd_revoke_token: output contains server-side revocation notice" {
+	_setup_revoke_env
+	run cmd_revoke_token
+	[[ "$output" == *"claude.ai"* ]]
+}
