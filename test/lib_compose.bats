@@ -581,6 +581,39 @@ _setup_pr2_engram_and_linux() {
 	[ -z "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
 }
 
+@test "export_compose_env: token file absent but DRYDOCK_OAUTH_TOKEN_VALUE pre-set stale — unset after call (Fix6 idempotency)" {
+	# Regression: export_compose_env must unset DRYDOCK_OAUTH_TOKEN_VALUE at the
+	# top of its OAuth block so re-invocations re-derive state from the file.
+	# A stale var from a previous call (e.g. after revoke-token) must NOT survive.
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-stale-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	# No token file — but a stale env var from a prior invocation.
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	export DRYDOCK_OAUTH_TOKEN_VALUE="stale-token-from-previous-session"
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+}
+
+@test "export_compose_env: token file contains only a newline — DRYDOCK_OAUTH_TOKEN_VALUE not exported (Fix7 whitespace-only)" {
+	# Regression guard: a file containing only a newline is whitespace-only after
+	# head -1 | tr -d '[:space:]' — must behave the same as empty (no export).
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-newline-only-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	printf '\n' >"$fakehome/.config/drydock/claude-oauth-token"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -z "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+}
+
 # ── image_exists (via DOCKER mock) ────────────────────────────────────────────
 
 @test "image_exists: mock exits 0 — function returns 0" {

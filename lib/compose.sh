@@ -582,6 +582,9 @@ export_compose_env() {
 	# Read only the first non-empty line then strip whitespace: a manually edited
 	# multi-line file is not silently concatenated into a garbled token.
 	# Empty-after-trim → no export (empty token must not activate the overlay).
+	# Unset first so re-invocations (e.g. after revoke-token in the same shell)
+	# re-derive state from the file rather than inheriting a stale var value.
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
 	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
 		local _oauth_token
 		_oauth_token="$(head -1 "$DRYDOCK_OAUTH_TOKEN" | tr -d '[:space:]')"
