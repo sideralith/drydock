@@ -241,10 +241,16 @@ secret, at the same tier as a GitHub personal access token.
 
 | Mitigation | Detail |
 |---|---|
-| `0600` permissions | Written via `umask 077` + atomic `mktemp` + `mv` — never world-readable, not even transiently |
+| `0600` permissions | `umask 077` is set before `mktemp` so the temp file is created `0600` by intent; `mv -f` then atomically replaces the destination — never world-readable, not even transiently |
 | Location under `~/.config/drydock/` | Already covered by the image-baked deny rule `Read(__HOME__/.config/drydock/**)` in `00-secrets.json`. The agent inside the container cannot read the file via Claude Code's Read tool. |
 | Env-var-only delivery | The token value reaches the container exclusively as `CLAUDE_CODE_OAUTH_TOKEN` via the compose overlay. No bind-mount of the token file is ever created (SP-1 in the spec). |
 | No agent-path exposure | `docker-compose.oauth.yml` has no `volumes:` block — the file never appears at a path inside the container. |
+
+### docker inspect renders the token in plaintext
+
+`docker inspect <container>` outputs the container's full `Env[]` array, which
+includes `CLAUDE_CODE_OAUTH_TOKEN` in plaintext. Do not pipe `docker inspect`
+output to logs or paste it in support requests.
 
 ### Revocation is two-step
 

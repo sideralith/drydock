@@ -261,9 +261,11 @@ token once:
 drydock setup-token
 ```
 
-drydock calls `claude setup-token` (browser flow), captures the resulting token,
-writes it atomically to `~/.config/drydock/claude-oauth-token` with mode `0600`,
-and auto-includes the token in every future session via `docker-compose.oauth.yml`.
+drydock runs `claude setup-token` interactively — you complete the browser flow
+and see the token printed by claude. drydock then prompts you to paste that
+token, validates it, and writes it atomically to
+`~/.config/drydock/claude-oauth-token` with mode `0600`. Every future session
+auto-includes the token via `docker-compose.oauth.yml`.
 
 **When to use it:** you want frictionless session starts and don't need per-session
 credential isolation for this particular host.

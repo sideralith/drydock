@@ -15,8 +15,9 @@ the concurrent-write race that would cause both sessions to get logged out).
 drydock setup-token
 ```
 
-This runs `claude setup-token` (interactive browser flow on the host), captures
-the resulting token, and writes it atomically to
+This runs `claude setup-token` interactively — you complete the browser
+authorization flow and see the token printed by claude. drydock then asks you
+to paste that token, validates it, and writes it atomically to
 `~/.config/drydock/claude-oauth-token` with mode `0600`. From then on drydock
 auto-includes a `docker-compose.oauth.yml` overlay that injects the token as
 `CLAUDE_CODE_OAUTH_TOKEN` — every session starts without a prompt.
