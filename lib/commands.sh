@@ -893,8 +893,9 @@ cmd_setup_token() {
 	# read returns non-zero. Catch it and emit a clear diagnostic rather than
 	# falling silently into the regex check with an empty string.
 	local _token
-	IFS= read -r -p "Paste the token printed above: " _token ||
+	IFS= read -s -r -p "Paste the token printed above: " _token ||
 		err "no token pasted (EOF / Ctrl-D) — re-run 'drydock setup-token' and paste the token when prompted"
+	printf '\n' >&2
 
 	# Validate: token must match the sk-ant- prefix format.
 	# [:graph:] matches printable non-whitespace characters (POSIX) — accepts

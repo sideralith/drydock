@@ -2421,7 +2421,7 @@ STUB
 	perms="$(stat -c '%a' "$token_file")"
 	[ "$perms" = "600" ]
 	local content
-	content="$(cat "$token_file")"
+	content="$(< "$token_file")"
 	[ "$content" = "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6" ]
 }
 
@@ -2435,7 +2435,7 @@ STUB
 	[ "$status" -ne 0 ]
 	# Existing file must be untouched.
 	local content
-	content="$(cat "$token_file")"
+	content="$(< "$token_file")"
 	[ "$content" = "existing-token-content" ]
 }
 
@@ -2462,7 +2462,7 @@ STUB
 	run cmd_setup_token --force <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
 	[ "$status" -eq 0 ]
 	local content
-	content="$(cat "$token_file")"
+	content="$(< "$token_file")"
 	[ "$content" = "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6" ]
 }
 
@@ -2536,7 +2536,7 @@ STUB
 	source "$DRYDOCK_HOME/lib/commands.sh"
 	ensure_prereqs() { :; }
 
-	# The internal space makes this fail the strict ^sk-ant-[A-Za-z0-9_-]{20,}$ check.
+	# The internal space makes this fail the strict ^sk-ant-[[:graph:]]{20,}$ check.
 	run cmd_setup_token <<< "sk-ant-this-is-long-enough-to-be-a-token but has spaces"
 	[ "$status" -ne 0 ]
 	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
