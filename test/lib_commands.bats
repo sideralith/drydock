@@ -2382,6 +2382,86 @@ STUB
 	rm -rf "$tmpdir"
 }
 
+@test "cmd_doctor: token aged >330 days — shows ⚠ warning with age and refresh hint (D9)" {
+	# D9 slice: cmd_doctor must emit a ⚠ row (not ✓) when the OAuth token file
+	# mtime is more than 330 days in the past, including the age in days and the
+	# drydock setup-token --force refresh hint.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a token file aged 400 days (well beyond the 330-day threshold).
+	mkdir -p "$fakehome/.config/drydock"
+	printf 'sk-ant-oat01-fake-token-content\n' >"$fakehome/.config/drydock/claude-oauth-token"
+	touch -d "400 days ago" "$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# Must show the ⚠ warning, not the ✓ present row.
+	[[ "$output" == *"⚠"* ]]
+	[[ "$output" != *"OAuth token present"* ]]
+	# Must include the age in days.
+	[[ "$output" == *"400"* ]]
+	# Must include the refresh hint.
+	[[ "$output" == *"drydock setup-token --force"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: token aged ≤330 days — shows ✓ OAuth token present (D9 negative)" {
+	# D9 slice: a fresh (or recent) token must still show the ✓ row unchanged.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a token file with a very recent mtime (1 day ago — well under 330).
+	mkdir -p "$fakehome/.config/drydock"
+	printf 'sk-ant-oat01-fake-token-content\n' >"$fakehome/.config/drydock/claude-oauth-token"
+	touch -d "1 day ago" "$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# Must show the ✓ present row, not the warning.
+	[[ "$output" == *"OAuth token present"* ]]
+	[[ "$output" != *"drydock setup-token --force"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
 # ── cmd_setup_token ───────────────────────────────────────────────────────────
 
 # Helper: set up a fake HOME with the minimum structure and a fake claude binary.

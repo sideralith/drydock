@@ -724,7 +724,16 @@ cmd_doctor() {
 	# activation gate (head -1 | tr -d '[:space:]'). Both zero-byte AND
 	# whitespace-only token files must NOT be reported as active here.
 	if [ -n "$(head -1 "$DRYDOCK_OAUTH_TOKEN" 2>/dev/null | tr -d '[:space:]')" ]; then
-		_dr_item "✓" "docker-compose.oauth.yml" "" "OAuth token present"
+		local _mtime _now _age_days
+		_mtime="$(stat -c %Y "$DRYDOCK_OAUTH_TOKEN")"
+		_now="$(date +%s)"
+		_age_days=$(((_now - _mtime) / 86400))
+		if [ "$_age_days" -gt 330 ]; then
+			_dr_item "⚠" "docker-compose.oauth.yml" "" \
+				"OAuth token is ${_age_days} day(s) old and nearing expiry — refresh: drydock setup-token --force"
+		else
+			_dr_item "✓" "docker-compose.oauth.yml" "" "OAuth token present"
+		fi
 	fi
 	# Optional user-config opt-in overlays (auto-detected from host directories).
 	# Tilde-literals in the meta column are display text (not paths to expand);
