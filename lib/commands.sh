@@ -832,8 +832,9 @@ _check_path_metachar() {
 # ── cmd_setup_token ───────────────────────────────────────────────────────────
 
 # cmd_setup_token [--force]
-# Runs `claude setup-token` on the host, captures the resulting OAuth token,
-# validates it, and writes it atomically to DRYDOCK_OAUTH_TOKEN (0600).
+# Runs `claude setup-token` interactively on the host (user sees the browser
+# flow and the printed token), then prompts the user to paste the token.
+# Validates it and writes it atomically to DRYDOCK_OAUTH_TOKEN (0600).
 # Refuses to overwrite an existing token without --force.
 cmd_setup_token() {
 	local force=0
@@ -869,38 +870,37 @@ cmd_setup_token() {
 		err "token file already exists at $DRYDOCK_OAUTH_TOKEN (${_age_days} day(s) old) — pass --force to overwrite"
 	fi
 
-	# Run claude setup-token. Capture stdout; let stderr flow to the terminal so
-	# the user sees the interactive browser flow and any upstream errors.
-	# Explicit exit-code capture prevents set -e from aborting before we can
-	# emit a clean error message on non-zero exit (SR-3: user abort).
-	local _out _rc=0
-	_out="$("$CLAUDE_BIN" setup-token)" || _rc=$?
+	# Run claude setup-token fully unredirected: the user sees the authorization
+	# URL, completes the browser flow, and sees the token printed by claude.
+	# Capture only the exit code; do not capture stdout or stderr.
+	local _rc=0
+	"$CLAUDE_BIN" setup-token || _rc=$?
 	if [ "$_rc" -ne 0 ]; then
 		err "claude setup-token exited with status $_rc — token not saved"
 	fi
 
-	# Token parse — the single point to update if claude setup-token output format drifts.
-	# Primary: match sk-ant- prefix (known current format).
-	# Fallback: first line that looks like a bare token (40+ contiguous word chars).
+	# Prompt the user to paste the token claude just printed above.
 	local _token
-	_token="$(printf '%s' "$_out" | grep -oE 'sk-ant-[A-Za-z0-9_-]{20,}' | head -1 || true)"
-	if [ -z "$_token" ]; then
-		_token="$(printf '%s' "$_out" | grep -E '^[A-Za-z0-9._-]{40,}$' | head -1 || true)"
+	IFS= read -r -p "Paste the token printed above: " _token
+
+	# Validate: token must match the sk-ant- prefix format (strict primary pattern).
+	if [[ ! "$_token" =~ ^sk-ant-[A-Za-z0-9_-]{20,}$ ]]; then
+		err "pasted value does not look like a valid Claude OAuth token (expected sk-ant- prefix) — retry 'drydock setup-token'"
 	fi
 
-	if [ -z "$_token" ]; then
-		err "could not parse a token from 'claude setup-token' output — output format may have changed; retry 'drydock setup-token'"
-	fi
-
-	# Atomic 0600 write: umask 077 ensures the temp file is never world-readable,
-	# even transiently. mv -f is atomic on POSIX filesystems so a SIGINT mid-write
-	# never leaves a partial token.
+	# Atomic 0600 write: umask is set before mktemp so the temp file is created
+	# 0600 by intent. A cleanup trap removes the temp file on any failure.
+	# Each step has an explicit failure check so a write or rename failure
+	# always aborts with a non-zero exit BEFORE the success message — no
+	# false-success even if set -e is not active in the calling shell.
 	local _tmp
-	_tmp="$(mktemp "$(dirname "$DRYDOCK_OAUTH_TOKEN")/.oauth-XXXXXX")"
-	(
+	_tmp="$(
 		umask 077
-		printf '%s\n' "$_token" >"$_tmp"
-	) && mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN"
+		mktemp "$(dirname "$DRYDOCK_OAUTH_TOKEN")/.oauth-XXXXXX"
+	)"
+	trap 'rm -f "${_tmp:-}"' EXIT
+	printf '%s\n' "$_token" >"$_tmp" || err "failed to write token to temporary file"
+	mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN" || err "failed to save token to $DRYDOCK_OAUTH_TOKEN — token not written"
 
 	ok "OAuth token saved to $DRYDOCK_OAUTH_TOKEN"
 	note "This token is valid for approximately 1 year. To refresh: drydock setup-token --force"

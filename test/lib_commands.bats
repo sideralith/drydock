@@ -2306,19 +2306,21 @@ STUB
 # ── cmd_setup_token ───────────────────────────────────────────────────────────
 
 # Helper: set up a fake HOME with the minimum structure and a fake claude binary.
-# The fake-claude script echoes a canned token on stdout.
+# The fake-claude script exits 0 (simulates a successful interactive flow).
+# The token is now supplied via stdin to drydock's paste prompt, not via stub stdout.
 _setup_token_env() {
 	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-$$"
 	mkdir -p "$fakehome/.claude-container"
 	touch "$fakehome/.claude-container.json"
 	export HOME="$fakehome"
 
-	# Fake claude binary: emits a known token to stdout.
+	# Fake claude binary: exits 0 (interactive flow succeeded); prints nothing to
+	# stdout — the token arrives via drydock's IFS read paste prompt instead.
 	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-bin-$$"
 	mkdir -p "$fake_bin"
 	cat >"$fake_bin/fake-claude" <<'STUB'
 #!/usr/bin/env bash
-echo "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
+exit 0
 STUB
 	chmod +x "$fake_bin/fake-claude"
 	export CLAUDE_BIN="$fake_bin/fake-claude"
@@ -2331,7 +2333,8 @@ STUB
 
 @test "cmd_setup_token: happy path — file written at correct path, mode 0600, content equals token" {
 	_setup_token_env
-	run cmd_setup_token
+	# Token is supplied via stdin to drydock's paste prompt (Fix 1: paste-based flow).
+	run cmd_setup_token <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
 	[ "$status" -eq 0 ]
 	local token_file="$HOME/.config/drydock/claude-oauth-token"
 	[ -f "$token_file" ]
@@ -2377,7 +2380,7 @@ STUB
 	mkdir -p "$(dirname "$token_file")"
 	printf 'old-token-content\n' >"$token_file"
 	chmod 600 "$token_file"
-	run cmd_setup_token --force
+	run cmd_setup_token --force <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
 	[ "$status" -eq 0 ]
 	local content
 	content="$(cat "$token_file")"
@@ -2388,20 +2391,21 @@ STUB
 	_setup_token_env
 	local token_file="$HOME/.config/drydock/claude-oauth-token"
 	rm -f "$token_file"
-	run cmd_setup_token --force
+	run cmd_setup_token --force <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
 	[ "$status" -eq 0 ]
 	[ -f "$token_file" ]
 }
 
-@test "cmd_setup_token: parse failure (stub emits garbage) — non-zero exit, no file written" {
+@test "cmd_setup_token: paste failure (user pastes garbage) — non-zero exit, no file written" {
 	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-fail-$$"
 	mkdir -p "$fakehome/.claude-container"
 	touch "$fakehome/.claude-container.json"
 	export HOME="$fakehome"
 
+	# Stub exits 0 (flow succeeded); user pastes garbage that fails validation.
 	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-garbage-$$"
 	mkdir -p "$fake_bin"
-	printf '#!/usr/bin/env bash\necho "this is not a token"\n' >"$fake_bin/fake-claude"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_bin/fake-claude"
 	chmod +x "$fake_bin/fake-claude"
 	export CLAUDE_BIN="$fake_bin/fake-claude"
 
@@ -2410,7 +2414,7 @@ STUB
 	source "$DRYDOCK_HOME/lib/commands.sh"
 	ensure_prereqs() { :; }
 
-	run cmd_setup_token
+	run cmd_setup_token <<< "this is not a token"
 	[ "$status" -ne 0 ]
 	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
 }
@@ -2440,9 +2444,49 @@ STUB
 	touch "$fakehome/.claude-container.json"
 	export HOME="$fakehome"
 
+	# Stub exits 0; user pastes a token-shaped string long enough to pass any
+	# length floor but containing an internal space — strict sk-ant- regex rejects it.
 	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-ws-$$"
 	mkdir -p "$fake_bin"
-	printf '#!/usr/bin/env bash\necho "this token has internal spaces"\n' >"$fake_bin/fake-claude"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# The internal space makes this fail the strict ^sk-ant-[A-Za-z0-9_-]{20,}$ check.
+	run cmd_setup_token <<< "sk-ant-this-is-long-enough-to-be-a-token but has spaces"
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: write failure — non-zero exit, no success message (Fix2.4 false-success regression)" {
+	_setup_token_env
+	# Override mv as a shell function that always fails, simulating a rename failure
+	# after token validation passes. Token arrives via stdin (paste prompt, Fix 1).
+	# With the old ( subshell ) && mv pattern, set -e does not fire in a conditional
+	# context — the function exits 0 and prints "OAuth token saved" (false success).
+	# With the new sequential mv on its own line, set -e aborts before the success message.
+	mv() { return 1; }
+	export -f mv
+	run cmd_setup_token <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
+	[ "$status" -ne 0 ]
+	[[ "$output" != *"OAuth token saved"* ]]
+}
+
+@test "cmd_setup_token: user abort (claude exits non-zero) — non-zero exit, error mentions failure, no paste prompt, no file (Fix5)" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-abort-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Fake claude that exits non-zero, simulating user aborting the browser flow.
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-abort-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\nexit 1\n' >"$fake_bin/fake-claude"
 	chmod +x "$fake_bin/fake-claude"
 	export CLAUDE_BIN="$fake_bin/fake-claude"
 
@@ -2453,6 +2497,9 @@ STUB
 
 	run cmd_setup_token
 	[ "$status" -ne 0 ]
+	# Error output must mention the failure (status or "exited").
+	[[ "$output" == *"exited"* ]] || [[ "$output" == *"status"* ]]
+	# No token file must have been written.
 	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
 }
 
