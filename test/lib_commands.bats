@@ -2357,6 +2357,20 @@ STUB
 	[ "$content" = "existing-token-content" ]
 }
 
+@test "cmd_setup_token: refuse overwrite includes age-in-days (SR-5a)" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'existing-token-content\n' >"$token_file"
+	chmod 600 "$token_file"
+	# Back-date the file by 10 days so age is deterministic and non-zero.
+	touch -d "10 days ago" "$token_file"
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	# Error output must include "day" (age-in-days wording).
+	[[ "$output" == *"day"* ]]
+}
+
 @test "cmd_setup_token: --force overwrite — overwrites with new token, exit 0" {
 	_setup_token_env
 	local token_file="$HOME/.config/drydock/claude-oauth-token"

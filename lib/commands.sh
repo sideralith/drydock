@@ -856,9 +856,14 @@ cmd_setup_token() {
 	# Ensure the target directory exists before attempting mktemp inside it.
 	mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
 
-	# Overwrite guard: refuse without --force when file already exists.
+	# Overwrite guard: refuse without --force when file already exists (SR-5a).
+	# Print the file's age in days so the user knows whether the token is stale.
 	if [ -f "$DRYDOCK_OAUTH_TOKEN" ] && [ "$force" -eq 0 ]; then
-		err "token file already exists at $DRYDOCK_OAUTH_TOKEN — pass --force to overwrite"
+		local _mtime _now _age_days
+		_mtime="$(stat -c %Y "$DRYDOCK_OAUTH_TOKEN")"
+		_now="$(date +%s)"
+		_age_days=$(((_now - _mtime) / 86400))
+		err "token file already exists at $DRYDOCK_OAUTH_TOKEN (${_age_days} day(s) old) — pass --force to overwrite"
 	fi
 
 	# Run claude setup-token. Capture stdout; let stderr flow to the terminal so
@@ -866,7 +871,7 @@ cmd_setup_token() {
 	# Explicit exit-code capture prevents set -e from aborting before we can
 	# emit a clean error message on non-zero exit (SR-3: user abort).
 	local _out _rc=0
-	_out="$("$CLAUDE_BIN" setup-token 2>/dev/null)" || _rc=$?
+	_out="$("$CLAUDE_BIN" setup-token)" || _rc=$?
 	if [ "$_rc" -ne 0 ]; then
 		err "claude setup-token exited with status $_rc — token not saved"
 	fi
