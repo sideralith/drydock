@@ -889,7 +889,10 @@ cmd_setup_token() {
 	# never leaves a partial token.
 	local _tmp
 	_tmp="$(mktemp "$(dirname "$DRYDOCK_OAUTH_TOKEN")/.oauth-XXXXXX")"
-	(umask 077; printf '%s\n' "$_token" >"$_tmp") && mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN"
+	(
+		umask 077
+		printf '%s\n' "$_token" >"$_tmp"
+	) && mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN"
 
 	ok "OAuth token saved to $DRYDOCK_OAUTH_TOKEN"
 	note "This token is valid for approximately 1 year. To refresh: drydock setup-token --force"
