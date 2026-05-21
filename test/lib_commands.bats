@@ -2463,18 +2463,27 @@ STUB
 	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
 }
 
-@test "cmd_setup_token: write failure — non-zero exit, no success message (Fix2.4 false-success regression)" {
+@test "cmd_setup_token: write failure — non-zero exit, no success message, no orphaned temp file (Fix2.4 false-success + Fix2-tempclean)" {
 	_setup_token_env
-	# Override mv as a shell function that always fails, simulating a rename failure
-	# after token validation passes. Token arrives via stdin (paste prompt, Fix 1).
-	# With the old ( subshell ) && mv pattern, set -e does not fire in a conditional
-	# context — the function exits 0 and prints "OAuth token saved" (false success).
-	# With the new sequential mv on its own line, set -e aborts before the success message.
-	mv() { return 1; }
-	export -f mv
+	# Fake mv executable placed in a temp PATH directory — consistent with the
+	# fake-claude stub pattern; avoids fragile export -f mv across bats/bash versions.
+	local fake_mv_bin="$BATS_TEST_TMPDIR/fake-mv-bin-$$"
+	mkdir -p "$fake_mv_bin"
+	cat >"$fake_mv_bin/mv" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+	chmod +x "$fake_mv_bin/mv"
+	PATH="$fake_mv_bin:$PATH"
+	# Token arrives via stdin to drydock's paste prompt.
 	run cmd_setup_token <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
 	[ "$status" -ne 0 ]
 	[[ "$output" != *"OAuth token saved"* ]]
+	# No orphaned temp file must remain in the drydock config dir.
+	# (inline rm -f cleanup is required; EXIT trap alone is not sufficient after
+	# refactor — this assertion fails RED if cleanup is removed)
+	local drydock_dir="$HOME/.config/drydock"
+	! ls "$drydock_dir"/.oauth-* 2>/dev/null
 }
 
 @test "cmd_setup_token: user abort (claude exits non-zero) — non-zero exit, error mentions failure, no paste prompt, no file (Fix5)" {
@@ -2501,6 +2510,47 @@ STUB
 	[[ "$output" == *"exited"* ]] || [[ "$output" == *"status"* ]]
 	# No token file must have been written.
 	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: dot-in-token accepted — token containing '.' is written (Fix3-dot)" {
+	# Validates that the validation regex accepts tokens with '.' characters.
+	# RED: the current regex ^sk-ant-[A-Za-z0-9_-]{20,}$ does not include '.' in
+	# the character class — this token will be rejected and status will be non-zero.
+	_setup_token_env
+	# A realistic base64/JWT-shaped token with embedded dots.
+	run cmd_setup_token <<< "sk-ant-oat01-AbC123.dEf456.gHi789-some-more-length-padding"
+	[ "$status" -eq 0 ]
+	[ -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: EOF on paste prompt — non-zero exit, diagnostic mentions EOF or no token pasted, no file written (Fix1-EOF)" {
+	# Validates that IFS= read -r with a closed stdin (< /dev/null) produces an
+	# explicit diagnostic rather than silently falling through to regex rejection.
+	# RED: the current code has no explicit || err on read, so the error message
+	# will NOT contain "no token pasted"/"EOF"/"Ctrl-D" — test must fail RED.
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-eof-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Fake claude that exits 0 (browser flow succeeded).
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-eof-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Close stdin so read hits EOF immediately (no token pasted).
+	run cmd_setup_token </dev/null
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+	# Must produce an explicit diagnostic — not just the generic regex-reject message.
+	[[ "$output" == *"no token pasted"* ]] || [[ "$output" == *"EOF"* ]] || [[ "$output" == *"Ctrl-D"* ]]
 }
 
 # ── cmd_revoke_token ──────────────────────────────────────────────────────────

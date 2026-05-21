@@ -858,7 +858,13 @@ cmd_setup_token() {
 	command -v "$CLAUDE_BIN" >/dev/null 2>&1 || err "claude (Claude Code CLI) not found — install Claude Code CLI before running 'drydock setup-token'"
 
 	# Ensure the target directory exists before attempting mktemp inside it.
-	mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
+	# FIX 4: create with 0700 so a fresh directory is not world-readable.
+	# mkdir -p is a no-op (and does not change mode) when the directory already
+	# exists — acceptable; this only tightens fresh creation.
+	(
+		umask 077
+		mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
+	)
 
 	# Overwrite guard: refuse without --force when file already exists (SR-5a).
 	# Print the file's age in days so the user knows whether the token is stale.
@@ -880,27 +886,40 @@ cmd_setup_token() {
 	fi
 
 	# Prompt the user to paste the token claude just printed above.
+	# Explicit EOF guard: if stdin is closed (Ctrl-D / non-interactive invocation),
+	# read returns non-zero. Catch it and emit a clear diagnostic rather than
+	# falling silently into the regex check with an empty string.
 	local _token
-	IFS= read -r -p "Paste the token printed above: " _token
+	IFS= read -r -p "Paste the token printed above: " _token ||
+		err "no token pasted (EOF / Ctrl-D) — re-run 'drydock setup-token' and paste the token when prompted"
 
-	# Validate: token must match the sk-ant- prefix format (strict primary pattern).
-	if [[ ! "$_token" =~ ^sk-ant-[A-Za-z0-9_-]{20,}$ ]]; then
+	# Validate: token must match the sk-ant- prefix format.
+	# [:graph:] matches printable non-whitespace characters (POSIX) — accepts
+	# '.', '+', '/', '=' (base64/JWT-style tokens) while still rejecting any
+	# embedded whitespace. [:print:] would include space and must NOT be used.
+	if [[ ! "$_token" =~ ^sk-ant-[[:graph:]]{20,}$ ]]; then
 		err "pasted value does not look like a valid Claude OAuth token (expected sk-ant- prefix) — retry 'drydock setup-token'"
 	fi
 
 	# Atomic 0600 write: umask is set before mktemp so the temp file is created
-	# 0600 by intent. A cleanup trap removes the temp file on any failure.
-	# Each step has an explicit failure check so a write or rename failure
-	# always aborts with a non-zero exit BEFORE the success message — no
-	# false-success even if set -e is not active in the calling shell.
+	# 0600 by intent. Inline cleanup on each failure path removes the temp file
+	# before calling err — no shell-level EXIT trap is touched (see convention at
+	# lib/commands.sh comment near cmd_unlink: EXIT trap persists process-wide and
+	# fires after the function returns, which can confuse callers; inline cleanup
+	# is the documented pattern for this file).
 	local _tmp
 	_tmp="$(
 		umask 077
 		mktemp "$(dirname "$DRYDOCK_OAUTH_TOKEN")/.oauth-XXXXXX"
-	)"
-	trap 'rm -f "${_tmp:-}"' EXIT
-	printf '%s\n' "$_token" >"$_tmp" || err "failed to write token to temporary file"
-	mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN" || err "failed to save token to $DRYDOCK_OAUTH_TOKEN — token not written"
+	)" || err "failed to create a temporary file in $(dirname "$DRYDOCK_OAUTH_TOKEN") — check disk space and permissions"
+	if ! printf '%s\n' "$_token" >"$_tmp"; then
+		rm -f "$_tmp"
+		err "failed to write token to temporary file"
+	fi
+	if ! mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN"; then
+		rm -f "$_tmp"
+		err "failed to save token to $DRYDOCK_OAUTH_TOKEN — token not written"
+	fi
 
 	ok "OAuth token saved to $DRYDOCK_OAUTH_TOKEN"
 	note "This token is valid for approximately 1 year. To refresh: drydock setup-token --force"
