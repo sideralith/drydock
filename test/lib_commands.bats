@@ -2483,7 +2483,7 @@ STUB
 	# (inline rm -f cleanup is required; EXIT trap alone is not sufficient after
 	# refactor — this assertion fails RED if cleanup is removed)
 	local drydock_dir="$HOME/.config/drydock"
-	! ls "$drydock_dir"/.oauth-* 2>/dev/null
+	! compgen -G "$drydock_dir/.oauth-*" >/dev/null 2>&1
 }
 
 @test "cmd_setup_token: user abort (claude exits non-zero) — non-zero exit, error mentions failure, no paste prompt, no file (Fix5)" {
@@ -2513,9 +2513,9 @@ STUB
 }
 
 @test "cmd_setup_token: dot-in-token accepted — token containing '.' is written (Fix3-dot)" {
-	# Validates that the validation regex accepts tokens with '.' characters.
-	# RED: the current regex ^sk-ant-[A-Za-z0-9_-]{20,}$ does not include '.' in
-	# the character class — this token will be rejected and status will be non-zero.
+	# Regression: the validation regex must accept dot characters.
+	# sk-ant OAuth tokens may include '.' (base64/JWT segments); the [:graph:]
+	# POSIX class covers '.', '+', '/', '=' in addition to alphanumeric and '-'.
 	_setup_token_env
 	# A realistic base64/JWT-shaped token with embedded dots.
 	run cmd_setup_token <<< "sk-ant-oat01-AbC123.dEf456.gHi789-some-more-length-padding"
@@ -2524,10 +2524,9 @@ STUB
 }
 
 @test "cmd_setup_token: EOF on paste prompt — non-zero exit, diagnostic mentions EOF or no token pasted, no file written (Fix1-EOF)" {
-	# Validates that IFS= read -r with a closed stdin (< /dev/null) produces an
-	# explicit diagnostic rather than silently falling through to regex rejection.
-	# RED: the current code has no explicit || err on read, so the error message
-	# will NOT contain "no token pasted"/"EOF"/"Ctrl-D" — test must fail RED.
+	# Regression: EOF / Ctrl-D at the paste prompt must produce an explicit error,
+	# not a silent exit. IFS= read -r returns non-zero on EOF; the || err guard
+	# catches it and emits a diagnostic containing "no token pasted"/"EOF"/"Ctrl-D".
 	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-eof-$$"
 	mkdir -p "$fakehome/.claude-container"
 	touch "$fakehome/.claude-container.json"
