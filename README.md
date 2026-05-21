@@ -267,6 +267,8 @@ token, validates it, and writes it atomically to
 `~/.config/drydock/claude-oauth-token` with mode `0600`. Every future session
 auto-includes the token via `docker-compose.oauth.yml`.
 
+Note: the token is visible in plaintext via `docker inspect` — see [docs/security.md](docs/security.md#claude-oauth-token-docker-composeoauthyml) for details and mitigations.
+
 **When to use it:** you want frictionless session starts and don't need per-session
 credential isolation for this particular host.
 
