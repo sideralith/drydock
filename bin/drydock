@@ -88,6 +88,8 @@ main() {
 	shell) cmd_shell "$@" ;;
 	--) cmd_run -- "$@" ;;
 	setup) cmd_setup "$@" ;;
+	setup-token) cmd_setup_token "$@" ;;
+	revoke-token) cmd_revoke_token "$@" ;;
 	build) cmd_build "$@" ;;
 	sync) cmd_sync "$@" ;;
 	status) cmd_status "$@" ;;

@@ -41,6 +41,8 @@ usage() {
 	_dr_help_row "status" "Short health snapshot"
 	_dr_help_row "doctor" "Detailed diagnostics + current-project context"
 	_dr_help_row "setup" "(advanced) One-time host setup — auto-runs when needed"
+	_dr_help_row "setup-token" "(advanced) Generate a 1-year Claude OAuth token for container auth"
+	_dr_help_row "revoke-token" "Delete the local OAuth token file (server-side: claude.ai settings)"
 	_dr_help_row "link [--rw] PATH [TGT]" "Mount a sibling project inside the container"
 	_dr_help_row "unlink [--rw] PATH" "Remove a sibling mount from the project list"
 	_dr_help_row "links" "Show all linked siblings for the current project"

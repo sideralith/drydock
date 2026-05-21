@@ -59,6 +59,13 @@ drydock() {
   [ "$status" -ne 0 ]
 }
 
+@test "drydock help contains setup-token and revoke-token" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"setup-token"* ]]
+  [[ "$output" == *"revoke-token"* ]]
+}
+
 @test "drydock unknown command output contains 'unknown command'" {
   run bash -c '"$1" thisisnotacommand 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" == *"unknown command"* ]]
