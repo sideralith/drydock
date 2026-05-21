@@ -536,6 +536,23 @@ _setup_pr2_engram_and_linux() {
 	[ "$DRYDOCK_OAUTH_TOKEN_VALUE" = "sk-ant-oat-v1-testtoken1234567890123456789012345678" ]
 }
 
+@test "export_compose_env: multi-line token file — only first line exported, second line not concatenated (Fix6)" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-multiline-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	mkdir -p "$fakehome/.config/drydock"
+	# Two-line file: first line is the real token; second is junk that must NOT appear.
+	printf 'sk-ant-oat-v1-testtoken1234567890123456789012345678\nsecond-line-should-be-ignored\n' \
+		>"$fakehome/.config/drydock/claude-oauth-token"
+	export HOME="$fakehome"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -n "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]
+	[ "$DRYDOCK_OAUTH_TOKEN_VALUE" = "sk-ant-oat-v1-testtoken1234567890123456789012345678" ]
+}
+
 @test "export_compose_env: token file absent — DRYDOCK_OAUTH_TOKEN_VALUE unset" {
 	local fakehome="$BATS_TEST_TMPDIR/fakehome-oauth-absent-$$"
 	mkdir -p "$fakehome/.claude-container"

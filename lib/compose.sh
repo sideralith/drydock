@@ -579,12 +579,12 @@ export_compose_env() {
 	# ── optional Claude OAuth token (host opt-in) ─────────────────────────────
 	# Token file: ~/.config/drydock/claude-oauth-token (DRYDOCK_OAUTH_TOKEN).
 	# File-absent → no export, no warn — matches SSH/GPG "feature off" pattern.
-	# tr strips trailing newline and any stray whitespace so compose gets a clean
-	# single-word value. Empty-after-trim → no export (empty token must not activate
-	# the overlay with a blank value).
+	# Read only the first non-empty line then strip whitespace: a manually edited
+	# multi-line file is not silently concatenated into a garbled token.
+	# Empty-after-trim → no export (empty token must not activate the overlay).
 	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
 		local _oauth_token
-		_oauth_token="$(tr -d '[:space:]' <"$DRYDOCK_OAUTH_TOKEN")"
+		_oauth_token="$(head -1 "$DRYDOCK_OAUTH_TOKEN" | tr -d '[:space:]')"
 		if [ -n "$_oauth_token" ]; then
 			export DRYDOCK_OAUTH_TOKEN_VALUE="$_oauth_token"
 		fi
