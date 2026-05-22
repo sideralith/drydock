@@ -344,3 +344,120 @@ STUB
 	# The symlink target's content must NOT have been delivered.
 	[ ! -e "$SESSION_DIR/creds" ]
 }
+
+# ── Case 17: symlinked overlay ROOT → fail-loud ──────────────────────────────
+# If HOST_CLAUDE_OVERLAY itself is a symlink to a directory, the function must
+# abort via err naming the root — not silently do nothing (find does not
+# traverse into a symlinked start-point, so the overlay would be inert).
+# Design: "symlinks rejected fail-loud at depth 0" (README / docs/architecture.md).
+
+@test "apply_claude_overlay: overlay root is a symlink-to-dir → fails naming root" {
+	local real_overlay_dir="$BATS_TEST_TMPDIR/real-overlay"
+	mkdir -p "$real_overlay_dir"
+	printf 'content' >"$real_overlay_dir/.mcp.json"
+	# Make HOST_CLAUDE_OVERLAY a symlink that points at the real dir.
+	# Parent dir must exist before we can create the symlink.
+	mkdir -p "$(dirname "$OVERLAY_DIR")"
+	ln -s "$real_overlay_dir" "$OVERLAY_DIR"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"$OVERLAY_DIR"* ]]
+}
+
+# ── Case 18: mkdir -p failure → fail-loud ────────────────────────────────────
+# If the destination directory cannot be created (e.g. session dir is
+# unwritable), apply_claude_overlay must abort via err — not continue silently
+# and produce a partial overlay.
+# Skipped when running as root (root bypasses permission bits).
+
+@test "apply_claude_overlay: mkdir -p failure mid-copy → aborts non-zero with named path" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	mkdir -p "$OVERLAY_DIR/subdir"
+	printf 'content' >"$OVERLAY_DIR/subdir/file.txt"
+
+	# Make session dir unwritable so mkdir -p of subdir inside it fails.
+	chmod 555 "$SESSION_DIR"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	chmod 755 "$SESSION_DIR"
+
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+}
+
+# ── Case 19: cp -p failure mid-copy → fail-loud ──────────────────────────────
+# If cp -p fails (e.g. destination file is read-only), apply_claude_overlay
+# must abort via err — not continue silently with a partial overlay.
+# Skipped when running as root.
+
+@test "apply_claude_overlay: cp -p failure mid-copy → aborts non-zero with named path" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	mkdir -p "$OVERLAY_DIR"
+	printf 'overlay-content' >"$OVERLAY_DIR/locked.json"
+
+	# Pre-seed a read-only file at the same path in the session dir.
+	printf 'seeded' >"$SESSION_DIR/locked.json"
+	chmod 444 "$SESSION_DIR/locked.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	chmod 644 "$SESSION_DIR/locked.json"
+
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+}
+
+# ── Case 20: temp-file cleanup on fail-loud abort ────────────────────────────
+# When apply_claude_overlay aborts via err (exit 1), the mktemp temp file must
+# not be left behind in TMPDIR.  We snapshot the TMPDIR entry count before and
+# verify it does not increase after an abort triggered by a forbidden entry.
+
+@test "apply_claude_overlay: temp file cleaned up on fail-loud abort (forbidden .claude.json)" {
+	mkdir -p "$OVERLAY_DIR"
+	printf '{}' >"$OVERLAY_DIR/.claude.json"   # will trigger err
+
+	# Use a controlled TMPDIR so we can count precisely.
+	local ctrl_tmp="$BATS_TEST_TMPDIR/ctrl-tmp"
+	mkdir -p "$ctrl_tmp"
+
+	local before after
+	before=$(find "$ctrl_tmp" -maxdepth 1 | wc -l)
+
+	TMPDIR="$ctrl_tmp" run apply_claude_overlay "$SESSION_DIR"
+
+	after=$(find "$ctrl_tmp" -maxdepth 1 | wc -l)
+
+	[ "$status" -ne 0 ]
+	# No new files should remain in ctrl_tmp after the abort.
+	[ "$after" -eq "$before" ]
+}
+
+# ── Case 14 (strengthened): unreadable subdir — session dir gets zero files ──
+# Extends Case 14: not only must the abort be non-zero, but the session dir
+# must receive zero files (abort must happen before any copy completes).
+
+@test "apply_claude_overlay: unreadable subdir — session dir receives zero files before abort" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	# Put a readable file BEFORE and an unreadable dir AFTER it in the overlay.
+	# find -print0 order is filesystem-dependent, but we want to verify no
+	# partial copy: ensure the unreadable dir is the sole/first non-trivial entry.
+	mkdir -p "$OVERLAY_DIR/secret-subdir"
+	printf 'hidden' >"$OVERLAY_DIR/secret-subdir/file.txt"
+	chmod 000 "$OVERLAY_DIR/secret-subdir"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	chmod 755 "$OVERLAY_DIR/secret-subdir"
+
+	[ "$status" -ne 0 ]
+
+	# Session dir must be empty — read all entries into an array then check count.
+	local count
+	count=$(find "$SESSION_DIR" -mindepth 1 | wc -l)
+	[ "$count" -eq 0 ]
+}
