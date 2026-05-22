@@ -686,10 +686,13 @@ harvest_session_projects() {
 			_dsize=$(wc -c <"$_target" 2>/dev/null) || _dsize=0
 			[ "${_ssize:-0}" -gt "${_dsize:-0}" ] || continue
 		fi
-		mkdir -p "${_target%/*}" 2>/dev/null \
-			|| { note "could not harvest conversation history from ${_dir##*/}"; continue; }
-		cp -p "$_f" "$_target" 2>/dev/null \
-			|| note "could not harvest conversation history from ${_dir##*/}"
+		mkdir -p "${_target%/*}" 2>/dev/null ||
+			{
+				note "could not harvest conversation history from ${_dir##*/}"
+				continue
+			}
+		cp -p "$_f" "$_target" 2>/dev/null ||
+			note "could not harvest conversation history from ${_dir##*/}"
 	done < <(find "$_src" -type f -print0 2>/dev/null)
 	return 0
 }
