@@ -5,7 +5,11 @@ All notable changes to drydock are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.1] - 2026-05-22
+
+OAuth token persistence, container-config overlay, expanded destructive-command
+guardrails, conversation-history root fix, container-state-model awareness, and
+post-v0.2.0 polish & hardening across `doctor` / `install.sh` / Dockerfile.
 
 ### Removed
 - **`drydock init` command** — removed entirely. Pre-v0.2.0 it was load-bearing
@@ -60,23 +64,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejoining a session whose terminal was closed. A `⚠` caveat notes that
   re-entering a live run session starts a second Claude against one shared
   per-session config (INV-2).
+- **Container-config overlay** (#77) — a host-authored
+  `~/.config/drydock/claude-overlay/` directory mirroring the `~/.claude/`
+  tree is copied recursively (whole-file) on top of the freshly re-seeded
+  per-session `~/.claude-container-<disc>/` dir. Config edits that previously
+  vanished on the next `drydock run` (e.g. a plugin's `.mcp.json` flag) now
+  survive — the overlay is host-authored, container-consumed, unidirectional.
+  INV-2 carve-out with strict scope enforcement: a two-pass
+  validate-then-copy rejects `~/.claude.json`, `.credentials.json`, and any
+  symlinked overlay destination fail-loud before any copy runs.
+- **SessionStart hook — container state model awareness** (#79). The
+  awareness hook now tells the agent that container-side `~/.claude/` and
+  `~/.claude.json` are per-session copies re-seeded from a prototype on every
+  `drydock run` — edits inside the container do not persist. The hook also
+  surfaces the three paths for config that must survive a restart (host
+  `~/.claude/` + `drydock sync`, the project's `.mcp.json`, or the host
+  overlay above).
 
 ### Fixed
-- **Conversation history destroyed on the next `drydock run` (data loss).**
+- **Conversation history destroyed on the next `drydock run` (data loss)** —
   `gc_orphan_session_dirs` (`lib/compose.sh`) prunes per-session
   `~/.claude-container-<disc>/` dirs whose container is no longer in
   `docker ps -a`. Because `drydock run` uses `docker compose run --rm`, an
   `/exit`'d container leaves `docker ps -a` immediately — so the next
-  `drydock run` saw the exited session's dir as orphaned and `rm -rf`'d it.
-  That dir holds `projects/<slug>/<uuid>.jsonl`, the durable conversation
-  history, so every conversation was destroyed on the next run and
-  `claude --resume` had been broken across sessions since v0.2.0. Before
-  pruning, the GC now harvests each orphan dir's `projects/` tree into the
-  prototype `~/.claude-container/projects/`, copying each append-only
+  `drydock run` saw the exited session's dir as orphaned and `rm -rf`'d it,
+  destroying `projects/<slug>/<uuid>.jsonl` (the durable conversation
+  history) and breaking `claude --resume` across sessions since v0.2.0.
+  **Hotfix** harvests each orphan dir's `projects/` tree into the prototype
+  `~/.claude-container/projects/` before pruning, copying each append-only
   `.jsonl` only when the prototype has no copy or the harvested one is
   larger — so a stale shorter copy can never clobber a more complete one.
-  New sessions, seeded from the prototype, inherit it and `--resume` works
-  again. Hotfix for #68 (root fix tracked separately).
+  **Root fix** (#68) moves `projects/` to a shared `:rw` sub-mount —
+  conversation history now lives outside the per-session dirs entirely, so
+  GC cannot reach it. The hotfix harvest stays in as a belt-and-suspenders
+  backstop. INV-2 amended with the append-only `projects/` carve-out
+  (one append-only `.jsonl` per UUID — none of INV-2's four hazards apply).
+- **SR-9 integration test pollutes the host home** (#73) — the sub-mount
+  resolution integration test (`test/integration/test_projects_submount.sh`)
+  used to create root-owned dirs under the real host `$HOME` when run inside
+  a drydock container (DooD). Rewritten as hermetic: the test now runs under
+  a per-test temp HOME and tears it down on exit.
 - **Root-owned `~/.cache` and `~/.config` inside the container.** Docker
   creates any missing parent directory of a bind-mount target as `root:root`.
   The base compose mounts `~/.config/gh` and the ccstatusline overlay mounts
@@ -89,6 +116,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   intact.
 
 ### Changed
+- **Destructive-command guardrails — prod-ops & residual OS coverage** (#76).
+  The tier-1 deny layer + the PreToolUse hook now also cover production-infra
+  ops and the residual sudo/OS forms previously uncovered. New drop-in
+  `templates/managed-settings.d/50-prod-ops.json` (terraform apply/destroy).
+  `30-os-safety.json` extended with recursive `chown`, `userdel`,
+  account-lock `usermod` (`-L`/`--lock`/`--expiredate`), `systemctl`
+  teardown (`stop`/`disable`/`mask`/`reset-failed`), `sudo crontab -r`,
+  `sudo kill -9 1`, `sudo init 0`. Four new PreToolUse residue rules in
+  `drydock-block-destructive.sh`: **A2** (kubectl/helm destructive verb
+  scoped to a production-context flag value — `--context`/`--kube-context`/
+  `--namespace`/`-n`, case-insensitive, attached short-flag accepted,
+  segment pipe-split so a verb in a downstream command is not misread);
+  **A3** (a database CLI — `psql`/`mysql`/`mongo`/`mongosh`/`redis-cli` —
+  whose `-h`/`--host` value points at a production host); **A4**
+  (`terraform apply`/`destroy`, subcommand-anchored so read-only subcommands
+  pass); **C7-residue** (`sudo chmod` with a world-writable mode, anchored
+  to the mode argument so a numeric/clause-shaped filename does not false
+  block). The Laravel artisan rule was evaluated and deliberately left out
+  as scope creep for a project-agnostic image. Hardened via four rounds of
+  dual adversarial review (Judgment Day).
+- **Hook block messages — drop internal INV-N tokens** (`drydock-block-destructive.sh`).
+  Rule codes (A1, C1-residue, C17, …) remain in the user-visible messages
+  as cross-references; INV-N invariant tokens, which are design-doc-only
+  identifiers with no user value, were removed.
 - **`drydock doctor` — OAuth token staleness warning**: when the OAuth token
   file is present, `doctor` now computes its age from the file mtime and shows
   a `⚠` row instead of the `✓` row once the token is over 330 days old
@@ -131,6 +182,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     active)`.
 
 ### Documentation
+- **`CONTRIBUTING.md` — dev/main two-branch model** (#72). The convention is
+  now documented: feature PRs target `dev`, releases merge `dev` → `main`,
+  and issues are closed manually on `dev` merge because GitHub does not
+  auto-close issues from non-default-branch merges (the `close-on-dev`
+  convention).
+- **INV-2 carve-outs documented in `CLAUDE.md`.** The append-only `projects/`
+  shared sub-mount and the host-authored `~/.config/drydock/claude-overlay/`
+  overlay each get a "Carve-out" subsection with the hazard-class justification
+  showing none of INV-2's four failure modes apply. Also documents the
+  container-config overlay deep-dive in `docs/troubleshooting.md` and the
+  agent-lifecycle docs.
 - **TTY latency on WSL2 and macOS**: new `docs/troubleshooting.md` section
   explaining the PTY chain (containerd → daemon → CLI → terminal) and why
   WSL2 + Docker Desktop / macOS + Docker Desktop add a per-byte VM-bridge
@@ -305,6 +367,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.2.1]: https://github.com/sideralith/drydock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sideralith/drydock/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sideralith/drydock/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sideralith/drydock/releases/tag/v0.1.1

@@ -38,15 +38,23 @@ file.
 | [concurrent-sessions](#concurrent-sessions) | v0.2.0 | [#9][i9] | Done |
 | [claude-oauth-token](#claude-oauth-token) | v0.2.1 | [#58][i58] | Done |
 | [doctor-staleness-warning](#doctor-staleness-warning) | v0.2.1 | [#60][i60] | Done |
-| [ci-commit-lint](#ci-commit-lint) | v0.2.1 | [#10][i10] | Planned |
-| [session-persistence](#session-persistence) | v0.2.2 | [#64][i64] | Planned |
-| [toolchain-mise](#toolchain-mise) | v0.3.0 | [#16][i16] | Planned |
-| [per-project-image-layer](#per-project-image-layer) | v0.3.0 | [#17][i17] | Planned |
-| [agent-adapter](#agent-adapter) | v0.4.0 | [#18][i18] | Planned |
+| [container-config-overlay](#container-config-overlay) | v0.2.1 | [#77][i77] | Done |
+| [session-awareness-state-model](#session-awareness-state-model) | v0.2.1 | [#79][i79] | Done |
+| [guardrail-deny-layer-port](#guardrail-deny-layer-port) | v0.2.1 | [#76][i76] | Done |
+| [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Planned |
+| [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Planned |
+| [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Planned |
+| [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Planned |
+| [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Planned |
+| [toolchain-mise](#toolchain-mise) | v0.4.0 | [#16][i16] | Planned |
+| [per-project-image-layer](#per-project-image-layer) | v0.4.0 | [#17][i17] | Planned |
+| [agent-adapter](#agent-adapter) | v0.5.0 | [#18][i18] | Planned |
+| [sandcastle-sandbox-provider](#sandcastle-sandbox-provider) | v0.6.0 | [#66][i66] | Planned |
 
 Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene & post-v0.2.0 polish ·
-**v0.2.2**: session persistence & ergonomics · **v0.3.0**: per-project environment customization ·
-**v0.4.0**: drydock as agent-agnostic infrastructure.
+**v0.2.2**: CI hygiene & infrastructure polish · **v0.3.0**: session persistence & multi-session UX ·
+**v0.4.0**: per-project environment customization · **v0.5.0**: drydock as agent-agnostic infrastructure ·
+**v0.6.0**: programmatic agent orchestration.
 
 Resolution order — **v0.2.0**: install-interactive → auto-sync →
 concurrent-sessions → link-sibling-projects.
@@ -67,6 +75,13 @@ Order for later releases is not yet decided.
 [i58]: https://github.com/sideralith/drydock/issues/58
 [i60]: https://github.com/sideralith/drydock/issues/60
 [i64]: https://github.com/sideralith/drydock/issues/64
+[i66]: https://github.com/sideralith/drydock/issues/66
+[i67]: https://github.com/sideralith/drydock/issues/67
+[i71]: https://github.com/sideralith/drydock/issues/71
+[i74]: https://github.com/sideralith/drydock/issues/74
+[i76]: https://github.com/sideralith/drydock/issues/76
+[i77]: https://github.com/sideralith/drydock/issues/77
+[i79]: https://github.com/sideralith/drydock/issues/79
 
 ---
 
@@ -350,6 +365,105 @@ the user at `drydock setup-token --force` to refresh.
 
 **Provenance.** Issue [#60][i60], PR #61.
 
+### container-config-overlay
+
+**Status: Done (v0.2.1, issue #77).**
+
+**Problem.** Config edits made inside a drydock container under `~/.claude/`
+(e.g. a plugin's `.mcp.json` flag — `--browser chromium` for the Playwright
+MCP) worked for the session and vanished on the next `drydock run`: each
+invocation re-seeds the per-session `~/.claude-container-<disc>/` from a
+prototype, so any in-container edit not synced back to the host is lost.
+INV-2 prohibits making the host's `~/.claude/` the writable source of the
+container's state by design — so the obvious "just bind-mount it" path is
+closed, leaving a class of container-only config (per-MCP flags,
+per-skill state) without a persistence story.
+
+**What shipped.** A host-authored overlay at `~/.config/drydock/claude-overlay/`
+mirroring the `~/.claude/` tree. When present, drydock copies it whole-file
+and recursively on top of the freshly re-seeded session dir —
+host-authored, container-consumed, unidirectional. Scope is enforced
+fail-loud: a two-pass validate-then-copy rejects `~/.claude.json`,
+`.credentials.json`, and any symlinked overlay destination before any
+copy runs, aborting `drydock run` with a clear error. INV-2 carve-out
+documented with a four-hazard analysis showing none apply (no RMW on a
+shared single file; no SQLite DB; no OAuth token file in scope). See
+`docs/troubleshooting.md` for the end-user workflow.
+
+**Provenance.** Issue [#77][i77], PR #78.
+
+### session-awareness-state-model
+
+**Status: Done (v0.2.1, issue #79).**
+
+**Problem.** The `SessionStart` awareness hook (added in v0.2.0 as
+`self-awareness`) framed credential isolation, the Docker socket
+root-equivalence, GPG signing, and the `gh` CLI cache workaround — but
+never told the agent that container-side `~/.claude/` and
+`~/.claude.json` are per-session copies re-seeded from a prototype on
+every `drydock run`. Edits inside the container under those paths
+silently did not persist, and the agent had no way to know it.
+
+**What shipped.** A "Container state model" section added to the
+`SessionStart` awareness hook output: tells the agent that
+`~/.claude/`/`~/.claude.json` are ephemeral per-session copies, names
+the `~/.claude/projects/` shared conversation store as the durable
+carve-out, and lists the three paths for config that MUST survive a
+restart — host `~/.claude/` + `drydock sync` (synced to the prototype,
+seeded every run), the project repo's own `.mcp.json` (bind-mounted,
+immune to re-seed), and the host overlay above
+([container-config-overlay](#container-config-overlay)).
+
+**Provenance.** Issue [#79][i79], PR #80.
+
+### guardrail-deny-layer-port
+
+**Status: Done (v0.2.1, issue #76).**
+
+**Problem.** The destructive-command guardrails shipped in v0.2.0
+([destructive-command-guardrails](#destructive-command-guardrails))
+covered the immediate accident class — `rm -rf` to system paths, disk
+destruction, fork bombs, firewall flush, package-manager purges,
+`curl | sh` — but left two adjacent classes uncovered: production-infra
+ops (`terraform apply`/`destroy`, kubectl/helm destructive verb against a
+prod context, a DB CLI pointed at a production host) and a tail of
+residual sudo/OS forms (`sudo chown -R`, `userdel`, account-lock
+`usermod`, `systemctl` teardown, `sudo crontab -r`, `sudo kill -9 1`,
+`sudo init 0`, `sudo chmod` world-writable). A confused agent could
+issue any of these today with nothing stopping it.
+
+**What shipped.** A new `templates/managed-settings.d/50-prod-ops.json`
+drop-in (terraform apply/destroy globs), residual sudo/OS entries added
+to `30-os-safety.json`, and four new PreToolUse residue rules in
+`drydock-block-destructive.sh`:
+
+- **A2** — kubectl/helm destructive verb scoped to a production-context
+  flag value (`--context`/`--kube-context`/`--namespace`/`-n`),
+  case-insensitive, attached short-flag accepted (`-nprod`), segment
+  pipe-split so a verb in a downstream command (`kubectl get … | grep
+  delete`) is not misread.
+- **A3** — DB CLI (`psql`/`mysql`/`mongo`/`mongosh`/`redis-cli`) whose
+  `-h`/`--host` value points at a production host.
+- **A4** — `terraform apply`/`destroy`, subcommand-anchored so
+  read-only subcommands (`terraform plan`, `terraform show apply`, …)
+  pass.
+- **C7-residue** — `sudo chmod` with a world-writable mode, anchored to
+  the mode argument so a numeric/clause-shaped filename does not false
+  block.
+
+The Laravel artisan rule was evaluated and deliberately left out as
+scope creep for the project-agnostic image. The `usermod` deny is
+scoped to the account-lock forms (`-L`/`--lock`/`--expiredate`), NOT a
+blanket `usermod*` glob that would false-block the routine
+`usermod -aG docker $USER` group-add. Hardened via four rounds of dual
+adversarial review.
+
+**Provenance.** Issue [#76][i76], PR #81.
+
+---
+
+## v0.2.2 — CI hygiene & infrastructure polish
+
 ### ci-commit-lint
 
 **Problem.** `CLAUDE.md` §5 records that conventional-commit format is a soft
@@ -370,13 +484,67 @@ check.
 
 **Provenance.** The §5 enforcement gap; this session; issue [#10][i10].
 
+### hooks-mount-source
+
+**Status: Planned (v0.2.2, issue #71).**
+
+**Problem.** drydock's hook scripts are bind-mounted RO from the host's
+`~/.claude/hooks/` (INV-3). That means the container sees the host's hook
+directory directly — a tight coupling: a user with no host Claude Code
+install has an empty hooks dir mounted, and drydock-shipped hook scripts
+must live on the host side. Evaluate sourcing from
+`~/.claude-container/hooks/` instead — the prototype dir drydock already
+controls — so drydock-shipped hooks ride with the install and host
+overrides become an explicit opt-in.
+
+**Why this scope.** Infrastructure polish — no new user-visible behaviour;
+the change is "where the hook scripts come from."
+
+**Invariants touched.** INV-3 — the RO mount property remains; only the
+source path changes. The "agent cannot write its own hooks" guarantee is
+preserved regardless of source.
+
+**Open questions.** Whether a host-override mechanism is still needed; how
+auto-sync interacts; whether the existing `~/.claude/hooks/` mount becomes
+a fallback or is removed.
+
+**Provenance.** Issue [#71][i71].
+
+### integration-in-ci
+
+**Status: Planned (v0.2.2, issue #74).**
+
+**Problem.** Integration tests (`test/integration/`) ship with the repo but
+do not run in CI — `DRYDOCK_INTEGRATION=1` is the opt-in flag, and the
+GitHub Actions workflow does not set it. The unit suite catches most
+regressions, but a class of issues only surfaces against a built image
+(real `docker compose up`, real bind-mounts, INV-2 sub-mount resolution).
+Issue #73 closed the hermeticity gap that previously made running the
+integration tests in CI unsafe; with that fixed the remaining work is
+wiring them in.
+
+**Why this scope.** Pure CI infrastructure. Risk reduction: a future
+INV-1/INV-2/INV-8 regression that the unit suite cannot catch lands in
+`dev` undetected until a contributor runs the integration suite locally.
+
+**Invariants touched.** None — adding a CI job, not changing runtime
+behaviour.
+
+**Open questions.** Whether to run integration tests on every PR or only
+on release-prep branches; the CI runner image size constraint; whether the
+integration opt-in flag is unified (a single `DRYDOCK_INTEGRATION=1` vs.
+the current per-suite gates).
+
+**Provenance.** Issue [#74][i74]. Surfaced alongside #73 (the SR-9
+hermetic rewrite).
+
 ---
 
-## v0.2.2 — Session persistence & ergonomics
+## v0.3.0 — Session persistence & multi-session UX
 
 ### session-persistence
 
-**Status: Planned (v0.2.2, issue #64).**
+**Status: Planned (v0.3.0, issue #64).**
 
 **Problem.** A `drydock run` session does not reliably survive the host
 terminal closing. `cmd_run` launches Claude via `docker compose run --rm`
@@ -407,19 +575,50 @@ INV-7 — ergonomics only, no adversarial protection, no invariant amendment.
 `drydock attach` command name and UX; the container teardown-on-exit
 mechanism; how `--rm` semantics change. Resolved in the SDD.
 
-**Non-goals.** The session-management UI (sidebar of sessions, tabs to switch
-between concurrent sessions) and the programmatic orchestrator / dashboard
-layer are out of scope. Each is a separate effort with its own issue and SDD,
-building on the multiplexer substrate this item establishes — not folded in
-here.
+**Pairs with.** [session-management-ui](#session-management-ui) below
+builds on the same multiplexer substrate this item establishes.
 
-**Provenance.** This session; issue [#64][i64]. Surfaced from a container
-permissions audit that also fixed root-owned `~/.cache` / `~/.config` and added
-the doctor resume cheat-sheet.
+**Provenance.** Issue [#64][i64]. Surfaced from a container permissions audit
+that also fixed root-owned `~/.cache` / `~/.config` and added the doctor
+resume cheat-sheet.
+
+### session-management-ui
+
+**Status: Planned (v0.3.0, issue #67).**
+
+**Problem.** Concurrent same-project sessions work
+([concurrent-sessions](#concurrent-sessions) in v0.2.0), but navigating
+between them is bare: each session lives in its own terminal, and there is
+no in-container UI for switching between them, listing live sessions, or
+reattaching to one from a different terminal. `drydock doctor` lists active
+sessions but does not offer navigation.
+
+**Proposed solution.** A multi-session UI inside the container — a sidebar
+showing all live drydock sessions for the project, with tabs/keys to switch
+between them. Builds on the detach-capable multiplexer substrate
+[session-persistence](#session-persistence) establishes — they share the
+detach layer and the live-session enumeration logic.
+
+**Why this scope.** Ergonomics — once a project has more than one active
+session (test driver + dev work + a parallel docs PR), the bare
+per-terminal model adds friction. Distinct enough from `session-persistence`
+to be a separate item: persistence keeps a session alive across terminal
+close; this is multi-session navigation while terminals are open.
+
+**Invariants touched.** None new. INV-2 per-session config isolation is
+unchanged — the UI surfaces sessions, it does not write-share state.
+
+**Open questions.** The substrate (Zellij sidebar plugin vs. a
+drydock-specific TUI vs. a status-bar approach); whether this is a
+"navigate to other sessions from inside one" feature or a session-launcher;
+attach-from-remote-terminal ergonomics vs. spawning a new one.
+
+**Provenance.** Issue [#67][i67]. Surfaced from the same audit that drove
+`session-persistence`.
 
 ---
 
-## v0.3.0 — Per-project environment customization
+## v0.4.0 — Per-project environment customization
 
 ### toolchain-mise
 
@@ -497,7 +696,7 @@ addition (engram #1129) bloating the shared image.
 
 ---
 
-## v0.4.0 — drydock as agent-agnostic infrastructure
+## v0.5.0 — drydock as agent-agnostic infrastructure
 
 ### agent-adapter
 
@@ -510,7 +709,10 @@ config paths, container state layout, MCP wiring — so drydock can host more th
 one agent.
 
 **Why this scope.** A release of its own — abstracting the agent boundary is a
-large, distinct effort, separate from the per-project-environment theme of v0.3.0.
+large, distinct effort, separate from the per-project-environment theme of v0.4.0.
+Sequenced before [sandcastle-sandbox-provider](#sandcastle-sandbox-provider)
+(v0.6.0) so drydock is already agent-agnostic at the per-session level before
+the orchestration layer plugs in.
 
 **Invariants touched.** INV-2 (each agent needs its own container-state split);
 INV-4 (the engram-optional principle generalizes — no agent should be
@@ -522,3 +724,42 @@ roadmap.
 
 **Provenance.** Referenced as future-release work in engram #1010 and #1053; no
 dedicated memo.
+
+---
+
+## v0.6.0 — Programmatic agent orchestration
+
+### sandcastle-sandbox-provider
+
+**Status: Planned (v0.6.0, issue #66).**
+
+**Problem.** drydock is a CLI today — a human types `drydock run` to start
+an agent session. Programmatic orchestration (another agent or a dashboard
+spawning N drydock sessions, observing them, killing them) is not a
+first-class surface. Sandcastle, the agent-orchestration framework this
+project's maintainer also works on, has a `SandboxProvider` abstraction
+that drydock could implement, exposing drydock as one of the sandbox
+backends sandcastle can target.
+
+**Proposed solution.** A `SandboxProvider` adapter — a thin layer that
+exposes the drydock session lifecycle (start, attach, exec, stop) as the
+sandcastle interface expects. Implementation lives in this repo so drydock
+remains the source of truth for its own session semantics.
+
+**Why this scope.** A release of its own — drydock-as-library is a
+distinct surface from drydock-as-CLI, and the sandcastle interface
+contract is the authoritative shape. Sequenced after
+[agent-adapter](#agent-adapter) (v0.5.0) so drydock is already
+agent-agnostic at the per-session level before the orchestration layer
+plugs in.
+
+**Invariants touched.** INV-2 (each spawned session still needs its own
+container-state split); INV-7 (sandcastle's orchestration loop is part of
+the trusted control plane, not an adversary surface).
+
+**Open questions.** Interface stability of `SandboxProvider`; whether the
+adapter lives in this repo or in a sandcastle plugin; observability (how
+does sandcastle inspect a running drydock session — logs, exit status,
+the doctor JSON?).
+
+**Provenance.** Issue [#66][i66].
