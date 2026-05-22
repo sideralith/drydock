@@ -1138,6 +1138,150 @@ STUB
 	[ "$count" -eq 0 ]
 }
 
+# ── harvest_session_projects (issue #68 — conversation-history data loss) ─────
+# The per-session ~/.claude-container-<disc>/ dir conflates ephemeral config
+# with durable conversation history under projects/. Before the GC rm -rf's an
+# orphan dir, that history must be unioned into the prototype so new sessions —
+# seeded from the prototype — inherit it and `claude --resume` keeps working.
+
+@test "harvest_session_projects: unions session projects/ into prototype" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-union"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-aa11/projects/-home-user-proj"
+	echo '{"msg":"hi"}' >"$fake_home/.claude-container-aa11/projects/-home-user-proj/uuid-1.jsonl"
+	HOME="$fake_home"
+	harvest_session_projects "$fake_home/.claude-container-aa11"
+	[ -f "$fake_home/.claude-container/projects/-home-user-proj/uuid-1.jsonl" ]
+}
+
+@test "harvest_session_projects: no-op when session dir has no projects/" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-noprojects"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-bb22"
+	HOME="$fake_home"
+	run harvest_session_projects "$fake_home/.claude-container-bb22"
+	[ "$status" -eq 0 ]
+}
+
+@test "harvest_session_projects: no-op when prototype ~/.claude-container/ absent" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-noproto"
+	mkdir -p "$fake_home/.claude-container-cc33/projects/-home-user-proj"
+	echo '{}' >"$fake_home/.claude-container-cc33/projects/-home-user-proj/uuid-1.jsonl"
+	HOME="$fake_home"
+	run harvest_session_projects "$fake_home/.claude-container-cc33"
+	[ "$status" -eq 0 ]
+	# Prototype must NOT be conjured into existence by the harvest.
+	[ ! -d "$fake_home/.claude-container" ]
+}
+
+@test "harvest_session_projects: union does NOT delete pre-existing prototype files" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-nodelete"
+	mkdir -p "$fake_home/.claude-container/projects/-home-user-proj"
+	echo '{"old":1}' >"$fake_home/.claude-container/projects/-home-user-proj/uuid-old.jsonl"
+	mkdir -p "$fake_home/.claude-container-dd44/projects/-home-user-proj"
+	echo '{"new":1}' >"$fake_home/.claude-container-dd44/projects/-home-user-proj/uuid-new.jsonl"
+	HOME="$fake_home"
+	harvest_session_projects "$fake_home/.claude-container-dd44"
+	# Both the pre-existing prototype file and the harvested one survive.
+	[ -f "$fake_home/.claude-container/projects/-home-user-proj/uuid-old.jsonl" ]
+	[ -f "$fake_home/.claude-container/projects/-home-user-proj/uuid-new.jsonl" ]
+}
+
+@test "harvest_session_projects: larger session file replaces a smaller prototype copy" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-larger-wins"
+	mkdir -p "$fake_home/.claude-container/projects/-home-user-proj"
+	local proto_file="$fake_home/.claude-container/projects/-home-user-proj/uuid-1.jsonl"
+	printf 'line1\n' >"$proto_file"
+	mkdir -p "$fake_home/.claude-container-ee55/projects/-home-user-proj"
+	local sess_file="$fake_home/.claude-container-ee55/projects/-home-user-proj/uuid-1.jsonl"
+	printf 'line1\nline2\nline3\n' >"$sess_file"
+	HOME="$fake_home"
+	harvest_session_projects "$fake_home/.claude-container-ee55"
+	# Append-only logs: the longer copy is the more complete one and wins.
+	[ "$(wc -l <"$proto_file")" -eq 3 ]
+}
+
+@test "harvest_session_projects: smaller session file does NOT overwrite a larger prototype copy" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-smaller-noclobber"
+	mkdir -p "$fake_home/.claude-container/projects/-home-user-proj"
+	local proto_file="$fake_home/.claude-container/projects/-home-user-proj/uuid-1.jsonl"
+	printf 'line1\nline2\nline3\nline4\n' >"$proto_file"
+	mkdir -p "$fake_home/.claude-container-ff77/projects/-home-user-proj"
+	local sess_file="$fake_home/.claude-container-ff77/projects/-home-user-proj/uuid-1.jsonl"
+	printf 'line1\n' >"$sess_file"
+	HOME="$fake_home"
+	harvest_session_projects "$fake_home/.claude-container-ff77"
+	# A stale, shorter session copy must never truncate the prototype's
+	# more-complete history — the multi-orphan hazard caught in Judgment Day.
+	[ "$(wc -l <"$proto_file")" -eq 4 ]
+}
+
+@test "harvest_session_projects: degenerate empty argument is a safe no-op" {
+	run harvest_session_projects ""
+	[ "$status" -eq 0 ]
+}
+
+@test "harvest_session_projects: tolerates a trailing slash in the dir argument" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-trailingslash"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-ff66/projects/-home-user-proj"
+	echo '{}' >"$fake_home/.claude-container-ff66/projects/-home-user-proj/uuid-1.jsonl"
+	HOME="$fake_home"
+	harvest_session_projects "$fake_home/.claude-container-ff66/"
+	[ -f "$fake_home/.claude-container/projects/-home-user-proj/uuid-1.jsonl" ]
+}
+
+@test "gc_orphan_session_dirs: harvests projects/ history into prototype before pruning orphan dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-harvest"
+	mkdir -p "$fake_home/.claude-container/projects"
+	# Orphan session dir with durable conversation history under projects/.
+	mkdir -p "$fake_home/.claude-container-a7a7/projects/-home-user-proj"
+	echo '{"role":"user"}' \
+		>"$fake_home/.claude-container-a7a7/projects/-home-user-proj/7a21fbd0.jsonl"
+	touch "$fake_home/.claude-container-a7a7.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a returns empty → the dir is an orphan and gets pruned.
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Orphan dir is gone …
+	[ ! -d "$fake_home/.claude-container-a7a7" ]
+	# … but the conversation history was harvested into the prototype first.
+	[ -f "$fake_home/.claude-container/projects/-home-user-proj/7a21fbd0.jsonl" ]
+}
+
+@test "harvest_session_projects: harvests multiple files across nested slug dirs in one call" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-multifile"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-1a2b/projects/-home-user-projA"
+	mkdir -p "$fake_home/.claude-container-1a2b/projects/-home-user-projB"
+	echo '{}' >"$fake_home/.claude-container-1a2b/projects/-home-user-projA/uuid-1.jsonl"
+	echo '{}' >"$fake_home/.claude-container-1a2b/projects/-home-user-projB/uuid-2.jsonl"
+	HOME="$fake_home"
+	harvest_session_projects "$fake_home/.claude-container-1a2b"
+	# The find loop walks every file and recreates each slug subdir.
+	[ -f "$fake_home/.claude-container/projects/-home-user-projA/uuid-1.jsonl" ]
+	[ -f "$fake_home/.claude-container/projects/-home-user-projB/uuid-2.jsonl" ]
+}
+
+@test "harvest_session_projects: a copy failure is non-fatal and emits a note" {
+	local fake_home="$BATS_TEST_TMPDIR/harvest-cpfail"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-3c4d/projects/-home-user-proj"
+	echo '{}' >"$fake_home/.claude-container-3c4d/projects/-home-user-proj/uuid-1.jsonl"
+	# Read-only prototype projects/ tree → the per-file mkdir/cp fails.
+	chmod 500 "$fake_home/.claude-container/projects"
+	HOME="$fake_home"
+	run harvest_session_projects "$fake_home/.claude-container-3c4d"
+	# Restore perms so bats can clean up BATS_TEST_TMPDIR.
+	chmod 700 "$fake_home/.claude-container/projects"
+	# Best-effort contract: never fatal, and the failure is surfaced.
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"could not harvest"* ]]
+}
+
 # ── seed_session_config_dir (concurrent-sessions, PR 1 Foundation) ────────────
 # Uses a fake HOME with a pre-populated prototype ~/.claude-container/ and
 # ~/.claude-container.json. Per-test docker stubs control liveness checks.

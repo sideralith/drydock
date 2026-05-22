@@ -633,6 +633,70 @@ export_compose_env() {
 	sync_submount_env_file "$project_dir"
 }
 
+# harvest_session_projects — rescue durable conversation history from a
+# per-session config dir before the GC destroys it (issue #68).
+#
+# The per-session ~/.claude-container-<disc>/ dir conflates ephemeral config
+# (.claude.json, settings — correctly per-session, INV-2) with durable
+# conversation history (projects/<slug>/<uuid>.jsonl — one append-only file
+# per conversation UUID). gc_orphan_session_dirs' rm -rf would destroy that
+# history, breaking `claude --resume` across sessions. This helper merges the
+# session's projects/ tree into the prototype ~/.claude-container/projects/ so
+# new sessions — seeded from the prototype by seed_session_config_dir — inherit
+# the history and --resume keeps working.
+#
+# Arguments:
+#   $1 — session dir (absolute path, trailing slash tolerated)
+#
+# Behaviour:
+#   - No-op on an empty argument, on a session dir with no projects/ subtree,
+#     or when the prototype ~/.claude-container/ does not exist (never conjure
+#     a half-formed prototype — without it seeding cannot run anyway).
+#   - For every file under the session's projects/ tree: copy it into the
+#     prototype only when the prototype has no copy OR the session copy is
+#     strictly LARGER. Conversation logs are append-only, so for a linearly
+#     extended UUID the largest copy is the most complete one and the merge
+#     is order-independent — unlike rsync's unconditional source-wins
+#     overwrite, which (when one GC pass harvests several orphan dirs holding
+#     the same UUID) lets a stale shorter copy harvested last clobber a
+#     longer one. A size tie keeps the prototype copy (equal bytes ⇒ equal
+#     content for an append-only log). Limitation: if the SAME conversation
+#     was independently resumed in two sessions, the two divergent branches
+#     cannot both fit one per-UUID file — the larger branch is kept (the
+#     root fix tracked for #68 revisits the projects/ topology).
+#   - Nothing in the prototype is deleted. A copy failure emits a note;
+#     harvesting is best-effort and never fatal — gc_orphan_session_dirs must
+#     still return 0.
+harvest_session_projects() {
+	local _dir="${1%/}"
+	# Degenerate empty arg: _src would be "/projects" — bail out (matches
+	# seed_session_config_dir's explicit guard for the analogous case).
+	[ -n "$_dir" ] || return 0
+	local _src="$_dir/projects"
+	local _dst="$HOME/.claude-container/projects"
+	[ -d "$_src" ] || return 0
+	[ -d "$HOME/.claude-container" ] || return 0
+	local _f _rel _target _ssize _dsize
+	while IFS= read -r -d '' _f; do
+		_rel="${_f#"$_src"/}"
+		_target="$_dst/$_rel"
+		if [ -f "$_target" ]; then
+			# Append-only logs: keep whichever copy holds more content.
+			_ssize=$(wc -c <"$_f" 2>/dev/null) || _ssize=0
+			_dsize=$(wc -c <"$_target" 2>/dev/null) || _dsize=0
+			[ "${_ssize:-0}" -gt "${_dsize:-0}" ] || continue
+		fi
+		mkdir -p "${_target%/*}" 2>/dev/null ||
+			{
+				note "could not harvest conversation history from ${_dir##*/}"
+				continue
+			}
+		cp -p "$_f" "$_target" 2>/dev/null ||
+			note "could not harvest conversation history from ${_dir##*/}"
+	done < <(find "$_src" -type f -print0 2>/dev/null)
+	return 0
+}
+
 # gc_orphan_session_dirs — prune per-session Claude config dirs whose container
 # no longer exists. Called before discriminator generation so stale dirs are
 # cleaned before a new session is seeded.
@@ -642,7 +706,9 @@ export_compose_env() {
 #      never matches the bare prototype ~/.claude-container — no trailing dash).
 #   2. For each dir, extract <disc> from the dir name; derive both container names:
 #      drydock-<PROJECT_NAME>-<disc> and drydock-<PROJECT_NAME>-<disc>-shell.
-#   3. If NEITHER name appears in `docker ps -a`, rm -rf the dir and its .json sibling.
+#   3. If NEITHER name appears in `docker ps -a`, harvest the dir's durable
+#      conversation history into the prototype (harvest_session_projects),
+#      then rm -rf the dir and its .json sibling.
 #   4. Returns 0 always — GC failures are non-fatal.
 #
 # Uses DOCKER seam.
@@ -671,7 +737,9 @@ gc_orphan_session_dirs() {
 		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
 			continue
 		fi
-		# Orphan — prune dir and sibling .json.
+		# Orphan — rescue durable conversation history, then prune the dir
+		# and its sibling .json (issue #68).
+		harvest_session_projects "$_dir"
 		_json="${_dir%/}.json"
 		rm -rf "$_dir"
 		rm -f "$_json"
