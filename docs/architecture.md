@@ -258,6 +258,57 @@ performs a one-time sweep that consolidates all scattered per-session
 sentinel-gated (`~/.config/drydock/.projects-migrated`) and is a no-op on
 subsequent runs.
 
+### Container-config overlay (issue #77)
+
+**The problem**: Config edits made inside a container under `~/.claude/` — such as
+adding an MCP server config or a custom plugin file — revert on every `drydock run`
+because `seed_session_config_dir` tears down and re-seeds the per-session
+`~/.claude-container-<disc>/` directory from the prototype on each invocation. There
+is no way to persist per-session config across runs without modifying the prototype
+directly (which would affect the host session too).
+
+**The solution**: Format A tree-mirror overlay at `~/.config/drydock/claude-overlay/`.
+When that directory is present, `apply_claude_overlay` (the last step of
+`seed_session_config_dir`) copies it whole-file and recursively on top of the
+freshly re-seeded per-session dir. The copy is host-authored, container-consumed,
+and unidirectional — the overlay is never modified by the container, and the host's
+`~/.claude/` is never written.
+
+**Why Format A (whole-file copy) over Format B (JSON merge)**: a whole-file copy
+needs no JSON parsing or merge engine — the host file replaces the seeded copy
+verbatim. A JSON merge engine (smart field-level merge of `.claude.json` sections)
+would require a dependency on `jq` in the host's seeding path and non-trivial merge
+semantics. Format A is sufficient for the primary use case (plugin config files that
+do not already exist in the prototype). Format B is deferred until concrete demand.
+
+**Scope limit and INV-2 carve-out**: each entry in the overlay is validated before
+copy in a single `find` pass. The validation rejects three classes of entries and
+aborts `drydock run` before container start (fail-loud, named path):
+- **Symlinks**: rejected outright. The use case (plugin config files) needs no
+  symlinks; rejecting them eliminates the path-resolution bypass class without
+  building a `realpath` engine. A symlink named `foo.json` pointing at
+  `../../.claude.json` or escaping the overlay tree is caught at depth 0 by
+  `[ -L ]` before any other check.
+- **Forbidden top-level basenames**: `.claude.json` and `.credentials.json` at
+  overlay depth 1 are rejected. These are INV-2 hazard files — delivering them into
+  the per-session dir would re-introduce the `~/.claude.json` last-writer-wins
+  clobber and the `.credentials.json` OAuth refresh race. The depth-1 scoping is
+  deliberate: a file at `sub/.claude.json` is not a hazard (INV-2's clobber hazard
+  requires the specific path `~/.claude.json` at the root, not nested files of the
+  same name).
+- **Non-regular entries** (FIFOs, devices, sockets): rejected. The overlay must
+  contain only plain directories and regular files.
+
+The `projects/` subtree inside the overlay is silently skipped (no error). This is
+the same "projects is not per-session config" rule already encoded in the prototype
+copy loop above: `~/.claude/projects/` is conversation history, backed by the shared
+`:rw` sub-mount (the existing INV-2 carve-out). Copying it is silently wasted I/O.
+
+**Unidirectional property**: the host's `~/.config/drydock/claude-overlay/` is never
+modified by drydock itself — it is purely host-authored. The host's `~/.claude/` is
+never written by the overlay mechanism. Rollback is as simple as `rm -rf
+~/.config/drydock/claude-overlay/`.
+
 ## The hooks RO overlay
 
 `~/.claude/hooks/` is bind-mounted **`:ro`** on top of the `.claude-container-<disc>`
