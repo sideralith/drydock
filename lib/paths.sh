@@ -52,6 +52,8 @@ CONTAINER_ENGRAM="$HOME/.engram-container"
 CONTAINER_CLAUDE_PROJECTS="$HOME/.claude-container/projects"
 # shellcheck disable=SC2034  # used in lib/commands.sh
 DRYDOCK_OAUTH_TOKEN="$HOME/.config/drydock/claude-oauth-token"
+# shellcheck disable=SC2034  # used in lib/compose.sh (apply_claude_overlay)
+HOST_CLAUDE_OVERLAY="$HOME/.config/drydock/claude-overlay"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
 
