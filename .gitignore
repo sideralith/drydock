@@ -14,6 +14,11 @@ Thumbs.db
 /scratch/
 /tmp/
 
+# SR-9 integration test scratch — hermetic fake-HOME tree built under the
+# project root (see test/integration/test_projects_submount.sh). Always
+# rm -rf'd by the test itself; ignored so a crashed run never gets committed.
+/.inttest-tmp/
+
 # Agent Teams / SDD local artifacts
 /.atl/
 

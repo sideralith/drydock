@@ -2,37 +2,46 @@
 # test/integration/test_projects_submount.sh — SR-9 integration test
 #
 # Proves that the shared projects/ sub-mount in docker-compose.yml resolves
-# correctly end-to-end: a file written to ~/.claude/projects/<slug>/ inside the
-# container appears at ~/.claude-container/projects/<slug>/ on the HOST.
+# correctly end-to-end: a file written to ~/.claude/projects/<slug>/ inside one
+# container is readable from a second, independently-launched container via the
+# shared ~/.claude-container/projects/ backing store.
 #
 # This is an integration-level test. It requires:
 #   - A real Docker daemon socket (available in the drydock container and on host)
 #   - The drydock:latest image to already be built
 #
-# Run locally or in CI:
+# Run locally or inside a drydock container:
 #   RUN_INTEGRATION=1 test/integration/test_projects_submount.sh
 #
 # Guard: skips (with a clear message and exit 0) unless RUN_INTEGRATION=1 is set.
 # scripts/test.sh does NOT include this file — it only runs test/*.bats — so the
-# normal bats suite stays green without a Docker daemon. To run manually:
+# normal bats suite stays green without a Docker daemon.
 #
-#   cd /path/to/drydock && RUN_INTEGRATION=1 test/integration/test_projects_submount.sh
+# ── Hermetic design (issue #73) ───────────────────────────────────────────────
+# This test stages ALL scratch state under $DRYDOCK_HOME/.inttest-tmp/ — never
+# under $HOME. The reason is the Docker-out-of-Docker (DooD) boundary: when this
+# script itself runs inside a drydock container, `docker compose run` talks to
+# the HOST daemon via the shared socket, so the launched container's bind-mount
+# sources resolve against the HOST filesystem — NOT the test-runner container's.
+# The two $HOME directories are different filesystems. Staging under $HOME and
+# letting Docker auto-create the missing mount sources produced root-owned dirs
+# in the real host home (issue #73).
 #
-# DooD note: when this script itself runs inside a drydock container, the nested
-# test container's bind mounts resolve against the OUTER host filesystem (the
-# Docker socket is shared). Assertions that check host paths therefore probe the
-# outer host, not the current container. To avoid this complexity, the assertions
-# use a self-contained approach: a second container run reads back the file to
-# confirm the sub-mount is the same backing store (shared-store persistence
-# across two distinct container invocations proves the mount is correct).
+# The project directory ($DRYDOCK_HOME / PROJECT_DIR) is the one path drydock
+# bind-mounts at an IDENTICAL path on the host and inside every container. So a
+# fake $HOME built underneath it is visible, with the same path, to both the
+# test process and the launched containers. Every mount source docker-compose.yml
+# references is pre-created (user-owned, empty) so Docker never auto-creates a
+# root-owned directory. Cleanup is a plain `rm -rf` of user-owned files —
+# reliable under DooD and on a bare host alike.
 #
 # CI wiring note: this test is LOCAL-ONLY and cannot run in GitHub Actions.
 # docker-compose.yml uses `network_mode: host`, which maps to the GHA runner's
 # container network namespace rather than a bare Linux host — `docker compose run`
-# with that mode produces unreliable results in DinD CI environments. The smoke
-# workflow explicitly documents the same limitation for `drydock run`. Run this
-# test locally before merging changes to docker-compose.yml or the compose volume
-# list, or on a self-hosted runner with true host networking.
+# with that mode produces unreliable results in DinD CI environments. Run this
+# test locally (host or drydock container) before merging changes to
+# docker-compose.yml or its volume list, or on a self-hosted runner with true
+# host networking.
 set -euo pipefail
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
@@ -45,85 +54,115 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DRYDOCK_HOME="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-echo "==> SR-9 integration: projects/ sub-mount resolution"
-echo "    DRYDOCK_HOME=$DRYDOCK_HOME"
+# All scratch lives here — under the project tree (the only DooD-stable path),
+# never under $HOME. Gitignored via /.inttest-tmp/ in .gitignore.
+INTTEST_ROOT="$DRYDOCK_HOME/.inttest-tmp"
+# A fake $HOME built inside the scratch root. Because it lives under the project
+# bind-mount, the test process and the launched containers see it at the same
+# path. `docker compose` is invoked with HOME pointed here (so every ${HOME} in
+# docker-compose.yml resolves into the fake tree), and each container run gets
+# `-e HOME=$FAKE_HOME` so its in-container $HOME matches the mount targets.
+FAKE_HOME="$INTTEST_ROOT/home"
 
-# Test identifiers
+echo "==> SR-9 integration: projects/ sub-mount resolution (hermetic)"
+echo "    DRYDOCK_HOME=$DRYDOCK_HOME"
+echo "    FAKE_HOME=$FAKE_HOME"
+
+# ── Random session discriminators ────────────────────────────────────────────
+# Same shape as drydock's own _gen_discriminator (lib/paths.sh) — 4-char hex.
+# Random (not fixed a1b2/c3d4) so a crashed run can never leave pollution on a
+# deterministic, predictable path.
+_gen_disc() { printf '%04x' "$(((RANDOM << 8 ^ RANDOM) & 0xffff))"; }
+TEST_DISC_A="$(_gen_disc)" # first container (writer)
+TEST_DISC_B="$(_gen_disc)" # second container (reader — proves shared persistence)
+while [ "$TEST_DISC_B" = "$TEST_DISC_A" ]; do TEST_DISC_B="$(_gen_disc)"; done
+
+# ── Test identifiers ─────────────────────────────────────────────────────────
 TEST_SLUG="integration-test-sr9"
 TEST_UUID="00000000-0000-0000-0000-000000000001"
 TEST_CONTENT="SR-9 integration test: sub-mount resolution"
-TEST_DISC_A="a1b2" # first container (writer)
-TEST_DISC_B="c3d4" # second container (reader — proves shared persistence)
 
-SHARED_STORE="$HOME/.claude-container/projects"
-SESSION_DIR_A="$HOME/.claude-container-${TEST_DISC_A}"
-SESSION_JSON_A="$HOME/.claude-container-${TEST_DISC_A}.json"
-SESSION_DIR_B="$HOME/.claude-container-${TEST_DISC_B}"
-SESSION_JSON_B="$HOME/.claude-container-${TEST_DISC_B}.json"
+SHARED_STORE="$FAKE_HOME/.claude-container/projects"
+SESSION_DIR_A="$FAKE_HOME/.claude-container-${TEST_DISC_A}"
+SESSION_DIR_B="$FAKE_HOME/.claude-container-${TEST_DISC_B}"
 
-# ── Pre-flight cleanup ────────────────────────────────────────────────────────
-CREATED_PROTOTYPE=0
-
-cleanup_prototype() {
-	if [ "${CREATED_PROTOTYPE:-0}" = "1" ]; then
-		rm -rf "$HOME/.claude-container"
-		rm -f "$HOME/.claude-container.json"
-	fi
-}
-
+# ── Cleanup ──────────────────────────────────────────────────────────────────
 cleanup() {
 	echo "==> Cleaning up test artifacts..."
-	rm -rf "$SESSION_DIR_A" "$SESSION_DIR_B"
-	rm -f "$SESSION_JSON_A" "$SESSION_JSON_B"
-	rm -rf "${SHARED_STORE:?}/$TEST_SLUG" 2>/dev/null || true
+	# Remove any containers this run launched (names carry the random discs).
 	docker rm -f "drydock-inttest-sr9-${TEST_DISC_A}" "drydock-inttest-sr9-${TEST_DISC_B}" 2>/dev/null || true
-	cleanup_prototype
+	# Everything else is user-owned scratch under the project tree — one rm -rf.
+	rm -rf "$INTTEST_ROOT"
 }
 trap cleanup EXIT
-cleanup 2>/dev/null || true
+# Pre-flight: clear any leftover scratch from a previous crashed run.
+rm -rf "$INTTEST_ROOT"
 
-# ── Ensure prototype exists ───────────────────────────────────────────────────
-if [ ! -d "$HOME/.claude-container" ]; then
-	echo "==> Creating minimal ~/.claude-container prototype for this test..."
-	mkdir -p "$HOME/.claude-container"
-	echo '{}' >"$HOME/.claude-container.json" 2>/dev/null || true
-	CREATED_PROTOTYPE=1
-fi
-mkdir -p "$SHARED_STORE"
+# ── Pre-create every docker-compose.yml mount source ─────────────────────────
+# Docker auto-creates a missing bind-mount source as a ROOT-OWNED directory.
+# Pre-creating each source (user-owned, empty) is what keeps this test hermetic:
+# Docker never has to auto-create anything, so nothing root-owned ever appears.
+#
+# This list MUST track the base docker-compose.yml `volumes:` block. If a new
+# host-path mount source is added there, add it here too — otherwise this test
+# silently regresses and starts polluting the host again.
+#
+#   docker-compose.yml line │ source path (under $FAKE_HOME)
+#   ────────────────────────┼──────────────────────────────────────────────────
+#   66  (DRYDOCK_SESSION_CLAUDE_DIR)  → .claude-container-<disc>/   (per-session)
+#   67  (DRYDOCK_SESSION_CLAUDE_JSON) → .claude-container-<disc>.json
+#   77                               → .claude-container/projects/
+#   80                               → .claude/hooks/
+#   83                               → .local/
+#   86                               → .gitconfig
+#   87                               → .config/gh/
+# (.claude-container/ + .claude-container.json are the seed prototype copied
+#  into each per-session pair by seed_session.)
+precreate_mount_sources() {
+	mkdir -p \
+		"$FAKE_HOME/.claude/hooks" \
+		"$FAKE_HOME/.claude-container/projects" \
+		"$FAKE_HOME/.local" \
+		"$FAKE_HOME/.config/gh"
+	printf '{}' >"$FAKE_HOME/.claude-container.json"
+	: >"$FAKE_HOME/.gitconfig"
+}
 
-# ── Ensure drydock:latest image exists ───────────────────────────────────────
-if ! docker image inspect drydock:latest >/dev/null 2>&1; then
-	echo "==> SKIP: drydock:latest image not found; run 'drydock build' first"
-	exit 0
-fi
-
-# ── Helper: seed a per-session dir ───────────────────────────────────────────
+# ── Helper: seed a per-session dir + its .json from the prototype ─────────────
 seed_session() {
 	local disc="$1"
-	local session_dir="$HOME/.claude-container-${disc}"
-	local session_json="$HOME/.claude-container-${disc}.json"
+	local session_dir="$FAKE_HOME/.claude-container-${disc}"
+	local session_json="$FAKE_HOME/.claude-container-${disc}.json"
 	mkdir -p "$session_dir"
+	# Copy prototype entries except projects/ (projects/ is the shared sub-mount).
 	while IFS= read -r -d '' _entry; do
 		[ "${_entry##*/}" = projects ] && continue
 		cp -a "$_entry" "$session_dir/" 2>/dev/null || true
-	done < <(find "$HOME/.claude-container" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
-	cp "$HOME/.claude-container.json" "$session_json" 2>/dev/null || echo '{}' >"$session_json"
+	done < <(find "$FAKE_HOME/.claude-container" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+	cp "$FAKE_HOME/.claude-container.json" "$session_json" 2>/dev/null || printf '{}' >"$session_json"
 	mkdir -p "$session_dir/projects"
 }
 
-# ── Helper: run a container with given disc ───────────────────────────────────
+# ── Helper: run a container with the given discriminator ─────────────────────
 run_container() {
 	local disc="$1"
 	local cmd="$2"
-	local session_dir="$HOME/.claude-container-${disc}"
-	local session_json="$HOME/.claude-container-${disc}.json"
+	local session_dir="$FAKE_HOME/.claude-container-${disc}"
+	local session_json="$FAKE_HOME/.claude-container-${disc}.json"
 	local _uid _gid _docker_gid
 
 	_uid="$(id -u)"
 	_gid="$(id -g)"
 	_docker_gid="$(getent group docker 2>/dev/null | cut -d: -f3 || echo 1001)"
 
+	# HOME=$FAKE_HOME → every ${HOME} in docker-compose.yml resolves into the
+	# fake tree (mount SOURCES and TARGETS alike — the compose file uses one
+	# ${HOME} for both sides of the bind).
+	# -e HOME=$FAKE_HOME → the launched container's in-container $HOME matches
+	# those mount targets, so `$HOME/.claude/...` in the test command lands on
+	# the bind mount instead of the image's baked /home/<user>.
 	env \
+		HOME="$FAKE_HOME" \
 		DRYDOCK_HOME="$DRYDOCK_HOME" \
 		USER_NAME="${USER:-$(id -un)}" \
 		USER_UID="$_uid" \
@@ -138,10 +177,20 @@ run_container() {
 		docker compose \
 		-f "$DRYDOCK_HOME/docker-compose.yml" \
 		run --rm \
+		-e HOME="$FAKE_HOME" \
 		--name "drydock-inttest-sr9-${disc}" \
 		drydock \
 		bash -c "$cmd"
 }
+
+# ── Build the hermetic fake-HOME skeleton ────────────────────────────────────
+precreate_mount_sources
+
+# ── Ensure drydock:latest image exists ───────────────────────────────────────
+if ! docker image inspect drydock:latest >/dev/null 2>&1; then
+	echo "==> SKIP: drydock:latest image not found; run 'drydock build' first"
+	exit 0
+fi
 
 # ── Assert 0: sub-mount is active inside the container ───────────────────────
 echo ""
@@ -180,19 +229,23 @@ if ! echo "$READ_RESULT" | grep -q "$TEST_CONTENT"; then
 fi
 echo "    PASS: file written in session A is readable in session B (shared store confirmed)"
 
-# ── Assert 2: file is NOT under the per-session dir (on the current host/fs) ──
+# ── Assert 2: file is in the shared store, NOT the per-session dir ───────────
 echo ""
 echo "==> Assert 2: verify the file is in shared store (not per-session dir)..."
-# We verify by checking that the per-session dir's projects/ is empty.
-# (The actual .jsonl lives in ~/.claude-container/projects/ which may be on the
-# outer host if running DooD; we verify absence in the per-session dir which IS
-# accessible from this script's filesystem.)
+# The .jsonl must live in the shared store; the per-session dir's own projects/
+# is shadowed by the sub-mount inside the container and must stay empty on disk.
 PER_SESSION_FILE_A="$SESSION_DIR_A/projects/$TEST_SLUG/$TEST_UUID.jsonl"
 if [ -f "$PER_SESSION_FILE_A" ]; then
 	echo "FAIL: file found inside per-session dir (should only be in shared store): $PER_SESSION_FILE_A"
 	exit 1
 fi
-echo "    PASS: file is NOT present inside per-session dir $SESSION_DIR_A/projects/"
+SHARED_FILE="$SHARED_STORE/$TEST_SLUG/$TEST_UUID.jsonl"
+if [ ! -f "$SHARED_FILE" ]; then
+	echo "FAIL: file not found in shared store: $SHARED_FILE"
+	exit 1
+fi
+echo "    PASS: file is in the shared store, not the per-session dir"
+echo "    (per-session dir B: $SESSION_DIR_B/projects/ — also empty by the same rule)"
 
 echo ""
 echo "==> SR-9 integration test PASSED"
