@@ -811,6 +811,63 @@ seed_session_config_dir() {
 
 	# Remove the staleness marker — it belongs to the prototype, not sessions.
 	rm -f "$session_dir/.drydock-last-sync"
+
+	# Apply the persistent host-authored container-config overlay (issue #77).
+	# Whole-file recursive copy on top of the freshly re-seeded dir; scope-
+	# enforced (no .claude.json / .credentials.json, no symlinks) — see INV-2
+	# carve-out. No-op when ~/.config/drydock/claude-overlay/ is absent.
+	apply_claude_overlay "$session_dir"
+}
+
+# apply_claude_overlay — apply the persistent host-authored container-config
+# overlay (~/.config/drydock/claude-overlay/) on top of a freshly-seeded
+# per-session Claude config dir. Issue #77. Format A: whole-file recursive copy.
+#
+# Arguments:
+#   $1 — session_dir: the per-session ~/.claude-container-<disc>/ dir
+#
+# Behaviour:
+#   - Absent/empty overlay → silent return 0 (default for every non-user).
+#   - Single validated find-pass: symlinks rejected (err), top-level
+#     .claude.json/.credentials.json rejected (err — INV-2 forbidden set),
+#     non-regular entries rejected (err), projects/ subtree silently skipped
+#     (shadowed by the :rw sub-mount, same rule as the prototype copy loop).
+#   - Directories mirrored with mkdir -p; regular files copied with cp -p
+#     (whole-file overwrite of the seeded copy).
+#   - Any scope violation is fail-loud: err names the offending path and
+#     aborts drydock run before container start. Never silent-skip.
+apply_claude_overlay() {
+	local session_dir="$1"
+	[ -n "$session_dir" ] || return 0
+	[ -d "$HOST_CLAUDE_OVERLAY" ] || return 0
+	local _entry _rel
+	while IFS= read -r -d '' _entry; do
+		# Symlink check FIRST — -f/-d follow links; -L does not.
+		if [ -L "$_entry" ]; then
+			err "drydock: overlay rejects symlink '$_entry' — symlinks are not allowed in ~/.config/drydock/claude-overlay/ (copy the real file instead)"
+		fi
+		_rel="${_entry#"$HOST_CLAUDE_OVERLAY"/}"
+		# Forbidden set: depth-1 .claude.json / .credentials.json (INV-2).
+		# Depth-1 means _rel contains no slash — it is a direct overlay child.
+		case "$_rel" in
+		.claude.json | .credentials.json)
+			err "drydock: overlay cannot deliver '$_rel' — .claude.json and .credentials.json are forbidden by INV-2; remove it from ~/.config/drydock/claude-overlay/"
+			;;
+		esac
+		# projects/ is conversation history (shared :rw sub-mount), not config —
+		# shadowed by the mount; skip silently (same rule as the prototype loop).
+		if [ "$_rel" = projects ] || [[ "$_rel" == projects/* ]]; then
+			continue
+		fi
+		if [ -d "$_entry" ]; then
+			mkdir -p "$session_dir/$_rel"
+		elif [ -f "$_entry" ]; then
+			mkdir -p "$(dirname "$session_dir/$_rel")"
+			cp -p "$_entry" "$session_dir/$_rel"
+		else
+			err "drydock: overlay contains unsupported entry '$_entry' — only directories and regular files are allowed"
+		fi
+	done < <(find "$HOST_CLAUDE_OVERLAY" -mindepth 1 -print0 2>/dev/null)
 }
 
 # migrate_projects_to_shared_store — one-time sentinel-gated sweep that
