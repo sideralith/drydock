@@ -66,6 +66,16 @@ services:
       - "${DRYDOCK_SESSION_CLAUDE_DIR:?DRYDOCK_SESSION_CLAUDE_DIR not set — invoke via the drydock CLI}:${HOME}/.claude:rw"
       - "${DRYDOCK_SESSION_CLAUDE_JSON:?DRYDOCK_SESSION_CLAUDE_JSON not set — invoke via the drydock CLI}:${HOME}/.claude.json:rw"
 
+      # ── Conversation history: SHARED append-only store (issue #68 root fix) ─
+      # projects/<slug>/<uuid>.jsonl are append-only per-conversation logs — no
+      # shared read-modify-write, no SQLite. Mounting them shared (not per-session)
+      # is INV-2-compliant (see the INV-2 carve-out). This sub-mount overlays the
+      # projects/ subdir of the per-session .claude mount above; declared AFTER it
+      # so Compose creates the parent mount first. New & concurrent sessions all
+      # see one history tree; gc_orphan_session_dirs' rm -rf of a per-session dir
+      # can no longer reach durable history.
+      - "${HOME}/.claude-container/projects:${HOME}/.claude/projects:rw"
+
       # ── Hooks: RO override (agent can't self-edit guardrails) ──────────────
       - "${HOME}/.claude/hooks:${HOME}/.claude/hooks:ro"
 

@@ -80,9 +80,10 @@ for the `docker compose config --no-interpolate` debug-rendering guidance.
 Claude Code reads its configuration from **two** places, and drydock mounts
 both:
 
-| Location | Type | Contains | Container sibling |
+| Location | Type | Contains | Container source |
 |---|---|---|---|
 | `~/.claude/` | directory | skills, plugins, agents, commands, hooks, `settings.json`, `CLAUDE.md`, `mcp/*.json` | `~/.claude-container-<disc>/` (per-session, seeded from `~/.claude-container/` prototype) |
+| `~/.claude/projects/` | subdirectory | conversation history `<uuid>.jsonl` files | `~/.claude-container/projects/` (shared store, `:rw` sub-mount — NOT the per-session sibling; see below) |
 | `~/.claude.json` | single file | project registry, onboarding flags, "seen hints", `mcpServers`, OAuth account, various caches | `~/.claude-container-<disc>.json` (per-session, seeded from `~/.claude-container.json` prototype) |
 
 Forgetting the second one is a classic mistake: the container can't find
@@ -223,6 +224,39 @@ on host don't appear in the container until `drydock sync`. Engram memories
 saved in isolated mode don't appear in the host DB (consolidate via `engram
 sync --import`). This is intentional — divergence is the price of
 contention-free concurrent host + container sessions.
+
+### Shared conversation history (`projects/`) — the one INV-2 carve-out
+
+`~/.claude/projects/` inside the container is the **one** exception to
+per-session isolation. It is backed by the shared store
+`~/.claude-container/projects/`, mounted `:rw` as a sub-mount layered on top
+of the per-session `.claude` mount (declared after it in `docker-compose.yml`
+so Compose creates the parent first).
+
+This is safe because `projects/<slug>/<uuid>.jsonl` is append-only per
+conversation UUID — none of INV-2's four hazards apply:
+- No `~/.claude.json`-style read-modify-write (reason 1): each UUID is its
+  own file; no two sessions write the same file.
+- No OAuth token in the path (reason 2).
+- No MCP-filter mutation target (reason 3).
+- No SQLite WAL database (reason 4).
+
+**Why it matters (issue #68 root fix)**: before this change, `projects/` lived
+inside each per-session `~/.claude-container-<disc>/` directory. When
+`gc_orphan_session_dirs` removed orphan session dirs it silently deleted all
+conversation history for that session — `claude --resume <uuid>` stopped
+working across sessions. With the shared store, `gc_orphan_session_dirs`
+removes only the empty mount-point placeholder in the per-session dir; the
+actual `<uuid>.jsonl` files in `~/.claude-container/projects/` are on a
+separate host inode that the GC's `rm -rf` can never reach.
+
+On first run after upgrading from a pre-shared-store version,
+`migrate_projects_to_shared_store()` (called in `ensure_runtime_dirs`)
+performs a one-time sweep that consolidates all scattered per-session
+`projects/` trees into the shared store using the same size-based merge as
+`harvest_session_projects` (larger file wins on UUID collision). The sweep is
+sentinel-gated (`~/.config/drydock/.projects-migrated`) and is a no-op on
+subsequent runs.
 
 ## The hooks RO overlay
 

@@ -791,12 +791,63 @@ seed_session_config_dir() {
 	# Clean re-seed: remove stale session dir.
 	rm -rf "$session_dir"
 
-	# Copy prototype dir and .json into session-specific paths.
-	cp -a "$HOME/.claude-container" "$session_dir"
+	# Copy prototype dir into session-specific path, EXCLUDING projects/.
+	# projects/ is NOT per-session state (issue #68): conversation history lives
+	# in the SHARED store ~/.claude-container/projects/, reached via a dedicated
+	# :rw sub-mount (docker-compose.yml). Copying it here and deleting it would
+	# waste MBs-to-GBs of I/O per session spawn on WSL2 9P / macOS virtiofs.
+	# find -mindepth 1 -maxdepth 1 also catches dotfiles a bare glob would miss;
+	# -print0 / read -d '' is the same NUL-safe idiom as harvest_session_projects.
+	mkdir -p "$session_dir"
+	local _entry
+	while IFS= read -r -d '' _entry; do
+		[ "${_entry##*/}" = projects ] && continue
+		cp -a "$_entry" "$session_dir/"
+	done < <(find "$HOME/.claude-container" -mindepth 1 -maxdepth 1 -print0)
 	cp -a "$HOME/.claude-container.json" "$session_json"
+
+	# Empty mount point for the shared projects/ sub-mount to overlay.
+	mkdir -p "$session_dir/projects"
 
 	# Remove the staleness marker — it belongs to the prototype, not sessions.
 	rm -f "$session_dir/.drydock-last-sync"
+}
+
+# migrate_projects_to_shared_store — one-time sentinel-gated sweep that
+# consolidates all pre-upgrade scattered per-session projects/ trees into the
+# shared store ~/.claude-container/projects/ (issue #68 root fix).
+#
+# After this change, no new session ever writes projects/ into a per-session dir,
+# so this sweep is needed once to rescue history from pre-upgrade sessions.
+#
+# Sentinel: ~/.config/drydock/.projects-migrated
+#   - If the sentinel exists → return 0 immediately (idempotent fast-path).
+#   - Sentinel is touched ONLY after the full loop completes so an interrupted
+#     migration re-runs fully on the next invocation.
+#
+# Reuses harvest_session_projects for the size-based merge (no --delete, larger
+# file wins, size-tie keeps the existing shared store copy). Returns 0 always.
+migrate_projects_to_shared_store() {
+	local _sentinel="$HOME/.config/drydock/.projects-migrated"
+	# Fast-path: already migrated.
+	[ -f "$_sentinel" ] && return 0
+	# Sweep every per-session dir that drydock could have created.
+	# Same glob shape as gc_orphan_session_dirs; ?* never matches the bare prototype.
+	local _dir _disc
+	for _dir in "$HOME"/.claude-container-?*/; do
+		# Guard against no-match (nullglob absent).
+		[ -d "$_dir" ] || continue
+		# Extract disc: remove prefix and trailing "/".
+		_disc="${_dir#"$HOME"/.claude-container-}"
+		_disc="${_disc%/}"
+		# Validate discriminator shape — only sweep dirs drydock itself created.
+		[[ "$_disc" =~ ^[0-9a-f]{4}$ ]] || continue
+		harvest_session_projects "$_dir"
+	done
+	# Touch sentinel only after the full sweep — interrupted runs re-sweep.
+	mkdir -p "$(dirname "$_sentinel")"
+	touch "$_sentinel"
+	return 0
 }
 
 image_exists() {
@@ -831,6 +882,9 @@ ensure_runtime_dirs() {
 		note "runtime state missing — running 'drydock setup' automatically"
 		cmd_setup
 	fi
+	# One-time consolidation of pre-upgrade scattered per-session projects/ trees
+	# into the shared store (issue #68). Sentinel-gated; no-op after first run.
+	migrate_projects_to_shared_store
 }
 
 ensure_image() {

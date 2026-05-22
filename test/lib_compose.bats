@@ -2125,3 +2125,343 @@ _setup_wiring_home() {
 	run grep "docker-compose.ssh.yml" <(printf '%s\n' "$output")
 	[ "$status" -ne 0 ]
 }
+
+# ── SR-9 structural: docker-compose.yml projects/ sub-mount ──────────────────
+# Structural text assertions: prove the compose file has the correct sub-mount
+# line and does NOT use the host ~/.claude/ path as a mount source.
+
+@test "SR-9: docker-compose.yml contains the shared projects/ sub-mount line" {
+	# The sub-mount must bind the container-specific shared store, not host ~/.claude/.
+	grep -qF '${HOME}/.claude-container/projects:${HOME}/.claude/projects:rw' \
+		"$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "SR-9: no compose file uses host ~/.claude/projects as a mount SOURCE" {
+	# The left-hand side of the projects mount must be ~/.claude-container/projects,
+	# NEVER the host ~/.claude/projects. (The hooks :ro line using ~/.claude/hooks
+	# as a source is intentional and must remain — this test targets projects/ only.)
+	# Assert that no volume line has ${HOME}/.claude/projects as the source (LHS).
+	! grep -E '"\$\{HOME\}/\.claude/projects:' "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+# ── Phase 2: seed_session_config_dir — Bats Tests (SR-6, SR-11, SR-7, design-risk-6) ──
+
+# Helper: populate prototype with projects/ content and sibling dirs in a fake HOME.
+_make_prototype_with_projects() {
+	local fake_home="$1"
+	# Base prototype files (same as _make_prototype)
+	mkdir -p "$fake_home/.claude-container/skills"
+	printf 'proto-settings' >"$fake_home/.claude-container/settings.json"
+	printf 'proto-marker' >"$fake_home/.claude-container/.drydock-last-sync"
+	printf 'proto-json' >"$fake_home/.claude-container.json"
+	# Dotfile in prototype (design risk #6: must be copied by new find loop)
+	printf 'sync-marker' >"$fake_home/.claude-container/.drydock-last-sync"
+	# projects/ subtree in prototype — must NOT be copied to per-session dir
+	mkdir -p "$fake_home/.claude-container/projects/my-project"
+	printf 'history line\n' >"$fake_home/.claude-container/projects/my-project/uuid-A.jsonl"
+	# Sibling dirs that MUST survive into per-session dir (SR-11)
+	mkdir -p "$fake_home/.claude-container/todos"
+	printf 'todo-item' >"$fake_home/.claude-container/todos/item.txt"
+	mkdir -p "$fake_home/.claude-container/statsig"
+	printf 'statsig-data' >"$fake_home/.claude-container/statsig/data.json"
+	mkdir -p "$fake_home/.claude-container/shell-snapshots"
+	printf 'snap' >"$fake_home/.claude-container/shell-snapshots/snap.txt"
+}
+
+@test "SR-6: seed_session_config_dir does NOT copy projects/ content into per-session dir" {
+	# Prototype has projects/my-project/uuid-A.jsonl — must NOT appear in session dir.
+	local fake_home="$BATS_TEST_TMPDIR/seed-no-projects-$$"
+	mkdir -p "$fake_home"
+	_make_prototype_with_projects "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "aa11"
+	# projects/ subdir may exist as an empty mount-point placeholder, but must have no .jsonl
+	[ ! -f "$fake_home/.claude-container-aa11/projects/my-project/uuid-A.jsonl" ]
+}
+
+@test "SR-11: seed_session_config_dir copies todos/ statsig/ shell-snapshots/ into per-session dir" {
+	# These sibling dirs are per-session state and must survive the new find loop.
+	local fake_home="$BATS_TEST_TMPDIR/seed-siblings-$$"
+	mkdir -p "$fake_home"
+	_make_prototype_with_projects "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "bb22"
+	[ -f "$fake_home/.claude-container-bb22/todos/item.txt" ]
+	[ -f "$fake_home/.claude-container-bb22/statsig/data.json" ]
+	[ -f "$fake_home/.claude-container-bb22/shell-snapshots/snap.txt" ]
+}
+
+@test "SR-7-seed: seed_session_config_dir returns 0 with no error when prototype absent" {
+	# No prototype dir at all — must return 0 cleanly.
+	local fake_home="$BATS_TEST_TMPDIR/seed-no-proto-$$"
+	mkdir -p "$fake_home"
+	# Do NOT create ~/.claude-container
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	run seed_session_config_dir "cc33"
+	[ "$status" -eq 0 ]
+	# No new dirs should have been created
+	[ ! -d "$fake_home/.claude-container-cc33" ]
+}
+
+@test "design-risk-6: seed_session_config_dir copies dotfiles from prototype into per-session dir" {
+	# find -mindepth 1 -maxdepth 1 must catch dotfiles; a bare glob would miss them.
+	# We add a dotfile distinct from .drydock-last-sync (which is intentionally removed).
+	local fake_home="$BATS_TEST_TMPDIR/seed-dotfile-$$"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	# Add an extra dotfile that is NOT .drydock-last-sync
+	printf 'dot-content' >"$fake_home/.claude-container/.some-dotfile"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "dd44"
+	# The dotfile must be present in the session dir
+	[ -f "$fake_home/.claude-container-dd44/.some-dotfile" ]
+}
+
+# ── Phase 4: migrate_projects_to_shared_store — Bats Tests ───────────────────
+
+@test "SR-1a: migrate selects larger copy on UUID collision" {
+	# Two per-session dirs with same UUID, different sizes; larger wins.
+	local fake_home="$BATS_TEST_TMPDIR/migrate-sr1a-$$"
+	mkdir -p "$fake_home/.claude-container/projects"  # shared store (destination)
+	mkdir -p "$fake_home/.claude-container-abc1/projects/proj"
+	printf '%100s' '' >"$fake_home/.claude-container-abc1/projects/proj/uuid-A.jsonl"  # 100 bytes
+	mkdir -p "$fake_home/.claude-container-def2/projects/proj"
+	printf '%200s' '' >"$fake_home/.claude-container-def2/projects/proj/uuid-A.jsonl"  # 200 bytes
+	mkdir -p "$fake_home/.config/drydock"
+	HOME="$fake_home"
+	migrate_projects_to_shared_store
+	# Larger copy (200 bytes) must be in shared store
+	local sz
+	sz=$(wc -c <"$fake_home/.claude-container/projects/proj/uuid-A.jsonl" 2>/dev/null)
+	[ "${sz:-0}" -eq 200 ]
+	# No per-session file should be deleted by migration
+	[ -f "$fake_home/.claude-container-abc1/projects/proj/uuid-A.jsonl" ]
+	[ -f "$fake_home/.claude-container-def2/projects/proj/uuid-A.jsonl" ]
+}
+
+@test "SR-1b: migrate preserves both UUIDs from different per-session dirs" {
+	# Two per-session dirs with distinct UUIDs — both land in shared store.
+	local fake_home="$BATS_TEST_TMPDIR/migrate-sr1b-$$"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-abc1/projects/proj"
+	printf 'history-A\n' >"$fake_home/.claude-container-abc1/projects/proj/uuid-A.jsonl"
+	mkdir -p "$fake_home/.claude-container-def2/projects/proj"
+	printf 'history-B\n' >"$fake_home/.claude-container-def2/projects/proj/uuid-B.jsonl"
+	mkdir -p "$fake_home/.config/drydock"
+	HOME="$fake_home"
+	migrate_projects_to_shared_store
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-A.jsonl" ]
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-B.jsonl" ]
+}
+
+@test "SR-2: migrate is idempotent — second run leaves shared store unchanged" {
+	local fake_home="$BATS_TEST_TMPDIR/migrate-sr2-$$"
+	mkdir -p "$fake_home/.claude-container/projects/proj"
+	printf '%200s' '' >"$fake_home/.claude-container/projects/proj/uuid-A.jsonl"
+	mkdir -p "$fake_home/.claude-container-abc1/projects/proj"
+	printf '%200s' '' >"$fake_home/.claude-container-abc1/projects/proj/uuid-A.jsonl"
+	mkdir -p "$fake_home/.config/drydock"
+	HOME="$fake_home"
+	migrate_projects_to_shared_store
+	# sentinel exists now — second run must be a no-op
+	[ -f "$fake_home/.config/drydock/.projects-migrated" ]
+	# Touch the shared store file to give it a newer mtime, then re-run — must not change size
+	local before_sz
+	before_sz=$(wc -c <"$fake_home/.claude-container/projects/proj/uuid-A.jsonl")
+	run migrate_projects_to_shared_store
+	[ "$status" -eq 0 ]
+	local after_sz
+	after_sz=$(wc -c <"$fake_home/.claude-container/projects/proj/uuid-A.jsonl")
+	[ "$before_sz" -eq "$after_sz" ]
+}
+
+@test "SR-7-migrate-empty + SR-8a: migrate returns 0 with empty shared store and no session dirs" {
+	local fake_home="$BATS_TEST_TMPDIR/migrate-empty-$$"
+	mkdir -p "$fake_home/.claude-container/projects"  # empty shared store
+	mkdir -p "$fake_home/.config/drydock"
+	HOME="$fake_home"
+	run migrate_projects_to_shared_store
+	[ "$status" -eq 0 ]
+	# Sentinel must be created
+	[ -f "$fake_home/.config/drydock/.projects-migrated" ]
+}
+
+@test "SR-7-migrate-nomatch: migrate returns 0 when no per-session dirs exist" {
+	# Glob matches nothing — guard against unmatched glob without nullglob.
+	local fake_home="$BATS_TEST_TMPDIR/migrate-nomatch-$$"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.config/drydock"
+	HOME="$fake_home"
+	# No ~/.claude-container-?*/ dirs at all
+	run migrate_projects_to_shared_store
+	[ "$status" -eq 0 ]
+}
+
+@test "sentinel-timing: migrate without sentinel re-sweeps; with sentinel is fast-path no-op" {
+	local fake_home="$BATS_TEST_TMPDIR/migrate-sentinel-$$"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-abc1/projects/proj"
+	printf 'line\n' >"$fake_home/.claude-container-abc1/projects/proj/uuid-X.jsonl"
+	mkdir -p "$fake_home/.config/drydock"
+	HOME="$fake_home"
+	# First run: no sentinel → sweep runs
+	migrate_projects_to_shared_store
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-X.jsonl" ]
+	[ -f "$fake_home/.config/drydock/.projects-migrated" ]
+	# Second run: sentinel present → fast-path; even if we add new content it won't be swept
+	mkdir -p "$fake_home/.claude-container-def3/projects/proj"
+	printf 'new-line\n' >"$fake_home/.claude-container-def3/projects/proj/uuid-Y.jsonl"
+	migrate_projects_to_shared_store
+	# uuid-Y must NOT be in shared store (sentinel blocked the sweep)
+	[ ! -f "$fake_home/.claude-container/projects/proj/uuid-Y.jsonl" ]
+}
+
+@test "fresh-install: migrate creates sentinel even when .config/drydock/ does not pre-exist" {
+	# On a brand-new install, ~/.config/drydock/ may not exist yet.
+	local fake_home="$BATS_TEST_TMPDIR/migrate-fresh-install-$$"
+	mkdir -p "$fake_home/.claude-container/projects"
+	# Do NOT create .config/drydock/
+	HOME="$fake_home"
+	run migrate_projects_to_shared_store
+	[ "$status" -eq 0 ]
+	[ -f "$fake_home/.config/drydock/.projects-migrated" ]
+}
+
+# ── Phase 6: GC safety (SR-4, SR-5, SR-7) ────────────────────────────────────
+
+@test "SR-5: gc_orphan_session_dirs removes orphan dir but leaves shared store intact" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-sr5-$$"
+	mkdir -p "$fake_home"
+	# Shared store with a file
+	mkdir -p "$fake_home/.claude-container/projects/proj"
+	printf 'durable history\n' >"$fake_home/.claude-container/projects/proj/uuid-X.jsonl"
+	local expected_sz
+	expected_sz=$(wc -c <"$fake_home/.claude-container/projects/proj/uuid-X.jsonl")
+	# Orphan per-session dir with an EMPTY projects/ placeholder (post-upgrade shape)
+	mkdir -p "$fake_home/.claude-container-abc1/projects"
+	touch "$fake_home/.claude-container-abc1.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Orphan dir removed
+	[ ! -d "$fake_home/.claude-container-abc1" ]
+	# Shared store untouched
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-X.jsonl" ]
+	local after_sz
+	after_sz=$(wc -c <"$fake_home/.claude-container/projects/proj/uuid-X.jsonl")
+	[ "$expected_sz" -eq "$after_sz" ]
+}
+
+@test "SR-7-gc-no-projects: gc_orphan_session_dirs removes orphan dir with no projects/ subtree" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-no-projects-$$"
+	mkdir -p "$fake_home"
+	# Orphan dir with NO projects/ subdirectory
+	mkdir -p "$fake_home/.claude-container-ee55"
+	touch "$fake_home/.claude-container-ee55/settings.json"
+	touch "$fake_home/.claude-container-ee55.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	run gc_orphan_session_dirs
+	[ "$status" -eq 0 ]
+	[ ! -d "$fake_home/.claude-container-ee55" ]
+}
+
+@test "SR-4: harvest_session_projects preserves both UUIDs from two distinct sessions" {
+	# Two sessions each with a distinct UUID — both survive in the shared store.
+	local fake_home="$BATS_TEST_TMPDIR/gc-sr4-$$"
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.claude-container-aa11/projects/proj"
+	printf 'session-A history\n' >"$fake_home/.claude-container-aa11/projects/proj/uuid-A.jsonl"
+	mkdir -p "$fake_home/.claude-container-bb22/projects/proj"
+	printf 'session-B history\n' >"$fake_home/.claude-container-bb22/projects/proj/uuid-B.jsonl"
+	HOME="$fake_home"
+	harvest_session_projects "$fake_home/.claude-container-aa11"
+	harvest_session_projects "$fake_home/.claude-container-bb22"
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-A.jsonl" ]
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-B.jsonl" ]
+}
+
+# ── Phase 9: SR-3 and SR-8b end-to-end behavioral ────────────────────────────
+
+@test "SR-3: history survives migration + GC and is present for new session" {
+	# Simulates the issue #68 acceptance scenario end-to-end (host-side).
+	local fake_home="$BATS_TEST_TMPDIR/e2e-sr3-$$"
+	mkdir -p "$fake_home"
+	# Session 1 per-session dir with projects/ history
+	mkdir -p "$fake_home/.claude-container-abc1/projects/proj"
+	printf 'conversation turn\n' >"$fake_home/.claude-container-abc1/projects/proj/uuid-X.jsonl"
+	touch "$fake_home/.claude-container-abc1.json"
+	# Shared store destination
+	mkdir -p "$fake_home/.claude-container/projects"
+	mkdir -p "$fake_home/.config/drydock"
+	# Step 1: run migration (consolidate pre-upgrade history)
+	HOME="$fake_home"
+	migrate_projects_to_shared_store
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-X.jsonl" ]
+	# Step 2: run GC (orphan dir removed)
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ ! -d "$fake_home/.claude-container-abc1" ]
+	# Step 3: verify shared store still has the file
+	[ -f "$fake_home/.claude-container/projects/proj/uuid-X.jsonl" ]
+	# Step 4: seed new session — session dir has no projects/ content from prototype
+	_make_prototype "$fake_home"
+	seed_session_config_dir "def2"
+	[ ! -f "$fake_home/.claude-container-def2/projects/proj/uuid-X.jsonl" ]
+}
+
+@test "SR-8b: first session can write history into a fresh shared store" {
+	# Simulate a fresh write directly to the shared store (as the container would).
+	local fake_home="$BATS_TEST_TMPDIR/e2e-sr8b-$$"
+	mkdir -p "$fake_home/.claude-container/projects"
+	HOME="$fake_home"
+	# Write a file as if the container did it
+	mkdir -p "$fake_home/.claude-container/projects/my-proj"
+	printf 'first conversation\n' >"$fake_home/.claude-container/projects/my-proj/uuid-N.jsonl"
+	# The file must persist
+	[ -f "$fake_home/.claude-container/projects/my-proj/uuid-N.jsonl" ]
+	content=$(cat "$fake_home/.claude-container/projects/my-proj/uuid-N.jsonl")
+	[ "$content" = "first conversation" ]
+}
+
+# ── Phase 10: SR-10 doc grep assertions ──────────────────────────────────────
+
+@test "SR-10: CLAUDE.md INV-2 section contains host-mount prohibition and append-only projects/ carve-out" {
+	# Extract only the INV-2 section (from '### INV-2' up to but not including '### INV-3')
+	# and assert BOTH anchors are present within that slice.  Greping the whole file would
+	# pass even if INV-2's text were deleted (phrases appear in other invariants).
+	local inv2_section
+	inv2_section="$(awk '/^### INV-2:/,/^### INV-3:/{if (/^### INV-3:/) exit; print}' "$DRYDOCK_HOME/CLAUDE.md")"
+
+	# Anchor 1: the scoped prohibition on host paths as writable state mount source
+	echo "$inv2_section" | grep -qE "MUST NEVER be the source of the container.s writable"
+
+	# Anchor 2: the append-only projects/ carve-out
+	echo "$inv2_section" | grep -q "append-only"
+	echo "$inv2_section" | grep -q "projects/"
+}
