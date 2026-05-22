@@ -49,8 +49,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 
 - **Rule**: Container mounts MUST point at container-specific state — the per-session
   `~/.claude-container-<disc>/` directory and `~/.claude-container-<disc>.json` file (each
-  seeded from the `~/.claude-container/` prototype), and `~/.engram-container/` — never at
-  the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`.
+  seeded from the `~/.claude-container/` prototype), `~/.engram-container/`, **and the shared
+  container-specific append-only conversation store at `~/.claude-container/projects/`** — never at
+  the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`. The host's `~/.claude/`,
+  `~/.claude.json`, and `~/.engram/` MUST NEVER be mounted into the container.
 - **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
   Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
   when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).
@@ -88,9 +90,22 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   on an unreliable-`fcntl`-lock filesystem (WSL2 9P, macOS virtiofs, Docker Desktop VM boundary) —
   silently corrupt `~/.engram/engram.db` via a WAL page clash. Every failure mode is silent: data
   loss or auth loss with no obvious cause.
+- **Carve-out — shared `projects/` conversation store**: `~/.claude-container/projects/` is mounted
+  `:rw` and shared across concurrent sessions — an intentional, scoped exception to per-session
+  isolation. It is safe because none of INV-2's four hazards apply: conversation history is
+  `projects/<slug>/<uuid>.jsonl` — one append-only file per conversation UUID. There is no
+  read-modify-write on a shared single file (hazards 1 and 3 — the `~/.claude.json` clobber and
+  the MCP-filter mutation — are RMW on one shared file), and there is no SQLite database (hazards
+  2 and 4 — the OAuth refresh race and `engram.db` WAL corruption — require a DB on an
+  unreliable-lock filesystem). Two concurrent containers write DIFFERENT `<uuid>.jsonl` files;
+  there is no shared writer of any single file. The carve-out is scoped to `projects/` only;
+  all other INV-2 protections remain absolute.
 - **Where this lives in code**: the `HOST_CLAUDE` / `CONTAINER_CLAUDE` / `*_JSON` / `*_ENGRAM` path-constants block in `lib/paths.sh`;
   the `${DRYDOCK_SESSION_CLAUDE_DIR}` / `${DRYDOCK_SESSION_CLAUDE_JSON}` mount lines in `docker-compose.yml`;
-  `export_compose_env()` in `lib/compose.sh` (generates and exports the per-session discriminator paths).
+  the `${HOME}/.claude-container/projects:${HOME}/.claude/projects:rw` sub-mount line in
+  `docker-compose.yml`; `export_compose_env()` in `lib/compose.sh` (generates and exports the
+  per-session discriminator paths); `migrate_projects_to_shared_store()` in `lib/compose.sh`
+  (one-time sentinel-gated upgrade sweep).
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-3: Hooks Read-Only Overlay
