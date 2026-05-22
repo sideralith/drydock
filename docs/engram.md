@@ -67,12 +67,15 @@ unreliable-lock caveat as INV-5 applies.
 
 **Opt-in to shared mode** (host and container share one DB):
 
-On a native Linux host, the interactive installer (`install.sh` run in a terminal)
-will ask whether to enable shared mode and create the sentinel automatically.
-On WSL2 and macOS the installer does not show this prompt — shared mode is
-force-downgraded to isolated there because `fcntl` locks are unreliable (INV-5
-in [CLAUDE.md](../CLAUDE.md)); those users use the manual `touch` + `DRYDOCK_ENGRAM_SHARED=force`
-route below.
+On a native Linux host with `engram` already on `PATH`, the interactive
+installer (`install.sh` run in a terminal) will ask whether to enable
+shared mode and create the sentinel automatically. The prompt is skipped
+when `engram` is not installed (no point asking about an optional tool the
+user doesn't have — INV-4). On WSL2 and macOS the installer also does
+not show this prompt — shared mode is force-downgraded to isolated there
+because `fcntl` locks are unreliable (INV-5 in [CLAUDE.md](../CLAUDE.md));
+those users use the manual `touch` + `DRYDOCK_ENGRAM_SHARED=force` route
+below.
 
 To enable it manually:
 ```bash

@@ -80,9 +80,10 @@ for the `docker compose config --no-interpolate` debug-rendering guidance.
 Claude Code reads its configuration from **two** places, and drydock mounts
 both:
 
-| Location | Type | Contains | Container sibling |
+| Location | Type | Contains | Container source |
 |---|---|---|---|
 | `~/.claude/` | directory | skills, plugins, agents, commands, hooks, `settings.json`, `CLAUDE.md`, `mcp/*.json` | `~/.claude-container-<disc>/` (per-session, seeded from `~/.claude-container/` prototype) |
+| `~/.claude/projects/` | subdirectory | conversation history `<uuid>.jsonl` files | `~/.claude-container/projects/` (shared store, `:rw` sub-mount — NOT the per-session sibling; see below) |
 | `~/.claude.json` | single file | project registry, onboarding flags, "seen hints", `mcpServers`, OAuth account, various caches | `~/.claude-container-<disc>.json` (per-session, seeded from `~/.claude-container.json` prototype) |
 
 Forgetting the second one is a classic mistake: the container can't find
@@ -189,7 +190,9 @@ Reasons (Claude config split — always applies):
 
 2. **OAuth refresh**: `~/.claude/.credentials.json` and `~/.claude.json`
    carry auth state. Concurrent refresh from two sessions = one invalidates
-   the other. Per-session copies avoid this.
+   the other. Per-session copies avoid this. `docker-compose.oauth.yml` is an
+   orthogonal, INV-2-compliant channel for persistent Claude account auth — it
+   injects the token as an env var rather than sharing any `~/.claude*` path.
 
 3. **Plugin install isolation**: `/plugin install foo` from inside the
    container lands in `~/.claude-container-<disc>/plugins/` only — the host
@@ -221,6 +224,91 @@ on host don't appear in the container until `drydock sync`. Engram memories
 saved in isolated mode don't appear in the host DB (consolidate via `engram
 sync --import`). This is intentional — divergence is the price of
 contention-free concurrent host + container sessions.
+
+### Shared conversation history (`projects/`) — the one INV-2 carve-out
+
+`~/.claude/projects/` inside the container is the **one** exception to
+per-session isolation. It is backed by the shared store
+`~/.claude-container/projects/`, mounted `:rw` as a sub-mount layered on top
+of the per-session `.claude` mount (declared after it in `docker-compose.yml`
+so Compose creates the parent first).
+
+This is safe because `projects/<slug>/<uuid>.jsonl` is append-only per
+conversation UUID — none of INV-2's four hazards apply:
+- No `~/.claude.json`-style read-modify-write (reason 1): each UUID is its
+  own file; no two sessions write the same file.
+- No OAuth token in the path (reason 2).
+- No MCP-filter mutation target (reason 3).
+- No SQLite WAL database (reason 4).
+
+**Why it matters (issue #68 root fix)**: before this change, `projects/` lived
+inside each per-session `~/.claude-container-<disc>/` directory. When
+`gc_orphan_session_dirs` removed orphan session dirs it silently deleted all
+conversation history for that session — `claude --resume <uuid>` stopped
+working across sessions. With the shared store, `gc_orphan_session_dirs`
+removes only the empty mount-point placeholder in the per-session dir; the
+actual `<uuid>.jsonl` files in `~/.claude-container/projects/` are on a
+separate host inode that the GC's `rm -rf` can never reach.
+
+On first run after upgrading from a pre-shared-store version,
+`migrate_projects_to_shared_store()` (called in `ensure_runtime_dirs`)
+performs a one-time sweep that consolidates all scattered per-session
+`projects/` trees into the shared store using the same size-based merge as
+`harvest_session_projects` (larger file wins on UUID collision). The sweep is
+sentinel-gated (`~/.config/drydock/.projects-migrated`) and is a no-op on
+subsequent runs.
+
+### Container-config overlay (issue #77)
+
+**The problem**: Config edits made inside a container under `~/.claude/` — such as
+adding an MCP server config or a custom plugin file — revert on every `drydock run`
+because `seed_session_config_dir` tears down and re-seeds the per-session
+`~/.claude-container-<disc>/` directory from the prototype on each invocation. There
+is no way to persist per-session config across runs without modifying the prototype
+directly (which would affect the host session too).
+
+**The solution**: Format A tree-mirror overlay at `~/.config/drydock/claude-overlay/`.
+When that directory is present, `apply_claude_overlay` (the last step of
+`seed_session_config_dir`) copies it whole-file and recursively on top of the
+freshly re-seeded per-session dir. The copy is host-authored, container-consumed,
+and unidirectional — the overlay is never modified by the container, and the host's
+`~/.claude/` is never written.
+
+**Why Format A (whole-file copy) over Format B (JSON merge)**: a whole-file copy
+needs no JSON parsing or merge engine — the host file replaces the seeded copy
+verbatim. A JSON merge engine (smart field-level merge of `.claude.json` sections)
+would require a dependency on `jq` in the host's seeding path and non-trivial merge
+semantics. Format A is sufficient for the primary use case (plugin config files that
+do not already exist in the prototype). Format B is deferred until concrete demand.
+
+**Scope limit and INV-2 carve-out**: each entry in the overlay is validated in
+full before any copy runs (two-pass: every entry is validated, then all entries
+are copied). The validation rejects three classes of entries and aborts
+`drydock run` before container start (fail-loud, named path):
+- **Symlinks**: rejected outright. The use case (plugin config files) needs no
+  symlinks; rejecting them eliminates the path-resolution bypass class without
+  building a `realpath` engine. A symlink named `foo.json` pointing at
+  `../../.claude.json` or escaping the overlay tree is caught at depth 0 by
+  `[ -L ]` before any other check.
+- **Forbidden top-level basenames**: `.claude.json` and `.credentials.json` at
+  overlay depth 1 are rejected. These are INV-2 hazard files — delivering them into
+  the per-session dir would re-introduce the `~/.claude.json` last-writer-wins
+  clobber and the `.credentials.json` OAuth refresh race. The depth-1 scoping is
+  deliberate: a file at `sub/.claude.json` is not a hazard (INV-2's clobber hazard
+  requires the specific path `~/.claude.json` at the root, not nested files of the
+  same name).
+- **Non-regular entries** (FIFOs, devices, sockets): rejected. The overlay must
+  contain only plain directories and regular files.
+
+The `projects/` subtree inside the overlay is silently skipped (no error). This is
+the same "projects is not per-session config" rule already encoded in the prototype
+copy loop above: `~/.claude/projects/` is conversation history, backed by the shared
+`:rw` sub-mount (the existing INV-2 carve-out). Copying it is silently wasted I/O.
+
+**Unidirectional property**: the host's `~/.config/drydock/claude-overlay/` is never
+modified by drydock itself — it is purely host-authored. The host's `~/.claude/` is
+never written by the overlay mechanism. Rollback is as simple as `rm -rf
+~/.config/drydock/claude-overlay/`.
 
 ## The hooks RO overlay
 
@@ -270,12 +358,17 @@ the declarative deny cannot express.
 outside `$HOME`. It is drydock-owned policy config, not host `~/.claude/` state. The
 host/container state-split boundary (INV-2) is never crossed.
 
-**INV-3 strengthening.** Before v0.2.0, the deny block and hook entry lived in the
-per-project `settings.json` seeded by `drydock init` — a writable file the agent
-could overwrite. The managed-settings layer closes this gap: the same policy is now
-structural (image-layer immutable) rather than advisory. The hooks RO overlay (hook
-*scripts*) and the managed-settings layer (policy *rules* + hook *wiring*) together
-make drydock's full tier-1 defense structural.
+**INV-3 strengthening.** Before v0.2.0, the deny block and hook entry lived in a
+per-project `settings.json` (then seeded by a `drydock init` command) — a writable
+file the agent could overwrite. The managed-settings layer closes this gap: the
+same policy is now structural (image-layer immutable) rather than advisory. The
+hooks RO overlay (hook *scripts*) and the managed-settings layer (policy *rules*
++ hook *wiring*) together make drydock's full tier-1 defense structural.
+Per-project `.claude/settings.json` no longer carries any drydock policy and is
+fully optional from v0.2.1 onward — Claude Code creates it on demand when the
+user adds MCP servers, hooks, or permissions through its own commands. The
+`drydock init` command (which previously seeded the empty stub) was removed in
+v0.2.1 once it lost its load-bearing role.
 
 **Refresh cadence.** Policy updates (new deny entries, hook changes) take effect after
 `drydock build`. Users already rebuild after pulling drydock when Dockerfile or MCP
@@ -327,6 +420,24 @@ a documented non-goal per INV-6 and INV-7 — drydock defends against accidents,
 not adversaries.
 
 ## How drydock decides what to mount
+
+`compose_files()` assembles the `-f` list in a fixed order. The named static
+overlays and their activation conditions:
+
+| Overlay | Activates when |
+|---|---|
+| `docker-compose.yml` | always (base) |
+| `docker-compose.hardening.yml` | always, unless `DRYDOCK_NO_HARDENING=1` (INV-8 nuclear opt-out) |
+| `docker-compose.ssh.yml` | a primary deploy key or any RW sibling exists (`DRYDOCK_SSH_CONFIG` set) |
+| `docker-compose.gpg.yml` | a GPG signing key is configured (`DRYDOCK_GPG_SIGNINGKEY` set) |
+| `docker-compose.engram.yml` | engram is usable (`DRYDOCK_ENGRAM_SOURCE` set) |
+| `docker-compose.oauth.yml` | the OAuth token file is present and non-empty (`DRYDOCK_OAUTH_TOKEN_VALUE` set) |
+| `docker-compose.mcp-auth.yml` | the host directory `~/.mcp-auth` exists |
+| `docker-compose.ccstatusline.yml` | the host directory `~/.config/ccstatusline` exists |
+
+Ephemeral overlays (generated per-launch into `${TMPDIR}/drydock-*.yml` and
+cleaned up on exit) are described below alongside the mechanisms that produce
+them: sub-mount propagation and sibling links.
 
 Each `drydock run` invocation reads the **current project directory** (cwd or
 arg) and exports it as `PROJECT_DIR` to compose. The compose file uses

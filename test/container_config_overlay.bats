@@ -1,0 +1,597 @@
+#!/usr/bin/env bats
+# test/container_config_overlay.bats — unit + integration tests for
+# apply_claude_overlay (lib/compose.sh, issue #77).
+#
+# Test seam: each test sets HOST_CLAUDE_OVERLAY to a tmp subdir so the
+# source-time constant from lib/paths.sh is overridden per-test.  HOME is
+# also overridden to keep seed_session_config_dir integration tests hermetic.
+
+load "helpers/load"
+
+setup() {
+	# Mirror lib_compose.bats source order: common → paths → compose → sibling_ssh.
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/common.sh"
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/sibling_ssh.sh"
+
+	# Stub cmd_setup so ensure_runtime_dirs is safe if anything edges toward it.
+	cmd_setup() { :; }
+
+	# Per-test fixture root.
+	FIXTURE_HOME="$BATS_TEST_TMPDIR/home"
+	mkdir -p "$FIXTURE_HOME"
+	export HOME="$FIXTURE_HOME"
+
+	# session_dir: a per-session claude-container dir (pre-created, empty).
+	SESSION_DIR="$FIXTURE_HOME/.claude-container-test"
+	mkdir -p "$SESSION_DIR"
+
+	# Overlay dir: each test creates or populates as needed.
+	OVERLAY_DIR="$FIXTURE_HOME/.config/drydock/claude-overlay"
+
+	# Override the source-time constant so apply_claude_overlay sees the fixture.
+	HOST_CLAUDE_OVERLAY="$OVERLAY_DIR"
+
+	# Minimal DOCKER stub for seed_session_config_dir integration tests.
+	local _docker_stub="$BATS_TEST_TMPDIR/docker-stub-$$"
+	cat >"$_docker_stub" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then printf ''; fi
+exit 0
+STUB
+	chmod +x "$_docker_stub"
+	export DOCKER="$_docker_stub"
+
+	# Stable discriminator for integration tests.
+	_stable_disc() { printf 'test'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_stable_disc
+}
+
+# ── Case 1: absent overlay → silent no-op ────────────────────────────────────
+
+@test "apply_claude_overlay: absent overlay dir → returns 0, session dir unchanged" {
+	# HOST_CLAUDE_OVERLAY is $OVERLAY_DIR — never created.
+	[ ! -d "$OVERLAY_DIR" ]
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -eq 0 ]
+	# session dir still empty (no files copied).
+	local count
+	count=$(find "$SESSION_DIR" -mindepth 1 | wc -l)
+	[ "$count" -eq 0 ]
+}
+
+# ── Case 2: empty overlay → silent no-op ─────────────────────────────────────
+
+@test "apply_claude_overlay: empty overlay dir → returns 0, no files copied" {
+	mkdir -p "$OVERLAY_DIR"
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -eq 0 ]
+	local count
+	count=$(find "$SESSION_DIR" -mindepth 1 | wc -l)
+	[ "$count" -eq 0 ]
+}
+
+# ── Case 3: happy path — top-level file ──────────────────────────────────────
+
+@test "apply_claude_overlay: top-level file copied into session dir" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'mcp-content' >"$OVERLAY_DIR/.mcp.json"
+
+	apply_claude_overlay "$SESSION_DIR"
+
+	[ -f "$SESSION_DIR/.mcp.json" ]
+	content="$(cat "$SESSION_DIR/.mcp.json")"
+	[ "$content" = "mcp-content" ]
+}
+
+# ── Case 4: happy path — nested directory ────────────────────────────────────
+
+@test "apply_claude_overlay: nested dir/file copied with directory chain created" {
+	mkdir -p "$OVERLAY_DIR/plugins/foo"
+	printf 'bar-content' >"$OVERLAY_DIR/plugins/foo/bar.json"
+
+	apply_claude_overlay "$SESSION_DIR"
+
+	[ -f "$SESSION_DIR/plugins/foo/bar.json" ]
+	content="$(cat "$SESSION_DIR/plugins/foo/bar.json")"
+	[ "$content" = "bar-content" ]
+}
+
+# ── Case 5: overlay overwrites seeded file ────────────────────────────────────
+
+@test "apply_claude_overlay: overlay file overwrites pre-seeded session file (Format A)" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'overlay-content' >"$OVERLAY_DIR/.mcp.json"
+	# Pre-seed the session dir with different content.
+	printf 'seeded-content' >"$SESSION_DIR/.mcp.json"
+
+	apply_claude_overlay "$SESSION_DIR"
+
+	content="$(cat "$SESSION_DIR/.mcp.json")"
+	[ "$content" = "overlay-content" ]
+}
+
+# ── Case 6: forbidden basename .claude.json at depth 1 → err ─────────────────
+
+@test "apply_claude_overlay: .claude.json at overlay root → fails with named path" {
+	mkdir -p "$OVERLAY_DIR"
+	printf '{}' >"$OVERLAY_DIR/.claude.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *".claude.json"* ]]
+}
+
+# ── Case 7: forbidden basename .credentials.json at depth 1 → err ────────────
+
+@test "apply_claude_overlay: .credentials.json at overlay root → fails with named path" {
+	mkdir -p "$OVERLAY_DIR"
+	printf '{}' >"$OVERLAY_DIR/.credentials.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *".credentials.json"* ]]
+}
+
+# ── Case 6/7 depth-1 scoping: subdirectory .claude.json is NOT rejected ───────
+# Design §Q1 explicitly limits the forbidden-basename check to depth 1.
+# A file at sub/.claude.json does NOT match the forbidden set — only depth-1
+# basenames are forbidden.  This test documents that scoping so a future
+# contributor does not widen the check to any-basename-match.
+
+@test "apply_claude_overlay: .claude.json nested under subdir is NOT rejected (depth-1 scoping)" {
+	mkdir -p "$OVERLAY_DIR/sub"
+	printf '{}' >"$OVERLAY_DIR/sub/.claude.json"
+
+	apply_claude_overlay "$SESSION_DIR"
+
+	[ -f "$SESSION_DIR/sub/.claude.json" ]
+}
+
+# ── Case 8: symlink rejected → err ───────────────────────────────────────────
+
+@test "apply_claude_overlay: symlink with benign target → fails naming the symlink" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'real' >"$BATS_TEST_TMPDIR/real-file.txt"
+	ln -s "$BATS_TEST_TMPDIR/real-file.txt" "$OVERLAY_DIR/evil.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"evil.json"* ]]
+}
+
+@test "apply_claude_overlay: symlink pointing at .credentials.json → fails naming symlink" {
+	mkdir -p "$OVERLAY_DIR"
+	printf '{}' >"$BATS_TEST_TMPDIR/creds.json"
+	ln -s "$BATS_TEST_TMPDIR/creds.json" "$OVERLAY_DIR/creds"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"creds"* ]]
+}
+
+# ── Case 9: projects/ subtree silently skipped ────────────────────────────────
+# DELIBERATE DIVERGENCE from blanket fail-loud (design §3):
+# projects/ inside the overlay is silently skipped because ~/.claude/projects/
+# is conversation history, not config — it is shadowed by the dedicated :rw
+# sub-mount in docker-compose.yml (INV-2 carve-out for shared projects/ store).
+# Copying it would be silently wasted I/O identical to the prototype-copy
+# loop above.  This is NOT a missing rejection; it is the same "projects is
+# not per-session config" rule already encoded in seed_session_config_dir.
+
+@test "apply_claude_overlay: projects/ subtree silently skipped — no err, not copied" {
+	mkdir -p "$OVERLAY_DIR/projects/x"
+	printf 'history' >"$OVERLAY_DIR/projects/x/y.jsonl"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -eq 0 ]
+	# The session dir must NOT contain the projects subtree from the overlay.
+	[ ! -d "$SESSION_DIR/projects/x" ]
+}
+
+# ── Case 10: non-regular entry (FIFO) → err ──────────────────────────────────
+
+@test "apply_claude_overlay: FIFO in overlay → fails naming the entry" {
+	mkdir -p "$OVERLAY_DIR"
+	mkfifo "$OVERLAY_DIR/afifo"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"afifo"* ]]
+}
+
+# ── Case 11: integration — overlay survives re-seed ───────────────────────────
+
+@test "apply_claude_overlay: integration — overlay file present after seed_session_config_dir re-run" {
+	# Populate a minimal prototype (mirrors _make_prototype in lib_compose.bats).
+	local fake_home="$BATS_TEST_TMPDIR/integrate-home"
+	mkdir -p "$fake_home/.claude-container"
+	printf 'proto-settings' >"$fake_home/.claude-container/settings.json"
+	printf 'proto-json' >"$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	# Set the overlay dir in the fixture HOME.
+	local overlay_dir="$fake_home/.config/drydock/claude-overlay"
+	mkdir -p "$overlay_dir"
+	printf 'playwright-config' >"$overlay_dir/playwright.json"
+	HOST_CLAUDE_OVERLAY="$overlay_dir"
+
+	# First seed.
+	seed_session_config_dir "test"
+	[ -f "$fake_home/.claude-container-test/playwright.json" ]
+	content="$(cat "$fake_home/.claude-container-test/playwright.json")"
+	[ "$content" = "playwright-config" ]
+
+	# Simulate re-seed (rm -rf session dir, call again — this is what drydock does on re-run).
+	rm -rf "$fake_home/.claude-container-test" "$fake_home/.claude-container-test.json"
+	seed_session_config_dir "test"
+	[ -f "$fake_home/.claude-container-test/playwright.json" ]
+	content="$(cat "$fake_home/.claude-container-test/playwright.json")"
+	[ "$content" = "playwright-config" ]
+}
+
+# ── Case 12: type collision — overlay dir vs seeded file → err ────────────────
+# If the prototype seeded a regular file at path X and the overlay supplies a
+# directory at X, the function must abort via err naming the path — not mkdir-p
+# over the existing file (which would fail with a raw kernel error instead of a
+# friendly drydock message).
+
+@test "apply_claude_overlay: overlay dir collides with seeded file → fails with drydock err naming path" {
+	mkdir -p "$OVERLAY_DIR"
+	mkdir -p "$OVERLAY_DIR/settings.json"   # overlay delivers a DIRECTORY
+
+	# Seed a regular FILE at the same relative path.
+	printf 'seeded' >"$SESSION_DIR/settings.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+	[[ "$output" == *"settings.json"* ]]
+}
+
+# ── Case 13: type collision — overlay file vs seeded dir → err ────────────────
+# If the prototype seeded a directory at path X and the overlay supplies a
+# regular file at X, cp -p would silently copy the file INTO the dir (wrong
+# result, no error).  The function must abort via err naming the path.
+
+@test "apply_claude_overlay: overlay file collides with seeded dir → fails with drydock err naming path" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'overlay-content' >"$OVERLAY_DIR/plugins"   # overlay delivers a FILE
+
+	# Seed a DIRECTORY at the same relative path.
+	mkdir -p "$SESSION_DIR/plugins"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+	[[ "$output" == *"plugins"* ]]
+	# The file must NOT have been silently copied inside the directory.
+	[ ! -f "$SESSION_DIR/plugins/plugins" ]
+	[ ! -f "$SESSION_DIR/plugins" ]
+}
+
+# ── Case 14: unreadable overlay subdir → abort non-zero ─────────────────────
+# An unreadable subtree (chmod 000 subdir) must make apply_claude_overlay
+# abort non-zero — the 2>/dev/null suppression that existed before the fix
+# would have silently returned 0.
+# Skipped when running as root (chmod 000 is bypassable by root).
+
+@test "apply_claude_overlay: unreadable overlay subdir → aborts non-zero (not silent skip)" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	mkdir -p "$OVERLAY_DIR/secret-subdir"
+	printf 'hidden' >"$OVERLAY_DIR/secret-subdir/file.txt"
+	chmod 000 "$OVERLAY_DIR/secret-subdir"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Restore permissions before any assertion so bats can clean up.
+	chmod 755 "$OVERLAY_DIR/secret-subdir"
+
+	[ "$status" -ne 0 ]
+}
+
+# ── Case 15: integration — forbidden overlay file makes seed abort non-zero ───
+# Verifies that apply_claude_overlay's err bubbles all the way up through
+# seed_session_config_dir (which calls apply_claude_overlay as its last step).
+
+@test "apply_claude_overlay: integration — forbidden .claude.json causes seed_session_config_dir to abort" {
+	local fake_home="$BATS_TEST_TMPDIR/integrate-home-abort"
+	mkdir -p "$fake_home/.claude-container"
+	printf 'proto-settings' >"$fake_home/.claude-container/settings.json"
+	printf 'proto-json' >"$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	local overlay_dir="$fake_home/.config/drydock/claude-overlay"
+	mkdir -p "$overlay_dir"
+	printf '{}' >"$overlay_dir/.claude.json"   # forbidden by INV-2
+	HOST_CLAUDE_OVERLAY="$overlay_dir"
+
+	run seed_session_config_dir "test"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *".claude.json"* ]]
+}
+
+# ── Case 16: symlink rejection — target content NOT delivered ────────────────
+# Strengthens the existing symlink cases (8) with a negative assertion:
+# the symlink target's content must NOT appear in the session dir.
+
+@test "apply_claude_overlay: symlink rejection — target content not delivered into session dir" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'real-content' >"$BATS_TEST_TMPDIR/real-file.txt"
+	ln -s "$BATS_TEST_TMPDIR/real-file.txt" "$OVERLAY_DIR/evil.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"evil.json"* ]]
+	# The symlink target's content must NOT have been delivered.
+	[ ! -e "$SESSION_DIR/evil.json" ]
+}
+
+@test "apply_claude_overlay: symlink-to-.credentials.json — target content not delivered into session dir" {
+	mkdir -p "$OVERLAY_DIR"
+	printf '{}' >"$BATS_TEST_TMPDIR/creds.json"
+	ln -s "$BATS_TEST_TMPDIR/creds.json" "$OVERLAY_DIR/creds"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"creds"* ]]
+	# The symlink target's content must NOT have been delivered.
+	[ ! -e "$SESSION_DIR/creds" ]
+}
+
+# ── Case 17: symlinked overlay ROOT → fail-loud ──────────────────────────────
+# If HOST_CLAUDE_OVERLAY itself is a symlink to a directory, the function must
+# abort via err naming the root — not silently do nothing (find does not
+# traverse into a symlinked start-point, so the overlay would be inert).
+# Design: "symlinks rejected fail-loud at depth 0" (README / docs/architecture.md).
+
+@test "apply_claude_overlay: overlay root is a symlink-to-dir → fails naming root" {
+	local real_overlay_dir="$BATS_TEST_TMPDIR/real-overlay"
+	mkdir -p "$real_overlay_dir"
+	printf 'content' >"$real_overlay_dir/.mcp.json"
+	# Make HOST_CLAUDE_OVERLAY a symlink that points at the real dir.
+	# Parent dir must exist before we can create the symlink.
+	mkdir -p "$(dirname "$OVERLAY_DIR")"
+	ln -s "$real_overlay_dir" "$OVERLAY_DIR"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"$OVERLAY_DIR"* ]]
+}
+
+# ── Case 18: mkdir -p failure → fail-loud ────────────────────────────────────
+# If the destination directory cannot be created (e.g. session dir is
+# unwritable), apply_claude_overlay must abort via err — not continue silently
+# and produce a partial overlay.
+# Skipped when running as root (root bypasses permission bits).
+
+@test "apply_claude_overlay: mkdir -p failure mid-copy → aborts non-zero with named path" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	mkdir -p "$OVERLAY_DIR/subdir"
+	printf 'content' >"$OVERLAY_DIR/subdir/file.txt"
+
+	# Make session dir unwritable so mkdir -p of subdir inside it fails.
+	chmod 555 "$SESSION_DIR"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	chmod 755 "$SESSION_DIR"
+
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+}
+
+# ── Case 19: cp -p failure mid-copy → fail-loud ──────────────────────────────
+# If cp -p fails (e.g. destination file is read-only), apply_claude_overlay
+# must abort via err — not continue silently with a partial overlay.
+# Skipped when running as root.
+
+@test "apply_claude_overlay: cp -p failure mid-copy → aborts non-zero with named path" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	mkdir -p "$OVERLAY_DIR"
+	printf 'overlay-content' >"$OVERLAY_DIR/locked.json"
+
+	# Pre-seed a read-only file at the same path in the session dir.
+	printf 'seeded' >"$SESSION_DIR/locked.json"
+	chmod 444 "$SESSION_DIR/locked.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	chmod 644 "$SESSION_DIR/locked.json"
+
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+}
+
+# ── Case 20: temp file removed before validation loop ────────────────────────
+# The mktemp temp file is rm -f'd immediately after mapfile reads all entries
+# into the _entries array — BEFORE the validation loop.  This test documents
+# that invariant: a forbidden entry causes err+exit, but the temp file was
+# already gone before the loop ran, so no leak is possible.
+
+@test "apply_claude_overlay: temp file removed before validation loop (forbidden .claude.json)" {
+	mkdir -p "$OVERLAY_DIR"
+	printf '{}' >"$OVERLAY_DIR/.claude.json"   # will trigger err
+
+	# Use a controlled TMPDIR so we can count precisely.
+	local ctrl_tmp="$BATS_TEST_TMPDIR/ctrl-tmp"
+	mkdir -p "$ctrl_tmp"
+
+	local before after
+	before=$(find "$ctrl_tmp" -maxdepth 1 | wc -l)
+
+	TMPDIR="$ctrl_tmp" run apply_claude_overlay "$SESSION_DIR"
+
+	after=$(find "$ctrl_tmp" -maxdepth 1 | wc -l)
+
+	[ "$status" -ne 0 ]
+	# No new files should remain in ctrl_tmp after the abort.
+	[ "$after" -eq "$before" ]
+}
+
+# ── Case 21 (strengthened): unreadable subdir — session dir gets zero files ──
+# Extends Case 14: not only must the abort be non-zero, but the session dir
+# must receive zero files (abort must happen before any copy completes).
+
+@test "apply_claude_overlay: unreadable subdir — session dir receives zero files before abort" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	# Put a readable file BEFORE and an unreadable dir AFTER it in the overlay.
+	# find -print0 order is filesystem-dependent, but we want to verify no
+	# partial copy: ensure the unreadable dir is the sole/first non-trivial entry.
+	mkdir -p "$OVERLAY_DIR/secret-subdir"
+	printf 'hidden' >"$OVERLAY_DIR/secret-subdir/file.txt"
+	chmod 000 "$OVERLAY_DIR/secret-subdir"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	chmod 755 "$OVERLAY_DIR/secret-subdir"
+
+	[ "$status" -ne 0 ]
+
+	# Session dir must be empty — read all entries into an array then check count.
+	local count
+	count=$(find "$SESSION_DIR" -mindepth 1 | wc -l)
+	[ "$count" -eq 0 ]
+}
+
+# ── Case 22: two-pass proof — valid file NOT copied when overlay also has forbidden file ──
+# The key correctness test for the two-pass validate-then-copy split.
+# An overlay with a valid file alongside a forbidden .claude.json must:
+#   (a) abort non-zero, AND
+#   (b) NOT copy the valid file into the session dir.
+# On the single-pass code, find's readdir() order determines whether the valid
+# file is copied before the forbidden one is reached — a filesystem-dependent
+# partial-apply race.  With multiple valid siblings alongside the forbidden
+# entry, the probability that ALL land after .claude.json in readdir order is
+# low, making the single-pass bug reliably observable as a RED test.
+# After the two-pass split this must be GREEN: validation completes for every
+# entry before any copy runs.
+
+@test "apply_claude_overlay: two-pass proof — valid files NOT copied when overlay contains forbidden .claude.json" {
+	mkdir -p "$OVERLAY_DIR"
+	# Multiple valid files alongside the forbidden entry — ensures readdir
+	# order cannot accidentally hide the single-pass bug.
+	printf 'good-a' >"$OVERLAY_DIR/good-a.json"
+	printf 'good-b' >"$OVERLAY_DIR/good-b.json"
+	printf 'good-c' >"$OVERLAY_DIR/good-c.json"
+	printf 'good-d' >"$OVERLAY_DIR/good-d.json"
+	printf '{}' >"$OVERLAY_DIR/.claude.json"   # forbidden — triggers err
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must have failed.
+	[ "$status" -ne 0 ]
+
+	# None of the valid files must have been copied (two-pass: validate ALL
+	# entries before copying ANY — partial-apply is not allowed).
+	[ ! -e "$SESSION_DIR/good-a.json" ]
+	[ ! -e "$SESSION_DIR/good-b.json" ]
+	[ ! -e "$SESSION_DIR/good-c.json" ]
+	[ ! -e "$SESSION_DIR/good-d.json" ]
+}
+
+# ── Case 23: depth-1 regular file named "projects" → type-collision err ────────
+# seed_session_config_dir pre-creates projects/ as a directory in the session
+# dir (empty mount-point for the shared :rw sub-mount).  A regular FILE named
+# "projects" in the overlay collides with that pre-seeded directory → err.
+# The find prune (-path "$_root/projects" -type d -prune) is -type d gated:
+# it only prunes a DIRECTORY named projects at the overlay root.  A regular FILE
+# named projects is NOT pruned — it passes through to the type-collision guard.
+
+@test "apply_claude_overlay: depth-1 regular file named 'projects' → type-collision err (collides with seeded projects/ dir)" {
+	mkdir -p "$OVERLAY_DIR"
+	# A regular FILE named "projects" at the overlay root.
+	printf 'not-a-dir' >"$OVERLAY_DIR/projects"
+
+	# Mirror seed_session_config_dir: pre-create projects/ as a directory.
+	mkdir -p "$SESSION_DIR/projects"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must fail: overlay file 'projects' collides with seeded directory 'projects/'.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+	[[ "$output" == *"projects"* ]]
+}
+
+# ── Case 24: _dest ancestor symlink → write-escape guard ─────────────────────
+# cp -a (used by seed_session_config_dir to copy the prototype) PRESERVES
+# symlinks.  If the prototype ~/.claude-container/ carries a symlink at e.g.
+# "foo" pointing outside the session dir, and the overlay supplies a file at
+# "foo/bar.json", Pass 2's mkdir -p / cp -p follow the symlink and write
+# OUTSIDE $session_dir onto the host filesystem.
+#
+# The guard must catch any symlink anywhere on the _dest path within the
+# session dir — including the ancestor-symlink case (the main cp -a vector).
+# Strengthens the existing symlink cases (8).
+
+@test "apply_claude_overlay: symlink at session-dir ancestor → write-escape blocked, exits non-zero" {
+	mkdir -p "$OVERLAY_DIR/foo"
+	printf 'payload' >"$OVERLAY_DIR/foo/bar.json"
+
+	# Simulate a cp -a-preserved prototype symlink: $SESSION_DIR/foo is a
+	# symlink pointing at a directory OUTSIDE the session dir.
+	local outside_target="$BATS_TEST_TMPDIR/outside-$$"
+	mkdir -p "$outside_target"
+	ln -s "$outside_target" "$SESSION_DIR/foo"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must fail: the overlay target resolves through a symlink.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+
+	# Security property: nothing was written to the symlink's target outside
+	# the session dir.
+	[ ! -e "$outside_target/bar.json" ]
+}
+
+# ── Case 25: _dest leaf symlink → write-escape guard ─────────────────────────
+# Complements Case 24 (ancestor-symlink vector).  The write-escape guard's
+# while loop initialises _check="$_dest" and tests [ -L ] on the leaf BEFORE
+# the first dirname — so a pre-seeded symlink AT the destination leaf (not an
+# ancestor directory) is also caught.
+#
+# Scenario: the session dir already has $SESSION_DIR/locked.json as a symlink
+# pointing to a file OUTSIDE the session dir; the overlay supplies a regular
+# file named locked.json.  The guard must block the write before cp -p follows
+# the symlink and overwrites the outside target.
+#
+# A future refactor that changed the loop to start at dirname "$_dest" would
+# silently pass Cases 8/16/24 while reopening this leaf vector — this test
+# makes that regression immediately visible.
+
+@test "apply_claude_overlay: symlink at session-dir leaf → write-escape blocked, exits non-zero, outside target untouched" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'payload' >"$OVERLAY_DIR/locked.json"
+
+	# Pre-seed the outside target directory and a canary file to verify it is
+	# not touched.
+	local outside_dir="$BATS_TEST_TMPDIR/outside"
+	mkdir -p "$outside_dir"
+	# The outside file does NOT exist yet — assert it remains absent after the
+	# blocked write.  (Absence is a stronger assertion than "content unchanged"
+	# because cp -p would create it if the guard fails.)
+
+	# Simulate a cp -a-preserved prototype leaf symlink: $SESSION_DIR/locked.json
+	# is a symlink pointing at a path OUTSIDE the session dir.
+	ln -s "$outside_dir/locked.json" "$SESSION_DIR/locked.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must fail: the overlay destination is itself a symlink.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+
+	# Security property: the outside target was NOT written through.
+	[ ! -e "$outside_dir/locked.json" ]
+}

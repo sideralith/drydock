@@ -126,6 +126,19 @@ RUN echo 'drydock' > /etc/drydock-release
 COPY templates/managed-settings.d/ /etc/claude-code/managed-settings.d/
 RUN sed -i "s|__HOME__|/home/${USER_NAME}|g" /etc/claude-code/managed-settings.d/*.json
 
+# ── Pre-create user-owned XDG dirs the daemon would otherwise root-own ──────
+# Docker creates any missing PARENT of a bind-mount target as root:root. The
+# base compose mounts ~/.config/gh (so ~/.config is always a created parent)
+# and the ccstatusline overlay mounts ~/.cache/ccstatusline (so ~/.cache is a
+# created parent whenever that overlay is active). Created as root, the
+# non-root agent gets EACCES writing any OTHER subdir under them — e.g. the
+# Playwright MCP downloading Chromium to ~/.cache/ms-playwright. Pre-creating
+# them here, owned by the container user, fixes the ownership: a bind-mount
+# into an already-existing directory leaves that directory's owner intact.
+RUN install -d -m 0755 -o ${USER_NAME} -g ${USER_NAME} \
+        /home/${USER_NAME}/.cache \
+        /home/${USER_NAME}/.config
+
 USER ${USER_NAME}
 # Explicit HOME for non-login shells: T19-C resolves $HOME from a
 # non-login `docker run -- sh -c 'printf %s "$HOME"'`, where Docker only

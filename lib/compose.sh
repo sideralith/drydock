@@ -21,8 +21,7 @@ COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
 COMPOSE_MCP_AUTH="$DRYDOCK_HOME/docker-compose.mcp-auth.yml"
 COMPOSE_CCSTATUSLINE="$DRYDOCK_HOME/docker-compose.ccstatusline.yml"
 COMPOSE_HARDENING="$DRYDOCK_HOME/docker-compose.hardening.yml"
-# shellcheck disable=SC2034  # used in lib/commands.sh (cmd_init)
-DEFAULT_SETTINGS_TEMPLATE="$DRYDOCK_HOME/templates/default-settings.json"
+COMPOSE_OAUTH="$DRYDOCK_HOME/docker-compose.oauth.yml"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
 
@@ -419,6 +418,9 @@ compose_files() {
 	if [ -n "${DRYDOCK_ENGRAM_SOURCE:-}" ]; then
 		printf '%s\n' "-f" "$COMPOSE_ENGRAM"
 	fi
+	if [ -n "${DRYDOCK_OAUTH_TOKEN_VALUE:-}" ]; then
+		printf '%s\n' "-f" "$COMPOSE_OAUTH"
+	fi
 	# Auto-detect user-config opt-in overlays based on host directory presence.
 	# Activated only when the user has actually configured the tool — never
 	# creates empty dirs on hosts that don't use these tools. To opt in for the
@@ -574,6 +576,23 @@ export_compose_env() {
 		fi
 	fi
 
+	# ── optional Claude OAuth token (host opt-in) ─────────────────────────────
+	# Token file: ~/.config/drydock/claude-oauth-token (DRYDOCK_OAUTH_TOKEN).
+	# File-absent → no export, no warn — matches SSH/GPG "feature off" pattern.
+	# Read only the first non-empty line then strip whitespace: a manually edited
+	# multi-line file is not silently concatenated into a garbled token.
+	# Empty-after-trim → no export (empty token must not activate the overlay).
+	# Unset first so re-invocations (e.g. after revoke-token in the same shell)
+	# re-derive state from the file rather than inheriting a stale var value.
+	unset DRYDOCK_OAUTH_TOKEN_VALUE
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
+		local _oauth_token
+		_oauth_token="$(head -1 "$DRYDOCK_OAUTH_TOKEN" | tr -d '[:space:]')"
+		if [ -n "$_oauth_token" ]; then
+			export DRYDOCK_OAUTH_TOKEN_VALUE="$_oauth_token"
+		fi
+	fi
+
 	# ── sub-mount host-path env vars (DooD passthrough) ───────────────────────
 	# For every detected sub-mount under project_dir, export a translated host
 	# path as DRYDOCK_SUBMOUNT_<UPPER_RELPATH>_HOST_PATH. The container drydock
@@ -614,6 +633,70 @@ export_compose_env() {
 	sync_submount_env_file "$project_dir"
 }
 
+# harvest_session_projects — rescue durable conversation history from a
+# per-session config dir before the GC destroys it (issue #68).
+#
+# The per-session ~/.claude-container-<disc>/ dir conflates ephemeral config
+# (.claude.json, settings — correctly per-session, INV-2) with durable
+# conversation history (projects/<slug>/<uuid>.jsonl — one append-only file
+# per conversation UUID). gc_orphan_session_dirs' rm -rf would destroy that
+# history, breaking `claude --resume` across sessions. This helper merges the
+# session's projects/ tree into the prototype ~/.claude-container/projects/ so
+# new sessions — seeded from the prototype by seed_session_config_dir — inherit
+# the history and --resume keeps working.
+#
+# Arguments:
+#   $1 — session dir (absolute path, trailing slash tolerated)
+#
+# Behaviour:
+#   - No-op on an empty argument, on a session dir with no projects/ subtree,
+#     or when the prototype ~/.claude-container/ does not exist (never conjure
+#     a half-formed prototype — without it seeding cannot run anyway).
+#   - For every file under the session's projects/ tree: copy it into the
+#     prototype only when the prototype has no copy OR the session copy is
+#     strictly LARGER. Conversation logs are append-only, so for a linearly
+#     extended UUID the largest copy is the most complete one and the merge
+#     is order-independent — unlike rsync's unconditional source-wins
+#     overwrite, which (when one GC pass harvests several orphan dirs holding
+#     the same UUID) lets a stale shorter copy harvested last clobber a
+#     longer one. A size tie keeps the prototype copy (equal bytes ⇒ equal
+#     content for an append-only log). Limitation: if the SAME conversation
+#     was independently resumed in two sessions, the two divergent branches
+#     cannot both fit one per-UUID file — the larger branch is kept (the
+#     root fix tracked for #68 revisits the projects/ topology).
+#   - Nothing in the prototype is deleted. A copy failure emits a note;
+#     harvesting is best-effort and never fatal — gc_orphan_session_dirs must
+#     still return 0.
+harvest_session_projects() {
+	local _dir="${1%/}"
+	# Degenerate empty arg: _src would be "/projects" — bail out (matches
+	# seed_session_config_dir's explicit guard for the analogous case).
+	[ -n "$_dir" ] || return 0
+	local _src="$_dir/projects"
+	local _dst="$HOME/.claude-container/projects"
+	[ -d "$_src" ] || return 0
+	[ -d "$HOME/.claude-container" ] || return 0
+	local _f _rel _target _ssize _dsize
+	while IFS= read -r -d '' _f; do
+		_rel="${_f#"$_src"/}"
+		_target="$_dst/$_rel"
+		if [ -f "$_target" ]; then
+			# Append-only logs: keep whichever copy holds more content.
+			_ssize=$(wc -c <"$_f" 2>/dev/null) || _ssize=0
+			_dsize=$(wc -c <"$_target" 2>/dev/null) || _dsize=0
+			[ "${_ssize:-0}" -gt "${_dsize:-0}" ] || continue
+		fi
+		mkdir -p "${_target%/*}" 2>/dev/null ||
+			{
+				note "could not harvest conversation history from ${_dir##*/}"
+				continue
+			}
+		cp -p "$_f" "$_target" 2>/dev/null ||
+			note "could not harvest conversation history from ${_dir##*/}"
+	done < <(find "$_src" -type f -print0 2>/dev/null)
+	return 0
+}
+
 # gc_orphan_session_dirs — prune per-session Claude config dirs whose container
 # no longer exists. Called before discriminator generation so stale dirs are
 # cleaned before a new session is seeded.
@@ -623,7 +706,9 @@ export_compose_env() {
 #      never matches the bare prototype ~/.claude-container — no trailing dash).
 #   2. For each dir, extract <disc> from the dir name; derive both container names:
 #      drydock-<PROJECT_NAME>-<disc> and drydock-<PROJECT_NAME>-<disc>-shell.
-#   3. If NEITHER name appears in `docker ps -a`, rm -rf the dir and its .json sibling.
+#   3. If NEITHER name appears in `docker ps -a`, harvest the dir's durable
+#      conversation history into the prototype (harvest_session_projects),
+#      then rm -rf the dir and its .json sibling.
 #   4. Returns 0 always — GC failures are non-fatal.
 #
 # Uses DOCKER seam.
@@ -652,7 +737,9 @@ gc_orphan_session_dirs() {
 		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
 			continue
 		fi
-		# Orphan — prune dir and sibling .json.
+		# Orphan — rescue durable conversation history, then prune the dir
+		# and its sibling .json (issue #68).
+		harvest_session_projects "$_dir"
 		_json="${_dir%/}.json"
 		rm -rf "$_dir"
 		rm -f "$_json"
@@ -704,12 +791,173 @@ seed_session_config_dir() {
 	# Clean re-seed: remove stale session dir.
 	rm -rf "$session_dir"
 
-	# Copy prototype dir and .json into session-specific paths.
-	cp -a "$HOME/.claude-container" "$session_dir"
+	# Copy prototype dir into session-specific path, EXCLUDING projects/.
+	# projects/ is NOT per-session state (issue #68): conversation history lives
+	# in the SHARED store ~/.claude-container/projects/, reached via a dedicated
+	# :rw sub-mount (docker-compose.yml). Copying it here and deleting it would
+	# waste MBs-to-GBs of I/O per session spawn on WSL2 9P / macOS virtiofs.
+	# find -mindepth 1 -maxdepth 1 also catches dotfiles a bare glob would miss;
+	# -print0 / read -d '' is the same NUL-safe idiom as harvest_session_projects.
+	mkdir -p "$session_dir"
+	local _entry
+	while IFS= read -r -d '' _entry; do
+		[ "${_entry##*/}" = projects ] && continue
+		cp -a "$_entry" "$session_dir/"
+	done < <(find "$HOME/.claude-container" -mindepth 1 -maxdepth 1 -print0)
 	cp -a "$HOME/.claude-container.json" "$session_json"
+
+	# Empty mount point for the shared projects/ sub-mount to overlay.
+	mkdir -p "$session_dir/projects"
 
 	# Remove the staleness marker — it belongs to the prototype, not sessions.
 	rm -f "$session_dir/.drydock-last-sync"
+
+	# Apply the persistent host-authored container-config overlay (issue #77).
+	# Whole-file recursive copy on top of the freshly re-seeded dir; scope-
+	# enforced (no .claude.json / .credentials.json, no symlinks) — see INV-2
+	# carve-out. No-op when ~/.config/drydock/claude-overlay/ is absent.
+	apply_claude_overlay "$session_dir"
+}
+
+# apply_claude_overlay — apply the persistent host-authored container-config
+# overlay (~/.config/drydock/claude-overlay/) on top of a freshly-seeded
+# per-session Claude config dir. Issue #77. Format A: whole-file recursive copy.
+#
+# Arguments:
+#   $1 — session_dir: the per-session ~/.claude-container-<disc>/ dir
+#
+# Behaviour:
+#   - Absent/empty overlay → silent return 0 (default for every non-user).
+#   - Two-pass validate-then-copy: pass 1 checks every entry (symlinks, INV-2
+#     forbidden basenames, type-collisions, symlinked destinations, unsupported
+#     entries) and aborts via err on the FIRST violation — before anything is
+#     copied.  Pass 2 runs only after every entry passes, and does mkdir -p /
+#     cp -p.  Validation errors (Pass 1) are caught before any write; an I/O
+#     failure mid-Pass-2 still aborts fail-loud, and the next
+#     seed_session_config_dir re-seed's rm -rf clears any partial state.
+#   - projects/ subtree is pruned by find (-type d -prune); it is never
+#     traversed or copied (shadowed by the :rw sub-mount, INV-2 carve-out).
+#   - Any scope violation is fail-loud: err names the offending path and
+#     aborts drydock run before container start. Never silent-skip.
+apply_claude_overlay() {
+	local session_dir="$1"
+	[ -n "$session_dir" ] || return 0
+	# Normalise trailing slash FIRST so _root is canonical before any test.
+	local _root="${HOST_CLAUDE_OVERLAY%/}"
+	# Fix #3 (symlinked overlay root): reject before the -d check, which follows
+	# symlinks.  find does not traverse into a symlinked start-point, so a
+	# symlinked root silently produces zero traversal — fail-loud instead.
+	# Test against _root (not the raw constant) so a trailing slash cannot make
+	# [ -L ] dereference and return false.
+	[ -L "$_root" ] && err "drydock: overlay root must not be a symlink: $_root"
+	[ -d "$_root" ] || return 0
+	local _entry _rel _dest _tmp _check
+	local -a _entries
+	# Capture find output to a temp file so we can check find's exit status
+	# (process-substitution silently eats it).  Prune the projects/ subtree so
+	# we never descend it only to skip every entry (perf hardening).
+	_tmp=$(mktemp) || err "drydock: cannot create temp file for overlay traversal (is \$TMPDIR writable?)"
+	if ! find "$_root" -mindepth 1 \( -path "$_root/projects" -type d -prune \) -o -print0 >"$_tmp"; then
+		rm -f "$_tmp"
+		err "drydock: overlay traversal failed under '$_root' — unreadable subtree? (check permissions)"
+	fi
+	# Fix #1 (temp file leaks): read ALL entries into an array now, then delete
+	# the temp file immediately — before any validation or copy loop can err+exit.
+	# This guarantees the temp file is gone regardless of which err path fires.
+	mapfile -d '' _entries <"$_tmp"
+	rm -f "$_tmp"
+	# Pass 1 — validate every entry BEFORE copying anything.
+	# Any violation aborts immediately via err, leaving the session dir untouched.
+	for _entry in "${_entries[@]}"; do
+		# Symlink check FIRST — -f/-d follow links; -L does not.
+		if [ -L "$_entry" ]; then
+			err "drydock: overlay rejects symlink '$_entry' — symlinks are not allowed in ~/.config/drydock/claude-overlay/ (copy the real file instead)"
+		fi
+		_rel="${_entry#"$_root"/}"
+		# Forbidden set: depth-1 .claude.json / .credentials.json (INV-2).
+		# Depth-1 means _rel contains no slash — it is a direct overlay child.
+		case "$_rel" in
+		.claude.json | .credentials.json)
+			err "drydock: overlay cannot deliver '$_rel' — .claude.json and .credentials.json are forbidden by INV-2; remove it from ~/.config/drydock/claude-overlay/"
+			;;
+		esac
+		_dest="$session_dir/$_rel"
+		# Write-escape guard: reject when any path component of _dest within
+		# $session_dir is a symlink.  mkdir -p and cp -p follow every component,
+		# so a symlinked ancestor (e.g. a cp -a-preserved prototype symlink at
+		# $session_dir/foo -> /outside) writes through to the host filesystem.
+		# Walk from leaf up to (but not including) $session_dir, testing [ -L ]
+		# at each step — one loop covers both leaf and ancestor-symlink vectors.
+		_check="$_dest"
+		while [ "$_check" != "$session_dir" ] && [ ${#_check} -gt ${#session_dir} ]; do
+			if [ -L "$_check" ]; then
+				err "drydock: overlay target '$_rel' resolves through a symlink at the session dir — refusing to write outside the session dir"
+			fi
+			_check="$(dirname "$_check")"
+		done
+		# Detect type collision between overlay entry and seeded target.
+		# Fail-loud rather than silently producing the wrong result.
+		if [ -d "$_entry" ] && [ -f "$_dest" ]; then
+			err "drydock: overlay directory '$_rel' collides with seeded file at '$_dest' — type mismatch; remove the conflicting overlay entry"
+		fi
+		if [ -f "$_entry" ] && [ -d "$_dest" ]; then
+			err "drydock: overlay file '$_rel' collides with seeded directory at '$_dest' — type mismatch; remove the conflicting overlay entry"
+		fi
+		# Reject anything that is neither a directory nor a regular file (e.g.
+		# FIFOs, device nodes, sockets).  Must be in pass 1 so unsupported
+		# entries abort before any copy runs — not mid-copy.
+		if [ ! -d "$_entry" ] && [ ! -f "$_entry" ]; then
+			err "drydock: overlay contains unsupported entry '$_entry' — only directories and regular files are allowed"
+		fi
+	done
+	# Pass 2 — copy.  Runs only after the entire array passed validation.
+	for _entry in "${_entries[@]}"; do
+		_rel="${_entry#"$_root"/}"
+		_dest="$session_dir/$_rel"
+		if [ -d "$_entry" ]; then
+			mkdir -p "$_dest" || err "drydock: overlay failed to create directory '$_dest'"
+		else
+			mkdir -p "$(dirname "$_dest")" || err "drydock: overlay failed to create directory '$(dirname "$_dest")'"
+			cp -p "$_entry" "$_dest" || err "drydock: overlay failed to copy '$_rel' into session dir"
+		fi
+	done
+}
+
+# migrate_projects_to_shared_store — one-time sentinel-gated sweep that
+# consolidates all pre-upgrade scattered per-session projects/ trees into the
+# shared store ~/.claude-container/projects/ (issue #68 root fix).
+#
+# After this change, no new session ever writes projects/ into a per-session dir,
+# so this sweep is needed once to rescue history from pre-upgrade sessions.
+#
+# Sentinel: ~/.config/drydock/.projects-migrated
+#   - If the sentinel exists → return 0 immediately (idempotent fast-path).
+#   - Sentinel is touched ONLY after the full loop completes so an interrupted
+#     migration re-runs fully on the next invocation.
+#
+# Reuses harvest_session_projects for the size-based merge (no --delete, larger
+# file wins, size-tie keeps the existing shared store copy). Returns 0 always.
+migrate_projects_to_shared_store() {
+	local _sentinel="$HOME/.config/drydock/.projects-migrated"
+	# Fast-path: already migrated.
+	[ -f "$_sentinel" ] && return 0
+	# Sweep every per-session dir that drydock could have created.
+	# Same glob shape as gc_orphan_session_dirs; ?* never matches the bare prototype.
+	local _dir _disc
+	for _dir in "$HOME"/.claude-container-?*/; do
+		# Guard against no-match (nullglob absent).
+		[ -d "$_dir" ] || continue
+		# Extract disc: remove prefix and trailing "/".
+		_disc="${_dir#"$HOME"/.claude-container-}"
+		_disc="${_disc%/}"
+		# Validate discriminator shape — only sweep dirs drydock itself created.
+		[[ "$_disc" =~ ^[0-9a-f]{4}$ ]] || continue
+		harvest_session_projects "$_dir"
+	done
+	# Touch sentinel only after the full sweep — interrupted runs re-sweep.
+	mkdir -p "$(dirname "$_sentinel")"
+	touch "$_sentinel"
+	return 0
 }
 
 image_exists() {
@@ -744,6 +992,9 @@ ensure_runtime_dirs() {
 		note "runtime state missing — running 'drydock setup' automatically"
 		cmd_setup
 	fi
+	# One-time consolidation of pre-upgrade scattered per-session projects/ trees
+	# into the shared store (issue #68). Sentinel-gated; no-op after first run.
+	migrate_projects_to_shared_store
 }
 
 ensure_image() {

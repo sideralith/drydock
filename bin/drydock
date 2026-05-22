@@ -9,7 +9,6 @@
 #   drydock run [DIR] [-- ARGS]    # explicit run; ARGS after -- go to claude
 #   drydock shell [DIR] [-- CMD]   # bash in container at DIR; -- CMD runs CMD instead
 #   drydock -- [ARGS]              # shorthand: run claude in cwd with ARGS
-#   drydock init [DIR]             # seed .claude/settings.json stub for DIR
 #   drydock build                  # (re)build the image
 #   drydock sync                   # ~/.claude/ → ~/.claude-container/
 #   drydock status                 # short health
@@ -88,8 +87,9 @@ main() {
 	run) cmd_run "$@" ;;
 	shell) cmd_shell "$@" ;;
 	--) cmd_run -- "$@" ;;
-	init) cmd_init "$@" ;;
 	setup) cmd_setup "$@" ;;
+	setup-token) cmd_setup_token "$@" ;;
+	revoke-token) cmd_revoke_token "$@" ;;
 	build) cmd_build "$@" ;;
 	sync) cmd_sync "$@" ;;
 	status) cmd_status "$@" ;;
@@ -99,7 +99,6 @@ main() {
 	links) cmd_links "$@" ;;
 	version | --version | -v) echo "drydock $DRYDOCK_VERSION" ;;
 	help | --help | -h) usage ;;
-	onboard) err "renamed: use 'drydock init' (git-style per-project semantics)" ;;
 	*) err "unknown command: $cmd — run: drydock help" ;;
 	esac
 }

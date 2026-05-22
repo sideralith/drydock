@@ -3,6 +3,80 @@
 Common failures and fixes. Run `drydock doctor` first — it shows versions,
 paths, mount detection, and GIDs.
 
+## Claude prompts for login every session
+
+By design, each drydock container does not inherit the host's OAuth credentials
+(`~/.claude/.credentials.json` is not synced into the container — INV-2 prevents
+the concurrent-write race that would cause both sessions to get logged out).
+
+**Friction-free fix — generate a 1-year OAuth token once:**
+
+```bash
+drydock setup-token
+```
+
+This runs `claude setup-token` interactively — you complete the browser
+authorization flow and see the token printed by claude. drydock then asks you
+to paste that token, validates it, and writes it atomically to
+`~/.config/drydock/claude-oauth-token` with mode `0600`. From then on drydock
+auto-includes a `docker-compose.oauth.yml` overlay that injects the token as
+`CLAUDE_CODE_OAUTH_TOKEN` — every session starts without a prompt.
+
+**If you prefer not to generate a long-lived token:** just log in when the prompt
+appears. The credentials are stored in the per-session container config and
+persist for the duration of that container's lifetime.
+
+**Revoking the token:**
+
+```bash
+drydock revoke-token
+```
+
+This removes the local token file. The token itself remains valid server-side until
+you revoke it at claude.ai → Settings. Always do both steps to fully revoke.
+
+**Security note:** the OAuth token grants approximately 1 year of Claude account
+access. It is stored at `~/.config/drydock/claude-oauth-token` (`0600`) and is
+already covered by the deny rule `Read(__HOME__/.config/drydock/**)` in the
+image-baked managed-settings layer — the agent inside the container cannot read
+the file. The token value reaches the container only via the `CLAUDE_CODE_OAUTH_TOKEN`
+environment variable; no bind-mount of the token file is ever created.
+
+See also: [docs/security.md](security.md#claude-oauth-token-docker-composeoauthyml).
+
+## Container config edits revert every run (plugin config, MCP entries, settings)
+
+Config changes made inside the container — installing a plugin, editing
+`settings.json`, adding an MCP server entry — do not persist across sessions by
+default. Each `drydock run` seeds a fresh per-session `~/.claude-container-<disc>/`
+directory from the prototype. Changes written inside the container stay in the
+ephemeral session dir and are discarded when the session ends.
+
+**Fix — use the persistent overlay:**
+
+Place the files you want preserved into `~/.config/drydock/claude-overlay/`,
+mirroring the layout of `~/.claude/`. drydock copies them on top of the freshly-seeded
+session dir on every `drydock run` — before Claude Code starts.
+
+```bash
+mkdir -p ~/.config/drydock/claude-overlay/
+# Example: persist a plugin's config
+cp ~/.claude/plugins/my-plugin/config.json \
+   ~/.config/drydock/claude-overlay/plugins/my-plugin/config.json
+```
+
+The overlay is **host → container only**. Changes made inside the container are not
+written back. To update a persisted file, edit the copy under
+`~/.config/drydock/claude-overlay/` on the host.
+
+**Restrictions** — the overlay rejects and aborts with an error if:
+
+- `~/.claude.json` or `.credentials.json` appear at the overlay root (INV-2 hazard).
+- Any entry is a symlink (at any depth) — copy the real file instead.
+- Any entry is not a regular file or directory (FIFOs, device nodes, etc.).
+
+See also the [architecture.md INV-2 deep-dive](architecture.md) for the full rationale.
+
 ## "Claude configuration file not found at: ~/.claude.json" / settings don't persist
 
 Claude Code reads config from TWO locations: the `~/.claude/` **directory**
@@ -106,6 +180,75 @@ to `:ro`, revert it.
 docker image rm drydock:latest
 drydock build
 ```
+
+## Claude Code output feels slightly slower than running on host (TTY latency)
+
+If you notice Claude Code's streaming text output is **a bit slower inside
+drydock than running `claude` directly on the host**, this is a known
+side effect of the container's PTY chain — not something drydock can
+remove from its side without breaking the design.
+
+### The chain
+
+drydock launches each session via `docker compose run --rm` (see
+`lib/commands.sh`). Every byte the `claude` process writes flows through:
+
+```
+claude (container)
+  → containerd PTY
+  → Docker daemon
+  → docker compose CLI (host)
+  → your terminal
+```
+
+On native Linux with a local Docker Engine, every hop in that chain lives
+in the same kernel — added latency is microseconds, imperceptible.
+On WSL2 + Docker Desktop or macOS + Docker Desktop, the Docker daemon
+runs inside a **separate Linux VM** (HyperV on Windows, virtio on macOS).
+That adds one extra IPC bridge per byte:
+
+```
+claude (container)
+  → containerd PTY
+  → Docker daemon IN VM
+  → VM ↔ host bridge   ← extra hop here
+  → docker compose CLI (host)
+  → your terminal
+```
+
+Per-byte RTT goes up by ~5-15 ms depending on the bridge implementation.
+Claude Code emits many small streamed chunks, so the sum is perceptible
+as "feels a touch slower."
+
+### Mitigations
+
+| Host OS | Bridge | Best mitigation |
+|---------|--------|-----------------|
+| **Linux native** | None — same kernel | Already optimal. |
+| **WSL2** (with Docker Desktop) | HyperV VM, 9P/named-pipe | Switch to **Docker Engine inside the WSL2 distro** (install `docker-ce` in WSL2 and disable Docker Desktop's WSL2 integration). Removes the HyperV hop. Largest payoff of any mitigation listed. |
+| **macOS** (Docker Desktop, virtiofs) | virtio-VM | Modern Docker Desktop already uses **virtiofs** (much better than legacy gRPC-FUSE). Alternatives: **OrbStack** (paid, fast Rosetta-backed VM) or **Colima** (free, lima/QEMU). All still have a VM hop — macOS has no equivalent to "Linux in a Linux VM" so the bridge is unavoidable. |
+| **macOS Apple Silicon** | virtio-VM | Same as above; ensure Docker Desktop uses VirtualizationFramework (Settings → General → "Use Virtualization framework"), not the legacy QEMU backend. |
+
+### What drydock cannot easily change
+
+A long-running container per project with `docker exec` per session would
+save the container creation cost (one-off, ~1 s) but **does not reduce
+per-byte TTY latency** — the daemon-to-host bridge is unchanged. It also
+sacrifices the `--rm` ephemeral-container design that backs INV-2 (each
+session a clean state). drydock keeps `compose run --rm` deliberately.
+
+### What to check first
+
+If the latency feels worse than the description above (multi-second pauses,
+not just a faint streaming feel), the cause is probably **not** the PTY
+chain. Look for:
+
+- **`drydock build` not yet run** — the auto-sync step on first invocation
+  can take seconds the first time.
+- **Engram shared-mode misconfigured** on WSL2/macOS — should never trigger
+  (INV-5 force-downgrade), but verify with `drydock doctor`.
+- **A heavy MCP server in `~/.claude.json`** — every Claude Code start
+  loads MCP servers in parallel; a slow one delays first output.
 
 ## A command was unexpectedly blocked by the guardrail layer
 
@@ -274,6 +417,14 @@ preserved.
 **`.env` is gitignored**: ensure your project's `.gitignore` includes
 `.env` (this is the standard pattern). drydock's marker block contains
 host-specific paths and should never be committed.
+
+**Interaction with the managed-settings `.env` deny.** Since v0.2.1
+`00-secrets.json` denies `Read`/`Edit`/`Write` on `.env` and its common
+variants via Claude Code's tool layer. drydock's marker-block auto-edit
+is unaffected: the drydock CLI writes the marker block via direct shell
+file I/O (not through Claude Code's `Write` tool), so the deny does not
+apply. The deny only blocks the agent from reading or modifying `.env`
+through Claude Code's tools — which is the intended protection.
 
 **Opt out**: set `DRYDOCK_SKIP_ENV_WRITE=1` in your environment to disable
 the `.env` auto-edit. The overlay environment passthrough (item 2 above)

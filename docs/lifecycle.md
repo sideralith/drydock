@@ -12,6 +12,7 @@ right place for each action.
 | `/plugin install <x>` inside Claude | `~/.claude/plugins/` | **NO** — separate (`~/.claude-container-<disc>/plugins/`, per-session) |
 | Create/edit skill in `~/.claude/skills/` | `~/.claude/skills/` | **NO** — separate |
 | Edit `~/.claude/CLAUDE.md` or `settings.json` (global) | `~/.claude/` | **NO** — separate |
+| Persist plugin config / MCP entries across container sessions | `~/.config/drydock/claude-overlay/` (mirrors `~/.claude/`; files are copied into the per-session dir on every `drydock run` before Claude starts — host→container only, unidirectional) | host-only — applied at seed time |
 | Onboarding flags, "seen hints", project registry, MCP servers, OAuth | `~/.claude.json` | **NO** — separate (`~/.claude-container-<disc>.json`, per-session) |
 | Edit `~/.claude/hooks/` | blocked from container (RO overlay) | host-only |
 | drydock guardrail policy (`permissions.deny` git + OS safety, `hooks.SessionStart`, `hooks.PreToolUse` destructive-command hook) | image-baked managed-settings (`/etc/claude-code/managed-settings.d/`) — update via `drydock build` | N/A — applied at highest precedence, not overridable from project `settings.json` |
@@ -48,11 +49,15 @@ causes skew).
 - **From container**: stays only in `~/.claude-container-<disc>/plugins/`
   (the per-session dir). Host doesn't know. The per-session dir is discarded
   when GC'd by `gc_orphan_session_dirs` — container-installed plugins do NOT
-  persist across sessions unless promoted to the host.
+  persist across sessions unless promoted to the host or the overlay.
 - **From host**: stays only in `~/.claude/plugins/`. Container doesn't see it
   until `drydock sync`.
 - **No automatic promote**. If a plugin you tested in the container convinces
   you, do `/plugin install foo` on host too.
+- **Persist a plugin's config across container sessions**: copy the config file
+  into `~/.config/drydock/claude-overlay/` under the same relative path it has
+  in `~/.claude/`. drydock copies it into every new session dir at startup.
+  See [troubleshooting.md § "Container config edits revert every run"](troubleshooting.md#container-config-edits-revert-every-run-plugin-config-mcp-entries-settings).
 
 ### New skills
 

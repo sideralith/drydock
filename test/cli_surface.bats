@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
 # test/cli_surface.bats — CLI dispatch surface tests (black-box subprocess)
 #
-# Spec: Behavior Preservation → version/help/unknown-cmd/onboard rows.
+# Spec: Behavior Preservation → version/help/unknown-cmd rows.
+# (The `onboard` command tested here historically referenced the now-removed
+# `drydock init` redirect; both tests were dropped in v0.2.1 alongside init.)
 # These tests invoke bin/drydock as a subprocess (not sourced) to verify
 # the command dispatch and user-facing output strings.
 
@@ -13,29 +15,29 @@ drydock() {
   run bash -c '"$1" "$@"' -- "$DRYDOCK_HOME/bin/drydock" "$@" 2>&1
 }
 
-@test "drydock version exits 0 and prints exactly 'drydock 0.2.0' (v0.2.0)" {
+@test "drydock version exits 0 and prints exactly 'drydock 0.2.1' (v0.2.1)" {
   run "$DRYDOCK_HOME/bin/drydock" version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.2.0" ]
+  [ "$output" = "drydock 0.2.1" ]
 }
 
 @test "drydock --version exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" --version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.2.0" ]
+  [ "$output" = "drydock 0.2.1" ]
 }
 
 @test "drydock -v exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" -v
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.2.0" ]
+  [ "$output" = "drydock 0.2.1" ]
 }
 
 @test "drydock help exits 0 and contains command list" {
   run "$DRYDOCK_HOME/bin/drydock" help
   [ "$status" -eq 0 ]
   [[ "$output" == *"run"* ]]
-  [[ "$output" == *"init"* ]]
+  [[ "$output" == *"shell"* ]]
   [[ "$output" == *"build"* ]]
 }
 
@@ -43,7 +45,7 @@ drydock() {
   run "$DRYDOCK_HOME/bin/drydock" --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"run"* ]]
-  [[ "$output" == *"init"* ]]
+  [[ "$output" == *"shell"* ]]
 }
 
 @test "drydock -h exits 0 and contains command list" {
@@ -57,19 +59,16 @@ drydock() {
   [ "$status" -ne 0 ]
 }
 
+@test "drydock help contains setup-token and revoke-token" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"setup-token"* ]]
+  [[ "$output" == *"revoke-token"* ]]
+}
+
 @test "drydock unknown command output contains 'unknown command'" {
   run bash -c '"$1" thisisnotacommand 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" == *"unknown command"* ]]
-}
-
-@test "drydock onboard exits non-zero" {
-  run bash -c '"$1" onboard 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
-  [ "$status" -ne 0 ]
-}
-
-@test "drydock onboard output mentions 'drydock init'" {
-  run bash -c '"$1" onboard 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
-  [[ "$output" == *"drydock init"* ]]
 }
 
 # ── T14-RED: dispatch arms + usage surface ────────────────────────────────────

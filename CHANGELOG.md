@@ -5,6 +5,208 @@ All notable changes to drydock are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-22
+
+OAuth token persistence, container-config overlay, expanded destructive-command
+guardrails, conversation-history root fix, container-state-model awareness, and
+post-v0.2.0 polish & hardening across `doctor` / `install.sh` / Dockerfile.
+
+### Removed
+- **`drydock init` command** — removed entirely. Pre-v0.2.0 it was load-bearing
+  (it seeded `.claude/settings.json` with drydock's full deny policy + the
+  `SessionStart` hook). In v0.2.0 the policy moved to the image-baked
+  managed-settings layer (`/etc/claude-code/managed-settings.d/`, INV-3),
+  leaving init as a vestigial empty-stub creator with no remaining
+  load-bearing role. Claude Code creates `.claude/settings.json` on demand
+  when the user adds MCP servers, hooks, or permissions through its own
+  commands — so a dedicated drydock command for it no longer adds value.
+  Cleaned up: removed `cmd_init` function, the dispatch case in
+  `bin/drydock`, the `init` row from `usage()`, the `onboard` redirect
+  (which pointed at init), the `templates/default-settings.json` file, the
+  `DEFAULT_SETTINGS_TEMPLATE` constant in `lib/compose.sh`, the `drydock
+  init .` line from `install.sh`'s next-steps output, and the corresponding
+  tests (`test/init.bats` removed; `test/examples.bats`,
+  `test/cli_surface.bats`, `test/source_guard.bats`, and
+  `test/managed_settings.bats` cleaned up). `drydock doctor` no longer
+  warns when `.claude/settings.json` is missing — it's reported as info,
+  not a missing-piece. drydock is pre-1.0 with no known users yet, so no
+  deprecation stub was kept.
+
+### Added
+- **`drydock setup-token` / `drydock revoke-token`**: frictionless persistent
+  auth for container sessions. `drydock setup-token` runs `claude setup-token`
+  on the host, captures the resulting 1-year OAuth token, and writes it
+  atomically with mode `0600` to `~/.config/drydock/claude-oauth-token`. From
+  then on a new `docker-compose.oauth.yml` overlay auto-injects the token as
+  `CLAUDE_CODE_OAUTH_TOKEN` so every session starts without a browser login
+  prompt. `drydock revoke-token` removes the local token file (also revoke
+  server-side at claude.ai → Settings). `drydock doctor` shows the overlay as
+  active when the file is present. Closes #58.
+- **Homebrew packaging**: `packaging/homebrew/drydock.rb` formula source and
+  `scripts/publish-homebrew-tap.sh` to publish/refresh the
+  `sideralith/homebrew-tap` tap. Users install with
+  `brew install sideralith/tap/drydock` once the tap is published. The
+  generic `homebrew-tap` repo name (vs. `homebrew-drydock`) keeps the
+  install command clean (`sideralith/tap/drydock` instead of the
+  double-named `sideralith/drydock/drydock`) and leaves room for future
+  sideralith formulae under the same tap.
+- **`.env` secret protection**: `00-secrets.json` now denies `Read`, `Edit`,
+  and `Write` on the common `.env` filename variants (`.env`, `.env.local`,
+  `.env.production`, `.env.development`, `.env.test`, `.env.staging`) at any
+  mount depth via `//**/`-anchored patterns. `.env.example` and other
+  template suffixes are intentionally not covered (they should be readable).
+  Closes the gap previously documented in `docs/security.md`'s "what drydock
+  does NOT protect against" section.
+- **`drydock doctor` — resume cheat-sheet for active sessions.** The ACTIVE
+  SESSIONS section now prints, under each running container, the `docker exec`
+  command to re-enter that live session and recover the work — `claude
+  --continue` for run sessions, `bash` for `-shell` companions. Handy for
+  rejoining a session whose terminal was closed. A `⚠` caveat notes that
+  re-entering a live run session starts a second Claude against one shared
+  per-session config (INV-2).
+- **Container-config overlay** (#77) — a host-authored
+  `~/.config/drydock/claude-overlay/` directory mirroring the `~/.claude/`
+  tree is copied recursively (whole-file) on top of the freshly re-seeded
+  per-session `~/.claude-container-<disc>/` dir. Config edits that previously
+  vanished on the next `drydock run` (e.g. a plugin's `.mcp.json` flag) now
+  survive — the overlay is host-authored, container-consumed, unidirectional.
+  INV-2 carve-out with strict scope enforcement: a two-pass
+  validate-then-copy rejects `~/.claude.json`, `.credentials.json`, and any
+  symlinked overlay destination fail-loud before any copy runs.
+- **SessionStart hook — container state model awareness** (#79). The
+  awareness hook now tells the agent that container-side `~/.claude/` and
+  `~/.claude.json` are per-session copies re-seeded from a prototype on every
+  `drydock run` — edits inside the container do not persist. The hook also
+  surfaces the three paths for config that must survive a restart (host
+  `~/.claude/` + `drydock sync`, the project's `.mcp.json`, or the host
+  overlay above).
+
+### Fixed
+- **Conversation history destroyed on the next `drydock run` (data loss)** —
+  `gc_orphan_session_dirs` (`lib/compose.sh`) prunes per-session
+  `~/.claude-container-<disc>/` dirs whose container is no longer in
+  `docker ps -a`. Because `drydock run` uses `docker compose run --rm`, an
+  `/exit`'d container leaves `docker ps -a` immediately — so the next
+  `drydock run` saw the exited session's dir as orphaned and `rm -rf`'d it,
+  destroying `projects/<slug>/<uuid>.jsonl` (the durable conversation
+  history) and breaking `claude --resume` across sessions since v0.2.0.
+  **Hotfix** harvests each orphan dir's `projects/` tree into the prototype
+  `~/.claude-container/projects/` before pruning, copying each append-only
+  `.jsonl` only when the prototype has no copy or the harvested one is
+  larger — so a stale shorter copy can never clobber a more complete one.
+  **Root fix** (#68) moves `projects/` to a shared `:rw` sub-mount —
+  conversation history now lives outside the per-session dirs entirely, so
+  GC cannot reach it. The hotfix harvest stays in as a belt-and-suspenders
+  backstop. INV-2 amended with the append-only `projects/` carve-out
+  (one append-only `.jsonl` per UUID — none of INV-2's four hazards apply).
+- **SR-9 integration test pollutes the host home** (#73) — the sub-mount
+  resolution integration test (`test/integration/test_projects_submount.sh`)
+  used to create root-owned dirs under the real host `$HOME` when run inside
+  a drydock container (DooD). Rewritten as hermetic: the test now runs under
+  a per-test temp HOME and tears it down on exit.
+- **Root-owned `~/.cache` and `~/.config` inside the container.** Docker
+  creates any missing parent directory of a bind-mount target as `root:root`.
+  The base compose mounts `~/.config/gh` and the ccstatusline overlay mounts
+  `~/.cache/ccstatusline`, so their parent directories were created
+  root-owned — leaving the non-root agent unable to write any other subdir
+  under them (e.g. the Playwright MCP downloading Chromium to
+  `~/.cache/ms-playwright`). The `Dockerfile` now pre-creates `~/.cache` and
+  `~/.config` owned by the container user before the `USER` switch;
+  bind-mounting into an already-existing directory leaves its ownership
+  intact.
+
+### Changed
+- **Destructive-command guardrails — prod-ops & residual OS coverage** (#76).
+  The tier-1 deny layer + the PreToolUse hook now also cover production-infra
+  ops and the residual sudo/OS forms previously uncovered. New drop-in
+  `templates/managed-settings.d/50-prod-ops.json` (terraform apply/destroy).
+  `30-os-safety.json` extended with recursive `chown`, `userdel`,
+  account-lock `usermod` (`-L`/`--lock`/`--expiredate`), `systemctl`
+  teardown (`stop`/`disable`/`mask`/`reset-failed`), `sudo crontab -r`,
+  `sudo kill -9 1`, `sudo init 0`. Four new PreToolUse residue rules in
+  `drydock-block-destructive.sh`: **A2** (kubectl/helm destructive verb
+  scoped to a production-context flag value — `--context`/`--kube-context`/
+  `--namespace`/`-n`, case-insensitive, attached short-flag accepted,
+  segment pipe-split so a verb in a downstream command is not misread);
+  **A3** (a database CLI — `psql`/`mysql`/`mongo`/`mongosh`/`redis-cli` —
+  whose `-h`/`--host` value points at a production host); **A4**
+  (`terraform apply`/`destroy`, subcommand-anchored so read-only subcommands
+  pass); **C7-residue** (`sudo chmod` with a world-writable mode, anchored
+  to the mode argument so a numeric/clause-shaped filename does not false
+  block). The Laravel artisan rule was evaluated and deliberately left out
+  as scope creep for a project-agnostic image. Hardened via four rounds of
+  dual adversarial review (Judgment Day).
+- **Hook block messages — drop internal INV-N tokens** (`drydock-block-destructive.sh`).
+  Rule codes (A1, C1-residue, C17, …) remain in the user-visible messages
+  as cross-references; INV-N invariant tokens, which are design-doc-only
+  identifiers with no user value, were removed.
+- **`drydock doctor` — OAuth token staleness warning**: when the OAuth token
+  file is present, `doctor` now computes its age from the file mtime and shows
+  a `⚠` row instead of the `✓` row once the token is over 330 days old
+  (~35-day runway before the ~1-year token expires), pointing the user at
+  `drydock setup-token --force` to refresh. Closes #60.
+- **`install.sh`**: the shared-engram-mode prompt now skips silently when
+  `engram` is not on `PATH`. Previously the prompt appeared on every native
+  Linux install regardless — useless for users without engram (INV-4: engram
+  is optional). Also adds a comment explaining the gate.
+- **README quick start**: the clone-first install path is now explicitly
+  framed as the recommended audit-before-run option for security-conscious
+  users; the curl one-liner remains for quick installs but now points back
+  to the clone flow as an inspection alternative.
+- **`drydock doctor` / `drydock status` / `drydock help` — modern visual
+  redesign.** Switched to a hierarchical layout: uppercase section headers,
+  indented items with consistent status icons (`✓` ok, `·` info, `⚠`
+  warning, `✗` error), dim metadata column, and TTY-aware coloring. Pipes
+  / non-TTY output is plain text. Respects the `NO_COLOR` env var
+  convention (any non-empty value disables color). No Nerd-Font glyphs —
+  uses Unicode-standard symbols so every UTF-8 terminal renders the same.
+  Implementation: four reusable helpers (`_dr_init_style`, `_dr_section`,
+  `_dr_item`, `_dr_help_row`) keep formatting consistent across all three
+  commands.
+- **`drydock doctor`** content expanded with four new sections:
+  - **Linked siblings** — lists the `~/.config/drydock/links/<project>.list`
+    entries for the current project (the same data `drydock links` prints).
+    Empty case: `(none linked)` hint.
+  - **Active drydock sessions (this project)** — surfaces any running
+    `drydock-<project>-<disc>` (and `-shell` companion) containers for the
+    current project. Awareness signal for concurrent-sessions (INV-2).
+  - **Compose overlays that would activate now** — replicates the conditions
+    in `compose_files()` (without side-effects — no temp overlays written)
+    and prints which compose files would be included for an invocation from
+    the current `cwd`/env. Surfaces base, hardening, sub-mounts, links, SSH,
+    GPG, engram, mcp-auth, and ccstatusline overlays.
+  - **`drydock` env flags (non-default)** — lists any `DRYDOCK_*` env var
+    currently set (`DRYDOCK_NO_HARDENING`, `DRYDOCK_TMPFS_SIZE`,
+    `DRYDOCK_ENGRAM_SHARED`, `DRYDOCK_SKIP_AUTOSYNC`). Safety-loosening
+    flags marked `⚠`, neutral tunables `✓`. Empty: `(none — defaults
+    active)`.
+
+### Documentation
+- **`CONTRIBUTING.md` — dev/main two-branch model** (#72). The convention is
+  now documented: feature PRs target `dev`, releases merge `dev` → `main`,
+  and issues are closed manually on `dev` merge because GitHub does not
+  auto-close issues from non-default-branch merges (the `close-on-dev`
+  convention).
+- **INV-2 carve-outs documented in `CLAUDE.md`.** The append-only `projects/`
+  shared sub-mount and the host-authored `~/.config/drydock/claude-overlay/`
+  overlay each get a "Carve-out" subsection with the hazard-class justification
+  showing none of INV-2's four failure modes apply. Also documents the
+  container-config overlay deep-dive in `docs/troubleshooting.md` and the
+  agent-lifecycle docs.
+- **TTY latency on WSL2 and macOS**: new `docs/troubleshooting.md` section
+  explaining the PTY chain (containerd → daemon → CLI → terminal) and why
+  WSL2 + Docker Desktop / macOS + Docker Desktop add a per-byte VM-bridge
+  hop. Includes a mitigations table (Docker Engine inside WSL2 for the
+  biggest payoff; OrbStack/Colima/virtiofs notes for macOS).
+- **`docs/security.md`**: the "what drydock does NOT protect against"
+  section is updated — `.env` and common variants are now covered by the
+  managed-settings deny, no per-user setup required.
+- **README Requirements section**: new section between "What problem it
+  solves" and "Quick start" that lists host OS support matrix, mandatory
+  host tooling (Docker, `docker compose` v2, Bash ≥ 4, `git`, `jq`,
+  `rsync`, `curl`), the strong recommendation to have Claude Code already
+  installed on host, and the optional pieces (`engram`, `gh`, GPG).
+
 ## [0.2.0] - 2026-05-20
 
 Managed-settings layer, concurrent-session isolation, destructive-command guardrails,
@@ -165,6 +367,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.2.1]: https://github.com/sideralith/drydock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sideralith/drydock/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sideralith/drydock/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sideralith/drydock/releases/tag/v0.1.1

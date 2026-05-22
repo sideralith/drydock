@@ -7,56 +7,80 @@
 #           lib/paths.sh (resolve_project_dir, path constants),
 #           lib/compose.sh (image_exists, ensure_*, compose_files, DOCKER).
 
+# ── CLAUDE_BIN seam ───────────────────────────────────────────────────────────
+# Override in tests: export CLAUDE_BIN=/path/to/fake-claude before sourcing.
+# Matches the DOCKER/UNAME/DRYDOCK_DISCRIMINATOR_FN seam idiom.
+: "${CLAUDE_BIN:=claude}"
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
-	cat <<EOF
-drydock $DRYDOCK_VERSION — containerized Claude Code sandbox
+	# Source the rendering helpers from the doctor/status layout so help shares
+	# the same visual language (CAPS sections, dim descriptions, TTY-aware
+	# colors). When run via `drydock help`, lib/compose.sh has already been
+	# sourced — the helpers are defined.
+	_dr_init_style
 
-Usage:
-  drydock [COMMAND] [ARGS]
+	# ── Title — bold name + dim tagline on the same line ──
+	printf '\n  %s─ drydock %s%s%s — containerized Claude Code sandbox%s\n' \
+		"$_DR_BOLD" "$DRYDOCK_VERSION" "$_DR_RESET" \
+		"$_DR_DIM" "$_DR_RESET"
 
-Commands:
-  (no args)           Default — launch Claude in current directory's project
-  run [DIR] [-- ARGS] Launch Claude in DIR (or cwd); ARGS after -- go to claude
-                        (e.g. drydock run -- --resume "my-session")
-  shell [DIR] [-- CMD] Bash shell in container at DIR; with -- CMD, run CMD instead
-  init [DIR]            Initialize a project — creates .claude/settings.json stub
-                        (per-project, like \`git init\`); drydock policy lives in the
-                        managed-settings layer baked into the image
-  build               Build/rebuild the drydock image
-  sync                Sync host ~/.claude/ → ~/.claude-container/
-  status              Short health snapshot
-  doctor              Detailed diagnostics
-  setup               (advanced) One-time host setup — auto-triggered on first
-                        run/build/sync if missing; you rarely call this explicitly
-  link [--rw] [PATH] [CONTAINER-PATH]
-                      Mount a sibling project inside the container.
-                        --rw: mount read-write; generate a per-sibling deploy
-                              key and managed SSH config for git push access.
-                        PATH: host directory to mount (required).
-                        CONTAINER-PATH: in-container mount target (optional;
-                        default: /workspace-siblings/<basename>/).
-  unlink [--rw] PATH  Remove a sibling mount from the project list.
-                        --rw is accepted and ignored; the list entry's flags
-                        field determines cleanup behavior.
-  links               Show all siblings configured for the current project.
-  version             Show drydock version
-  help                Show this help
+	# ── USAGE ──
+	_dr_section "USAGE"
+	printf '   drydock [COMMAND] [ARGS]\n'
 
-Examples:
-  cd ~/git/myproject && drydock                # launch claude there
-  drydock run ~/git/otherproject               # explicit dir
-  drydock run -- --resume "my-session"         # resume a session
-  drydock init ~/git/newproject                # create settings.json stub
-  drydock build                                # rebuild image
-  drydock link ~/git/shared-lib                # mount sibling read-only
-  drydock link ~/git/shared-lib /opt/mylib     # mount at custom path
-  drydock unlink ~/git/shared-lib              # remove sibling
-  drydock links                                # list current project's siblings
+	# ── COMMANDS ──
+	_dr_section "COMMANDS"
+	local _DR_LABEL_WIDTH=28
+	_dr_help_row "(no args)" "Default — launch Claude in current directory's project"
+	_dr_help_row "run [DIR] [-- ARGS]" "Launch Claude in DIR (or cwd); ARGS after -- go to claude"
+	_dr_help_row "shell [DIR] [-- CMD]" "Bash shell in container; with -- CMD, run CMD instead"
+	_dr_help_row "build" "Build / rebuild the drydock image"
+	_dr_help_row "sync" "Sync host ~/.claude/ → ~/.claude-container/"
+	_dr_help_row "status" "Short health snapshot"
+	_dr_help_row "doctor" "Detailed diagnostics + current-project context"
+	_dr_help_row "setup" "(advanced) One-time host setup — auto-runs when needed"
+	_dr_help_row "setup-token" "(advanced) Generate a 1-year Claude OAuth token for container auth"
+	_dr_help_row "revoke-token" "Delete the local OAuth token file (server-side: claude.ai settings)"
+	_dr_help_row "link [--rw] PATH [TGT]" "Mount a sibling project inside the container"
+	_dr_help_row "unlink [--rw] PATH" "Remove a sibling mount from the project list"
+	_dr_help_row "links" "Show all linked siblings for the current project"
+	_dr_help_row "version" "Show drydock version"
+	_dr_help_row "help" "Show this help"
 
-DRYDOCK_HOME=$DRYDOCK_HOME
-EOF
+	# ── EXAMPLES ──
+	_dr_section "EXAMPLES"
+	_DR_LABEL_WIDTH=42
+	_dr_help_row "cd ~/git/myproject && drydock" "launch claude there"
+	_dr_help_row "drydock run ~/git/otherproject" "explicit dir"
+	_dr_help_row 'drydock run -- --resume "my-session"' "resume a session"
+	_dr_help_row "drydock build" "rebuild image"
+	_dr_help_row "drydock link ~/git/shared-lib" "mount sibling read-only"
+	_dr_help_row "drydock link --rw ~/git/shared-lib" "RW + per-sibling deploy key"
+	_dr_help_row "drydock link ~/git/shared-lib /opt/lib" "mount at custom path"
+	_dr_help_row "drydock unlink ~/git/shared-lib" "remove sibling"
+	_dr_help_row "drydock links" "list current project's siblings"
+
+	# ── ENV ──
+	_dr_section "ENV"
+	_DR_LABEL_WIDTH=18
+	_dr_help_row "DRYDOCK_HOME" "$DRYDOCK_HOME"
+	printf '\n'
+}
+
+# _dr_help_row LABEL DESCRIPTION — help-table row.
+# Two columns: bold-ish label + dim description. No status icon (help is not
+# a status check). Label width is set per section via _DR_LABEL_WIDTH.
+# Defined here near usage() so the help styling lives close to its consumer.
+_dr_help_row() {
+	local label="$1" desc="${2:-}"
+	local width="${_DR_LABEL_WIDTH:-28}"
+	if [ -n "$desc" ]; then
+		printf '   %-*s %s%s%s\n' "$width" "$label" "$_DR_DIM" "$desc" "$_DR_RESET"
+	else
+		printf '   %s\n' "$label"
+	fi
 }
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -153,42 +177,14 @@ cmd_setup() {
 	note "Done. Next: 'drydock build' (if image not built) and then 'drydock' from inside a project."
 }
 
-# Per-project setup. Creates `.claude/settings.json` stub in the target
-# directory. Same mental model as `git init` — once per project.
-# drydock policy (deny rules + SessionStart hook) lives in the managed-settings
-# layer baked into the image; this stub is for per-project dev customization.
-cmd_init() {
-	# drydock init [DIR]
-	local project_dir_arg=""
-	while [ $# -gt 0 ]; do
-		case "$1" in
-		-*) err "drydock init: unknown option: $1" ;;
-		*) project_dir_arg="$1" ;;
-		esac
-		shift
-	done
-
-	local project_dir
-	project_dir="$(resolve_project_dir "$project_dir_arg")"
-	note "Initializing project at $project_dir"
-
-	mkdir -p "$project_dir/.claude"
-	local settings="$project_dir/.claude/settings.json"
-
-	if [ ! -f "$settings" ]; then
-		cp "$DEFAULT_SETTINGS_TEMPLATE" "$settings"
-		ok "$settings created"
-	else
-		warn "$settings already exists — not overwriting"
-		note "Template baseline at: $DEFAULT_SETTINGS_TEMPLATE"
-	fi
-
-	if [ -f "$project_dir/.gitignore" ] && ! grep -q '\.claude/settings\.local\.json' "$project_dir/.gitignore"; then
-		note "Tip: add '.claude/settings.local.json' to .gitignore (personal, unshared settings)"
-	fi
-
-	ok "Done. Launch Claude with: cd $project_dir && drydock"
-}
+# NOTE: `drydock init` (cmd_init) was removed in v0.2.1. Pre-v0.2.0 it seeded
+# `.claude/settings.json` with drydock's full policy (deny rules + SessionStart
+# hook). Post-v0.2.0 the policy moved to image-baked managed-settings (INV-3),
+# leaving init as a vestigial empty-stub creator with no load-bearing role.
+# Claude Code creates `.claude/settings.json` on its own when the user adds
+# MCP servers, hooks, or permissions through normal commands — so a dedicated
+# drydock init command no longer adds value. Removed cleanly: no deprecation
+# stub kept (drydock is pre-1.0 and no users depend on it yet).
 
 cmd_build() {
 	ensure_prereqs
@@ -438,70 +434,161 @@ cmd_shell() {
 	fi
 }
 
-cmd_status() {
-	printf '── drydock %s ──\n' "$DRYDOCK_VERSION"
-	printf '  DRYDOCK_HOME:       %s\n' "$DRYDOCK_HOME"
-	printf '  image %-15s ' "$IMAGE"
-	if image_exists; then printf '\033[32mpresent\033[0m\n'; else printf '\033[31mmissing\033[0m → drydock build\n'; fi
+# ── doctor/status rendering helpers ──────────────────────────────────────────
+# Modern, hierarchical layout: title bar → uppercase section headers → indented
+# items with status-icon prefix. No Nerd-Font glyphs (Unicode-standard symbols
+# only: ✓ · ⚠ ✗) so it renders identically on any UTF-8 terminal. Color and
+# bold are applied ONLY when stdout is a TTY — piped/captured output is plain
+# text so logs, screenshots-via-cat, and CI capture remain readable.
 
-	printf '  %-20s ' "$(basename "$CONTAINER_CLAUDE"):"
-	if [ -e "$CONTAINER_CLAUDE" ]; then
-		printf '\033[32m%s\033[0m\n' "$(du -sh "$CONTAINER_CLAUDE" 2>/dev/null | cut -f1)"
+# _dr_init_style — populate ANSI escape vars (or empty strings if non-TTY).
+# Idempotent; safe to call from each entry point.
+_dr_init_style() {
+	if [ -t 1 ] && [ "${NO_COLOR:-}" = "" ]; then
+		_DR_BOLD=$'\033[1m'
+		_DR_DIM=$'\033[2m'
+		_DR_RESET=$'\033[0m'
+		_DR_GREEN=$'\033[32m'
+		_DR_YELLOW=$'\033[33m'
+		_DR_RED=$'\033[31m'
+		_DR_GRAY=$'\033[90m'
+		_DR_CYAN=$'\033[36m'
 	else
-		printf '\033[31mmissing\033[0m → drydock setup\n'
+		_DR_BOLD="" _DR_DIM="" _DR_RESET=""
+		_DR_GREEN="" _DR_YELLOW="" _DR_RED=""
+		_DR_GRAY="" _DR_CYAN=""
+	fi
+}
+
+# _dr_title — top banner. "─ drydock <ver>" in bold, leading blank line for
+# breathing room when running back-to-back commands in the same terminal.
+_dr_title() {
+	printf '\n  %s─ drydock %s%s\n' "$_DR_BOLD" "$DRYDOCK_VERSION" "$_DR_RESET"
+}
+
+# _dr_section TITLE [SUBTITLE] — section header. CAPS title (bold), optional
+# dim subtitle joined by an em dash. Always preceded by a blank line to make
+# sections scannable.
+_dr_section() {
+	local title="$1" subtitle="${2:-}"
+	printf '\n  %s%s%s' "$_DR_BOLD" "$title" "$_DR_RESET"
+	if [ -n "$subtitle" ]; then
+		printf '%s — %s%s' "$_DR_DIM" "$subtitle" "$_DR_RESET"
+	fi
+	printf '\n'
+}
+
+# _dr_item ICON LABEL VALUE [METADATA] — item row.
+# ICON: ✓ (green ok), · (gray info), ⚠ (yellow warn), ✗ (red error)
+# Label is left-padded to a fixed width so columns align within a section.
+# METADATA (optional) is appended in dim style, prefixed by " · " when there
+# is a value to separate from. When VALUE is empty, METADATA renders inline
+# in dim — no orphan "·" marker. Section-level override of the label width
+# is available via _DR_LABEL_WIDTH (defaults to 24); useful for sections with
+# longer labels (e.g. compose overlay filenames).
+_dr_item() {
+	local icon="$1" label="$2" value="${3:-}" meta="${4:-}"
+	local color=""
+	case "$icon" in
+	"✓") color="$_DR_GREEN" ;;
+	"⚠") color="$_DR_YELLOW" ;;
+	"✗") color="$_DR_RED" ;;
+	"·") color="$_DR_GRAY" ;;
+	esac
+	local width="${_DR_LABEL_WIDTH:-24}"
+	if [ -n "$value" ]; then
+		printf '   %s%s%s %-*s %s' "$color" "$icon" "$_DR_RESET" "$width" "$label" "$value"
+		if [ -n "$meta" ]; then
+			printf ' %s· %s%s' "$_DR_DIM" "$meta" "$_DR_RESET"
+		fi
+	elif [ -n "$meta" ]; then
+		# No value but meta present — render meta inline in dim, no orphan "·".
+		printf '   %s%s%s %-*s %s%s%s' "$color" "$icon" "$_DR_RESET" "$width" "$label" "$_DR_DIM" "$meta" "$_DR_RESET"
+	else
+		# No value, no meta — bare label, no trailing whitespace.
+		printf '   %s%s%s %s' "$color" "$icon" "$_DR_RESET" "$label"
+	fi
+	printf '\n'
+}
+
+cmd_status() {
+	_dr_init_style
+	_dr_title
+
+	_dr_section "SYSTEM"
+	_dr_item "·" "DRYDOCK_HOME" "$DRYDOCK_HOME"
+	if image_exists; then
+		_dr_item "✓" "image" "$IMAGE" "present"
+	else
+		_dr_item "✗" "image" "$IMAGE" "missing → drydock build"
+	fi
+	if [ -S /var/run/docker.sock ]; then
+		_dr_item "✓" "docker.sock" "ok" "GID $(stat -c '%g' /var/run/docker.sock)"
+	else
+		_dr_item "✗" "docker.sock" "missing"
 	fi
 
-	# Engram status: re-derive mode inline (no call to export_compose_env — cmd_status
-	# has no project-dir arg and must NOT call export_compose_env). Deliberate
-	# duplication per design — the two callers have different inputs/side-effects.
-	printf '  %-20s ' "engram:"
+	_dr_section "STATE"
+	# .claude-container directory (the prototype seeded from host ~/.claude/)
+	if [ -e "$CONTAINER_CLAUDE" ]; then
+		_dr_item "✓" "$(basename "$CONTAINER_CLAUDE")" \
+			"$(du -sh "$CONTAINER_CLAUDE" 2>/dev/null | cut -f1)"
+	else
+		_dr_item "✗" "$(basename "$CONTAINER_CLAUDE")" "missing" "drydock setup"
+	fi
+	# .claude-container.json (the prototype's sibling JSON config)
+	if [ -f "$CONTAINER_CLAUDE_JSON" ]; then
+		_dr_item "✓" "$(basename "$CONTAINER_CLAUDE_JSON")" \
+			"$(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON" 2>/dev/null)"
+	else
+		_dr_item "✗" "$(basename "$CONTAINER_CLAUDE_JSON")" "missing" "drydock setup"
+	fi
+	# Engram status: re-derive mode inline (no call to export_compose_env —
+	# cmd_status has no project-dir arg and must NOT call export_compose_env).
+	# Deliberate duplication per design — the two callers have different inputs.
 	if engram_usable; then
 		local _status_sentinel="$HOME/.config/drydock/engram-shared"
 		if [ -f "$_status_sentinel" ]; then
 			if host_fs_locks_unreliable && [ "${DRYDOCK_ENGRAM_SHARED:-}" != "force" ]; then
-				printf '\033[33mshared requested → forced isolated (unreliable bind-mount locks; set DRYDOCK_ENGRAM_SHARED=force to override)\033[0m\n'
+				_dr_item "⚠" "engram" "shared requested → forced isolated" \
+					"unreliable bind-mount locks; set DRYDOCK_ENGRAM_SHARED=force to override"
 			else
-				printf '\033[32mshared (~/.engram)\033[0m\n'
+				_dr_item "✓" "engram" "shared (~/.engram)"
 			fi
 		else
-			printf '\033[32misolated (~/.engram-container)\033[0m'
-			if [ -d "$CONTAINER_ENGRAM" ]; then
-				printf ' (%s)\n' "$(du -sh "$CONTAINER_ENGRAM" 2>/dev/null | cut -f1)"
-			else
-				printf '\n'
-			fi
+			local _engram_size=""
+			[ -d "$CONTAINER_ENGRAM" ] && _engram_size="$(du -sh "$CONTAINER_ENGRAM" 2>/dev/null | cut -f1)"
+			# Tilde-literal is intentional — display text shown to the user
+			# (e.g. "isolated · ~/.engram-container · 53M"), not a path the
+			# shell needs to expand. The single-quote workaround does not
+			# suppress SC2088, so disable directly per shellcheck conventions.
+			# shellcheck disable=SC2088
+			_dr_item "✓" "engram" "isolated" \
+				"~/.engram-container${_engram_size:+ · $_engram_size}"
 		fi
 	else
-		printf '\033[33mnot detected (opt-in)\033[0m\n'
-	fi
-	printf '  %-20s ' ".claude-container.json:"
-	if [ -f "$CONTAINER_CLAUDE_JSON" ]; then
-		printf '\033[32m%s\033[0m\n' "$(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON" 2>/dev/null)"
-	else
-		printf '\033[31mmissing\033[0m → drydock setup\n'
-	fi
-
-	printf '  docker.sock:        '
-	if [ -S /var/run/docker.sock ]; then
-		printf '\033[32mok\033[0m (GID %s)\n' "$(stat -c '%g' /var/run/docker.sock)"
-	else
-		printf '\033[31mmissing\033[0m\n'
+		_dr_item "·" "engram" "not detected" "opt-in — see docs/engram.md"
 	fi
 }
 
 cmd_doctor() {
 	cmd_status
-	echo
-	printf '── runtime versions ──\n'
+
+	# ── VERSIONS ────────────────────────────────────────────────────────────────
 	# Deliberately call the real docker binary (not $DOCKER) — these are
 	# diagnostic probes, not routed operations.
-	printf '  docker:           %s\n' "$(docker --version 2>/dev/null || echo MISSING)"
-	printf '  docker compose:   %s\n' "$(docker compose version --short 2>/dev/null || echo MISSING)"
+	_dr_section "VERSIONS"
+	local _docker_ver _compose_ver
+	_docker_ver="$(docker --version 2>/dev/null | sed 's/^Docker version //; s/, build .*//')"
+	_compose_ver="$(docker compose version --short 2>/dev/null)"
+	_dr_item "${_docker_ver:+✓}" "docker" "${_docker_ver:-MISSING}"
+	_dr_item "${_compose_ver:+✓}" "docker compose" "${_compose_ver:-MISSING}"
 	if image_exists; then
-		printf '  drydock image:    %s\n' "$(docker image inspect "$IMAGE" --format '{{.Created}}')"
+		_dr_item "✓" "drydock image" "$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null | cut -d'T' -f1)" "built"
 	fi
-	echo
-	printf '── drydock policy ──\n'
+
+	# ── POLICY ─────────────────────────────────────────────────────────────────
+	_dr_section "POLICY"
 	local _policy_count=0
 	for _f in "$DRYDOCK_HOME/templates/managed-settings.d/"*.json; do
 		[ -f "$_f" ] || continue
@@ -509,51 +596,231 @@ cmd_doctor() {
 		_n="$(jq '(.permissions.deny // []) | length' "$_f" 2>/dev/null || echo 0)"
 		_policy_count=$((_policy_count + _n))
 	done
-	printf '  managed-settings:  \033[32m%s deny rules\033[0m (image-baked policy layer — always active)\n' "$_policy_count"
-	echo
-	printf '── current dir context ──\n'
-	printf '  pwd:              %s\n' "$PWD"
+	_dr_item "✓" "managed-settings" "${_policy_count} deny rules" "image-baked, always active"
+
+	# ── PROJECT ────────────────────────────────────────────────────────────────
+	# .claude/ is OPTIONAL post-v0.2.0 — drydock's safety policy lives in the
+	# image-baked managed-settings layer (INV-3), not in per-project settings.
+	# Claude Code creates .claude/settings.json on its own when the user adds
+	# MCP servers, hooks, or permissions. Doctor reports presence as info, not
+	# a warning — its absence is the common, expected case.
+	_dr_section "PROJECT" "$PWD"
 	if [ -d "$PWD/.claude" ]; then
 		if [ -f "$PWD/.claude/settings.json" ]; then
-			printf '  .claude/settings.json: \033[32mfound\033[0m (project customization)\n'
+			_dr_item "✓" ".claude/settings.json" "found" "project customization"
 		else
-			printf '  .claude/settings.json: \033[33mmissing\033[0m → drydock init\n'
+			_dr_item "·" ".claude/" "present" "no settings.json yet"
 		fi
 	else
-		printf '  .claude/:         \033[33mmissing\033[0m → drydock init\n'
+		_dr_item "·" ".claude/" "(none)" "no project customization"
 	fi
-	printf '── sub-mounts under %s ──\n' "$PWD"
+
+	# ── SUB-MOUNTS ─────────────────────────────────────────────────────────────
+	_dr_section "SUB-MOUNTS" "under $PWD"
 	local _detected
 	# Do NOT suppress stderr — warnings from generate_submount_overlay
 	# (linux-native fallback miss, exotic class) are diagnostic signal.
 	_detected=$(detect_submounts "$PWD") || true
 	if [ -z "$_detected" ]; then
-		printf '  (none detected)\n'
+		_dr_item "·" "(none detected)" ""
 	else
 		local _docker_src _mount_pt _class
 		while IFS='|' read -r _docker_src _mount_pt _class; do
 			case "$_class" in
 			drvfs)
-				printf '  \033[32m✓\033[0m %s → %s (drvfs auto-translated)\n' "$_mount_pt" "$_docker_src"
+				_dr_item "✓" "$_mount_pt" "→ $_docker_src" "drvfs auto-translated"
 				;;
 			linux-native)
 				if [ -z "$_docker_src" ]; then
-					printf '  \033[33m⚠\033[0m %s → (source FS root not found — will be skipped)\n' "$_mount_pt"
+					_dr_item "⚠" "$_mount_pt" "(source FS root not found)" "will be skipped"
 				else
-					printf '  \033[32m✓\033[0m %s → %s (Linux-native bind)\n' "$_mount_pt" "$_docker_src"
+					_dr_item "✓" "$_mount_pt" "→ $_docker_src" "Linux-native bind"
 				fi
 				;;
 			exotic:*)
-				printf '  \033[33m⚠\033[0m %s → %s (%s, may not propagate)\n' "$_mount_pt" "$_docker_src" "${_class#exotic:}"
+				_dr_item "⚠" "$_mount_pt" "→ $_docker_src" "${_class#exotic:}, may not propagate"
 				;;
 			esac
 		done <<<"$_detected"
 	fi
-	echo
-	printf '── runtime context (for compose) ──\n'
-	printf '  USER_UID:         %s\n' "$(id -u)"
-	printf '  USER_GID:         %s\n' "$(id -g)"
-	printf '  HOST_DOCKER_GID:  %s\n' "$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo '?')"
+
+	# ── LINKED SIBLINGS ────────────────────────────────────────────────────────
+	# Reads the same per-project list file as `drydock links`
+	# (~/.config/drydock/links/<project>.list).
+	_dr_section "LINKED SIBLINGS"
+	local _links_file _links_host _links_target _links_flags _links_mode
+	_links_file="$(_links_list_file)"
+	if [ ! -s "$_links_file" ]; then
+		_dr_item "·" "(none linked)" "" 'drydock link <path> to add'
+	else
+		while IFS='|' read -r _links_host _links_target _links_flags; do
+			[ -z "$_links_host" ] && continue
+			if [ "${_links_flags:-}" = "rw" ]; then
+				_links_mode="rw"
+			else
+				_links_mode="ro"
+			fi
+			_dr_item "✓" "$_links_host" "→ $_links_target" "$_links_mode"
+		done <"$_links_file"
+	fi
+
+	# ── ACTIVE SESSIONS ────────────────────────────────────────────────────────
+	# Lists running drydock containers scoped to the current project. Includes both
+	# run sessions (drydock-<proj>-<disc>) and shell companions (-<disc>-shell).
+	# Awareness signal for concurrent-sessions (INV-2) — never refuses, info-only.
+	_dr_section "ACTIVE SESSIONS" "this project"
+	local _proj_name _sess_lines _sess_name _sess_status
+	_proj_name="$(_current_project_name)"
+	_sess_lines="$("$DOCKER" ps \
+		--filter "name=^drydock-${_proj_name}-[0-9a-f]+(-shell)?\$" \
+		--format '{{.Names}}|{{.Status}}' 2>/dev/null || true)"
+	# Some Docker versions don't fully honor anchored ERE in --filter; post-filter
+	# defensively so cross-project containers can never leak in.
+	_sess_lines="$(printf '%s\n' "$_sess_lines" | grep -E "^drydock-${_proj_name}-[0-9a-f]+(-shell)?\|" || true)"
+	if [ -z "$_sess_lines" ]; then
+		_dr_item "·" "(none running)" ""
+	else
+		while IFS='|' read -r _sess_name _sess_status; do
+			[ -z "$_sess_name" ] && continue
+			_dr_item "✓" "$_sess_name" "$_sess_status"
+			# Resume cheat-sheet — the command to re-enter this LIVE container
+			# and recover the work. A -shell companion reattaches into bash; a
+			# run session reattaches Claude's conversation history via
+			# `claude --continue`. Both only work while the container is still
+			# running — this is not a way to revive a session whose container
+			# has already exited.
+			case "$_sess_name" in
+			*-shell)
+				_dr_item "·" "  re-enter" "docker exec -it $_sess_name bash"
+				;;
+			*)
+				_dr_item "·" "  resume" "docker exec -it $_sess_name claude --continue"
+				;;
+			esac
+		done <<<"$_sess_lines"
+		# INV-2 caveat: exec'ing a second Claude into a live run session puts
+		# two writers on the same per-session config (~/.claude.json + the
+		# session JSONL). Surface the hazard here rather than hiding it.
+		_dr_item "⚠" "  caveat" "" "re-entering a live run starts a 2nd Claude on one config (INV-2)"
+	fi
+
+	# ── COMPOSE OVERLAYS ───────────────────────────────────────────────────────
+	# Mirrors the conditions in compose_files() WITHOUT calling it — compose_files
+	# writes temp overlay files as a side effect, which doctor must not do.
+	# Wider label column for this section — compose filenames run up to 31 chars.
+	_dr_section "COMPOSE OVERLAYS" "what would activate now"
+	local _DR_LABEL_WIDTH=32
+	_dr_item "✓" "docker-compose.yml" "" "base"
+	if [ "${DRYDOCK_NO_HARDENING:-0}" != "1" ]; then
+		_dr_item "✓" "docker-compose.hardening.yml" "" "INV-8: cap_drop, no-new-privileges, tmpfs cap"
+	else
+		_dr_item "⚠" "hardening overlay" "DISABLED" "DRYDOCK_NO_HARDENING=1"
+	fi
+	# Sub-mounts: detect-only probe; no overlay file generated.
+	if [ -n "$(detect_submounts "$PWD" 2>/dev/null || true)" ]; then
+		_dr_item "✓" "docker-compose.submounts-*.yml" "" "sub-mounts detected"
+	fi
+	# Links: cheap file check; no generation.
+	if [ -s "$_links_file" ]; then
+		_dr_item "✓" "docker-compose.links-*.yml" "" "linked siblings present"
+	fi
+	# SSH overlay: any deploy key file under ~/.config/drydock/keys/ triggers it.
+	local _keys_dir="$HOME/.config/drydock/keys"
+	if [ -d "$_keys_dir" ] && compgen -G "$_keys_dir/*_deploy" >/dev/null 2>&1; then
+		_dr_item "✓" "docker-compose.ssh.yml" "" "deploy keys present"
+	fi
+	# GPG overlay: requires signing config dir on host.
+	if [ -d "$HOME/.config/drydock/signing" ]; then
+		_dr_item "✓" "docker-compose.gpg.yml" "" "signing config present"
+	fi
+	# Engram overlay: engram_usable() is the same predicate compose_files() uses.
+	if engram_usable; then
+		_dr_item "✓" "docker-compose.engram.yml" "" "engram on PATH"
+	fi
+	# OAuth token overlay: a non-empty first line (after whitespace stripping)
+	# drives inclusion — matches the export_compose_env / compose_files
+	# activation gate (head -1 | tr -d '[:space:]'). Both zero-byte AND
+	# whitespace-only token files must NOT be reported as active here.
+	if [ -n "$(head -1 "$DRYDOCK_OAUTH_TOKEN" 2>/dev/null | tr -d '[:space:]')" ]; then
+		local _mtime _now _age_days
+		_mtime="$(stat -c %Y "$DRYDOCK_OAUTH_TOKEN")"
+		_now="$(date +%s)"
+		_age_days=$(((_now - _mtime) / 86400))
+		if [ "$_age_days" -gt 330 ]; then
+			_dr_item "⚠" "docker-compose.oauth.yml" "" \
+				"OAuth token is ${_age_days} day(s) old and nearing expiry — refresh: drydock setup-token --force"
+		else
+			_dr_item "✓" "docker-compose.oauth.yml" "" "OAuth token present"
+		fi
+	fi
+	# Optional user-config opt-in overlays (auto-detected from host directories).
+	# Tilde-literals in the meta column are display text (not paths to expand);
+	# disable SC2088 explicitly for the two affected calls.
+	if [ -d "$HOME/.mcp-auth" ]; then
+		# shellcheck disable=SC2088
+		_dr_item "✓" "docker-compose.mcp-auth.yml" "" "~/.mcp-auth present"
+	fi
+	if [ -d "$HOME/.config/ccstatusline" ]; then
+		# shellcheck disable=SC2088
+		_dr_item "✓" "docker-compose.ccstatusline.yml" "" "~/.config/ccstatusline present"
+	fi
+	unset _DR_LABEL_WIDTH
+
+	# ── ENV FLAGS ──────────────────────────────────────────────────────────────
+	# Shows DRYDOCK_* env vars only when they BEHAVIORALLY differ from the default.
+	# Inert values (e.g. DRYDOCK_SKIP_AUTOSYNC=0 — same as unset) are silent to
+	# avoid noise. Each flag's "triggering value" matches the literal documented
+	# in lib/compose.sh; values outside that set are surfaced as ⚠ "set but inert"
+	# so a malformed value (typo, wrong case) is still visible to the operator.
+	_dr_section "ENV FLAGS" "non-default"
+	local _flag_count=0
+	case "${DRYDOCK_NO_HARDENING:-}" in
+	"") ;;
+	"1")
+		_dr_item "⚠" "DRYDOCK_NO_HARDENING" "=1" "INV-8 hardening overlay disabled"
+		_flag_count=$((_flag_count + 1))
+		;;
+	*)
+		_dr_item "⚠" "DRYDOCK_NO_HARDENING" "=$DRYDOCK_NO_HARDENING" 'set but inert — only literal "1" disables'
+		_flag_count=$((_flag_count + 1))
+		;;
+	esac
+	if [ -n "${DRYDOCK_TMPFS_SIZE:-}" ]; then
+		_dr_item "✓" "DRYDOCK_TMPFS_SIZE" "=$DRYDOCK_TMPFS_SIZE" "tmpfs /tmp size override"
+		_flag_count=$((_flag_count + 1))
+	fi
+	case "${DRYDOCK_ENGRAM_SHARED:-}" in
+	"") ;;
+	"force")
+		_dr_item "⚠" "DRYDOCK_ENGRAM_SHARED" "=force" "INV-5 fcntl-lock safety override"
+		_flag_count=$((_flag_count + 1))
+		;;
+	*)
+		_dr_item "⚠" "DRYDOCK_ENGRAM_SHARED" "=$DRYDOCK_ENGRAM_SHARED" 'set but inert — only literal "force" overrides'
+		_flag_count=$((_flag_count + 1))
+		;;
+	esac
+	case "${DRYDOCK_SKIP_AUTOSYNC:-}" in
+	"" | "0") ;;
+	"1")
+		_dr_item "⚠" "DRYDOCK_SKIP_AUTOSYNC" "=1" "host→container auto-sync disabled"
+		_flag_count=$((_flag_count + 1))
+		;;
+	*)
+		_dr_item "⚠" "DRYDOCK_SKIP_AUTOSYNC" "=$DRYDOCK_SKIP_AUTOSYNC" 'set but inert — only literal "1" disables'
+		_flag_count=$((_flag_count + 1))
+		;;
+	esac
+	if [ "$_flag_count" -eq 0 ]; then
+		_dr_item "·" "(none — defaults active)" ""
+	fi
+
+	# ── RUNTIME CONTEXT ────────────────────────────────────────────────────────
+	_dr_section "RUNTIME CONTEXT" "for compose"
+	_dr_item "·" "USER_UID" "$(id -u)"
+	_dr_item "·" "USER_GID" "$(id -g)"
+	_dr_item "·" "HOST_DOCKER_GID" "$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo '?')"
+	printf '\n'
 }
 
 # ── Link helpers ──────────────────────────────────────────────────────────────
@@ -590,6 +857,119 @@ _check_path_metachar() {
 	if [[ "$_p" =~ [[:cntrl:]] ]]; then
 		err "rejected: $_label contains a control character (including newline)"
 	fi
+}
+
+# ── cmd_setup_token ───────────────────────────────────────────────────────────
+
+# cmd_setup_token [--force]
+# Runs `claude setup-token` interactively on the host (user sees the browser
+# flow and the printed token), then prompts the user to paste the token.
+# Validates it and writes it atomically to DRYDOCK_OAUTH_TOKEN (0600).
+# Refuses to overwrite an existing token without --force.
+cmd_setup_token() {
+	local force=0
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--force)
+			force=1
+			shift
+			;;
+		-*)
+			err "unknown option: $1"
+			;;
+		*)
+			err "unexpected argument: $1"
+			;;
+		esac
+	done
+
+	# SR-1: fail early with install guidance if the claude binary is not on PATH.
+	command -v "$CLAUDE_BIN" >/dev/null 2>&1 || err "claude (Claude Code CLI) not found — install Claude Code CLI before running 'drydock setup-token'"
+
+	# Ensure the target directory exists before attempting mktemp inside it.
+	# FIX 4: create with 0700 so a fresh directory is not world-readable.
+	# mkdir -p is a no-op (and does not change mode) when the directory already
+	# exists — acceptable; this only tightens fresh creation.
+	(
+		umask 077
+		mkdir -p "$(dirname "$DRYDOCK_OAUTH_TOKEN")"
+	) || err "failed to create token directory $(dirname "$DRYDOCK_OAUTH_TOKEN") — check permissions"
+
+	# Overwrite guard: refuse without --force when file already exists (SR-5a).
+	# Print the file's age in days so the user knows whether the token is stale.
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ] && [ "$force" -eq 0 ]; then
+		local _mtime _now _age_days
+		_mtime="$(stat -c %Y "$DRYDOCK_OAUTH_TOKEN")"
+		_now="$(date +%s)"
+		_age_days=$(((_now - _mtime) / 86400))
+		err "token file already exists at $DRYDOCK_OAUTH_TOKEN (${_age_days} day(s) old) — pass --force to overwrite"
+	fi
+
+	# Run claude setup-token fully unredirected: the user sees the authorization
+	# URL, completes the browser flow, and sees the token printed by claude.
+	# Capture only the exit code; do not capture stdout or stderr.
+	local _rc=0
+	"$CLAUDE_BIN" setup-token || _rc=$?
+	if [ "$_rc" -ne 0 ]; then
+		err "claude setup-token exited with status $_rc — token not saved"
+	fi
+
+	# Prompt the user to paste the token claude just printed above.
+	# Explicit EOF guard: if stdin is closed (Ctrl-D / non-interactive invocation),
+	# read returns non-zero. Catch it and emit a clear diagnostic rather than
+	# falling silently into the regex check with an empty string.
+	local _token
+	IFS= read -s -r -p "Paste the token printed above: " _token ||
+		err "no token pasted (EOF / Ctrl-D) — re-run 'drydock setup-token' and paste the token when prompted"
+	printf '\n' >&2
+
+	# Validate: token must match the sk-ant- prefix format.
+	# [:graph:] matches printable non-whitespace characters (POSIX) — accepts
+	# '.', '+', '/', '=' (base64/JWT-style tokens) while still rejecting any
+	# embedded whitespace. [:print:] would include space and must NOT be used.
+	if [[ ! "$_token" =~ ^sk-ant-[[:graph:]]{20,}$ ]]; then
+		err "pasted value does not look like a valid Claude OAuth token (expected sk-ant- prefix) — retry 'drydock setup-token'"
+	fi
+
+	# Atomic 0600 write: umask is set before mktemp so the temp file is created
+	# 0600 by intent. Inline cleanup on each failure path removes the temp file
+	# before calling err — no shell-level EXIT trap is touched (see convention at
+	# lib/commands.sh comment near cmd_unlink: EXIT trap persists process-wide and
+	# fires after the function returns, which can confuse callers; inline cleanup
+	# is the documented pattern for this file).
+	local _tmp
+	_tmp="$(
+		umask 077
+		mktemp "$(dirname "$DRYDOCK_OAUTH_TOKEN")/.oauth-XXXXXX"
+	)" || err "failed to create a temporary file in $(dirname "$DRYDOCK_OAUTH_TOKEN") — check disk space and permissions"
+	if ! printf '%s\n' "$_token" >"$_tmp"; then
+		rm -f "$_tmp"
+		err "failed to write token to temporary file"
+	fi
+	if ! mv -f "$_tmp" "$DRYDOCK_OAUTH_TOKEN"; then
+		rm -f "$_tmp"
+		err "failed to save token to $DRYDOCK_OAUTH_TOKEN — token not written"
+	fi
+
+	ok "OAuth token saved to $DRYDOCK_OAUTH_TOKEN"
+	note "This token is valid for approximately 1 year. To refresh: drydock setup-token --force"
+	note "To fully revoke: run 'drydock revoke-token', then visit claude.ai → Settings to revoke server-side"
+}
+
+# ── cmd_revoke_token ──────────────────────────────────────────────────────────
+
+# cmd_revoke_token
+# Removes the local OAuth token file (idempotent). Prints a mandatory notice
+# that server-side revocation requires claude.ai → Settings (SR-7).
+cmd_revoke_token() {
+	if [ -f "$DRYDOCK_OAUTH_TOKEN" ]; then
+		rm -f "$DRYDOCK_OAUTH_TOKEN"
+		ok "Local OAuth token removed from $DRYDOCK_OAUTH_TOKEN"
+	else
+		note "No local token file to remove (already absent)"
+	fi
+	note "IMPORTANT: drydock cannot revoke the token server-side. To fully revoke, visit claude.ai → Settings and revoke the token there."
 }
 
 # ── cmd_link ──────────────────────────────────────────────────────────────────

@@ -4,10 +4,11 @@
 # Verifies the managed-settings drop-in directory structure (A-1..A-6)
 # and the Dockerfile bake step (T5, integration-only / skipped in unit mode).
 #
-# DRYDOCK_CANONICAL_SESSION_HOOK_CMD is the byte-identical command string that
-# cmd_init historically stamped into project settings.json files (resolved form).
-# Design D3 / spec R-7a require the managed-settings drop-in to carry the same
-# string so Claude Code's dedup fires against stale project files.
+# DRYDOCK_CANONICAL_SESSION_HOOK_CMD is the byte-identical command string used
+# by the SessionStart hook in `templates/managed-settings.d/20-hooks.json`
+# (resolved form). Design D3 / spec R-7a require the managed-settings drop-in
+# to carry exactly this string so Claude Code's hook-entry dedup fires against
+# any stale project-level files predating the v0.2.0 managed-settings layer.
 #
 # ── A-VERIFY-1: Claude Code Bash(...) wildcard semantics ─────────────────────
 # Verified 2026-05-18 from primary source:
@@ -42,7 +43,7 @@ load "helpers/load"
 
 # Canonical hook command (resolved form — uses /opt/drydock/, no __HOME__).
 # Must be byte-identical to:
-#   jq -r '.hooks.SessionStart[0].hooks[0].command' templates/default-settings.json
+#   jq -r '.hooks.SessionStart[0].hooks[0].command' templates/managed-settings.d/20-hooks.json
 DRYDOCK_CANONICAL_SESSION_HOOK_CMD="sh -c '[ -x /opt/drydock/hooks/drydock-session-start.sh ] && exec /opt/drydock/hooks/drydock-session-start.sh || exit 0'"
 export DRYDOCK_CANONICAL_SESSION_HOOK_CMD
 
@@ -505,12 +506,14 @@ OS_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/30-os-safety.json"
 #   C10(6) + C11(1) + C13(4) + C15(6) + C16(2) + C21(8) + docker-escape(3) = 93
 # W1 remediation adds 6 paths × 3 forms = 18 new C1 entries → total ≥ 111
 # FIX-R2-1 adds 15 paths × 3 forms + 1 root = 46 new *-R* C1 entries
-# FIX-R2-2 adds 4 bare sudo entries
-# New floor: 111 + 46 + 4 = 161
-@test "30-os-safety: deny array total count is at least 155 (B-T10)" {
+# FIX-R2-2 adds 4 bare sudo entries → 161
+# #76 slice E adds 16 residual sudo/OS entries (chown ×2, userdel, usermod ×4
+#   — -L word-boundary pair + --lock + --expiredate, systemctl ×4, crontab -r,
+#   kill -9 1 ×2, init 0 ×2) → 177
+@test "30-os-safety: deny array total count is at least 177 (B-T10)" {
     local count
     count="$(jq '.permissions.deny | length' "$OS_SAFETY_FILE")"
-    [ "$count" -ge 155 ]
+    [ "$count" -ge 177 ]
 }
 
 # ── B-T12 (FIX-R2-1): *-R* uppercase-recursive entries are present ───────────
@@ -727,10 +730,31 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     [ "$home_cred_rules" -eq 0 ]
 }
 
-@test "00-secrets: SCOPE GUARD — no .env rule in deny list" {
-    local env_rules
-    env_rules="$(jq '[.permissions.deny[] | select(test("\\.(env)\"?$|/\\.env"))] | length' "$SECRETS_FILE")"
-    [ "$env_rules" -eq 0 ]
+@test "00-secrets: R/E/W deny for .env and its common variants" {
+    # v0.2.1+: .env-family files are denied by drydock's managed-settings layer.
+    # Conservative variant enumeration — explicit names instead of a .env.* glob
+    # so .env.example / .env.template / .env.sample (template files, not secrets)
+    # remain readable. Closes the gap previously documented in security.md's
+    # "what drydock does NOT protect against" section.
+    local variant verb
+    for verb in "Read" "Edit" "Write"; do
+        for variant in ".env" ".env.local" ".env.production" ".env.development" ".env.test" ".env.staging"; do
+            jq -e --arg rule "${verb}(//**/${variant})" \
+                '.permissions.deny | map(select(. == $rule)) | length >= 1' \
+                "$SECRETS_FILE" >/dev/null
+        done
+    done
+}
+
+@test "00-secrets: SCOPE GUARD — no broad .env.* glob in deny list (preserve .env.example readability)" {
+    # The .env coverage uses explicit variant enumeration, NOT a wildcard glob.
+    # A rule like Read(//**/.env.*) would also block .env.example / .env.template
+    # / .env.sample — conventional template files that should remain readable.
+    # This guard catches a future regression that tries to "simplify" the deny
+    # block with a glob.
+    local glob_rules
+    glob_rules="$(jq '[.permissions.deny[] | select(test("\\.env\\.\\*\\)$"))] | length' "$SECRETS_FILE")"
+    [ "$glob_rules" -eq 0 ]
 }
 
 # ── T19: INV-1 runtime integration — //**/ rules baked into the running image ───
@@ -874,4 +898,140 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
             "$secrets_file" >/dev/null \
             || { echo "MISSING deny rule: $pattern"; return 1; }
     done
+}
+
+# ── slice D (#76): 50-prod-ops.json — terraform deny drop-in ─────────────────
+#
+# Production-infra ops that a glob CAN express precisely ship here. terraform
+# apply/destroy take this form: 'terraform apply*' / 'terraform destroy*' with
+# a space before * (word boundary) so 'terraform plan' is never matched. Forms
+# with intervening flags ('terraform -chdir=… destroy') go to the hook (A4).
+#
+# kubectl/helm destructive verbs and DB-CLI-to-prod are NOT here: they require
+# multi-token AND logic (verb + prod-context, host-token matching) that a
+# Bash(...) glob cannot express — those ship as hook residue rules (A2/A3).
+
+PROD_OPS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/50-prod-ops.json"
+
+# ── D-T1 (#76): 50-prod-ops.json exists and is valid JSON ────────────────────
+@test "50-prod-ops: file exists and is valid JSON (D-T1)" {
+    [ -f "$PROD_OPS_FILE" ]
+    jq . "$PROD_OPS_FILE" >/dev/null
+}
+
+# ── D-T2 (#76): terraform apply/destroy deny patterns present ────────────────
+@test "50-prod-ops: terraform apply and destroy deny patterns present (D-T2)" {
+    jq -e '.permissions.deny | map(select(. == "Bash(terraform apply*)")) | length >= 1' \
+        "$PROD_OPS_FILE" >/dev/null
+    jq -e '.permissions.deny | map(select(. == "Bash(terraform destroy*)")) | length >= 1' \
+        "$PROD_OPS_FILE" >/dev/null
+}
+
+# ── D-T3 (#76, R5 — FP regression): no entry false-blocks 'terraform plan' ───
+# All terraform entries use the space-before-* word-boundary form, so a
+# read-only subcommand (plan, output, validate, show) is never matched.
+@test "50-prod-ops: no terraform deny entry false-blocks 'terraform plan' (D-T3)" {
+    local found
+    found="$(jq '[.permissions.deny[] | select(
+        startswith("Bash(terraform")) | select(
+        (. | contains("plan")) or (. | contains("terraform*")) or (. | contains("terraform *"))
+    )] | length' "$PROD_OPS_FILE")"
+    [ "$found" -eq 0 ]
+}
+
+# ── slice E (#76): 30-os-safety.json — residual sudo/OS deny entries ─────────
+#
+# C7-residue glob-expressible rules. The world-writable 'sudo chmod' rule is
+# NOT here (a glob cannot inspect the others write bit) — it ships as hook
+# residue rule C7-residue.
+
+# ── E-T1 (#76): residual sudo deny entries present ───────────────────────────
+@test "30-os-safety: residual sudo deny entries present — chown/userdel/usermod/crontab (E-T1)" {
+    local failures=0
+    # usermod is scoped to ACCOUNT-DISABLE forms (-L/--lock/--expiredate) — a
+    # blanket 'sudo usermod*' would false-block the routine, benign
+    # 'sudo usermod -aG docker $USER' group-add. See E-T4 scope guard.
+    local entries=(
+        "Bash(sudo chown -R*)"
+        "Bash(sudo chown --recursive*)"
+        "Bash(sudo userdel*)"
+        "Bash(sudo usermod -L*)"
+        "Bash(sudo usermod * -L*)"
+        "Bash(sudo usermod *--lock*)"
+        "Bash(sudo usermod *--expiredate*)"
+        "Bash(sudo crontab -r*)"
+    )
+    for entry in "${entries[@]}"; do
+        jq -e --arg p "$entry" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $entry"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── E-T4 (#76, R5 — FP scope guard): no blanket 'sudo usermod*' entry ────────
+# A blanket substring glob 'Bash(sudo usermod*)' would block every usermod
+# invocation, including 'sudo usermod -aG docker $USER' — the canonical,
+# non-destructive group-add used during environment setup. The usermod deny
+# set MUST stay scoped to the account-disable forms. This guard catches a
+# future regression that re-broadens it.
+@test "30-os-safety: no blanket 'sudo usermod*' deny entry — usermod stays scoped (E-T4)" {
+    local found
+    found="$(jq '[.permissions.deny[] | select(. == "Bash(sudo usermod*)" or . == "Bash(sudo usermod *)")] | length' \
+        "$OS_SAFETY_FILE")"
+    [ "$found" -eq 0 ]
+}
+
+# ── E-T2 (#76): sudo systemctl teardown deny entries present ─────────────────
+@test "30-os-safety: sudo systemctl stop/disable/mask/reset-failed deny entries present (E-T2)" {
+    local failures=0
+    local entries=(
+        "Bash(sudo systemctl stop *)"
+        "Bash(sudo systemctl disable *)"
+        "Bash(sudo systemctl mask *)"
+        "Bash(sudo systemctl reset-failed*)"
+    )
+    for entry in "${entries[@]}"; do
+        jq -e --arg p "$entry" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $entry"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# ── E-T2b (#76, R5 — FP scope guard): systemctl deny stays teardown-scoped ───
+# The systemctl deny set covers ONLY stop/disable/mask/reset-failed. A blanket
+# 'Bash(sudo systemctl *)' or a status/start/restart entry would false-block
+# benign service inspection and lifecycle ops. This guard catches a regression
+# that re-broadens it.
+@test "30-os-safety: no systemctl deny entry covers status/start/restart (E-T2b)" {
+    local found
+    found="$(jq '[.permissions.deny[] | select(
+        startswith("Bash(sudo systemctl")) | select(
+        (. == "Bash(sudo systemctl *)") or
+        (. | contains("systemctl status")) or
+        (. | contains("systemctl start")) or
+        (. | contains("systemctl restart")) or
+        (. | contains("systemctl list"))
+    )] | length' "$OS_SAFETY_FILE")"
+    [ "$found" -eq 0 ]
+}
+
+# ── E-T3 (#76): sudo PID-1 / runlevel deny entries present (word-boundary) ───
+# kill -9 1 and init 0 each use a word-boundary pair (exact + trailing *) so
+# 'sudo kill -9 100' and 'sudo init 06' are not false-matched.
+@test "30-os-safety: sudo kill -9 1 and sudo init 0 word-boundary pairs present (E-T3)" {
+    local failures=0
+    local entries=(
+        "Bash(sudo kill -9 1)"
+        "Bash(sudo kill -9 1 *)"
+        "Bash(sudo init 0)"
+        "Bash(sudo init 0 *)"
+    )
+    for entry in "${entries[@]}"; do
+        jq -e --arg p "$entry" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$OS_SAFETY_FILE" >/dev/null || { echo "MISSING: $entry"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
 }

@@ -251,7 +251,8 @@ setup() {
 	image_exists() { return 1; }
 
 	run cmd_status
-	[[ "$output" == *"not detected (opt-in)"* ]]
+	[[ "$output" == *"not detected"* ]]
+	[[ "$output" == *"opt-in"* ]]
 }
 
 @test "cmd_status: engram usable + isolated — output contains 'isolated (~/.engram-container)'" {
@@ -270,7 +271,9 @@ setup() {
 	image_exists() { return 1; }
 
 	run cmd_status
-	[[ "$output" == *"isolated (~/.engram-container)"* ]]
+	# New layout puts "isolated" and "~/.engram-container" in separate columns.
+	[[ "$output" == *"isolated"* ]]
+	[[ "$output" == *"~/.engram-container"* ]]
 }
 
 # ── MCP filter: cmd_setup × ~/.claude-container.json ─────────────────────────
@@ -1575,6 +1578,346 @@ _setup_ensure_synced() {
 	rm -rf "$tmpdir"
 }
 
+# ── cmd_doctor: linked-siblings section ──────────────────────────────────────
+# G-3: doctor must surface linked siblings for the current project (the same
+#      data `drydock links` prints). Two cases: empty/missing list → "(none
+#      linked)" hint; populated list → one line per entry with mode suffix.
+
+@test "usage: help output contains expected sections + version + key commands" {
+	# Smoke test for the help styling. Doesn't pin exact ANSI codes — just
+	# verifies the new section structure rendered correctly under non-TTY
+	# (plain text), and that all command names that bin/drydock dispatches on
+	# appear in the help.
+	source "$DRYDOCK_HOME/lib/common.sh"
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	run usage
+	[ "$status" -eq 0 ]
+	# Title line
+	[[ "$output" == *"drydock $DRYDOCK_VERSION"* ]]
+	[[ "$output" == *"containerized Claude Code sandbox"* ]]
+	# Section headers
+	[[ "$output" == *"USAGE"* ]]
+	[[ "$output" == *"COMMANDS"* ]]
+	[[ "$output" == *"EXAMPLES"* ]]
+	[[ "$output" == *"ENV"* ]]
+	# A sampling of command names — failures here mean a dispatch target was
+	# accidentally dropped from help.
+	for _cmd in "run" "shell" "build" "sync" "status" "doctor" "setup" \
+		"link" "unlink" "links" "version" "help"; do
+		[[ "$output" == *"$_cmd"* ]] || {
+			echo "missing command '$_cmd' in help output" >&2
+			false
+		}
+	done
+}
+
+@test "cmd_doctor: linked-siblings section shows '(none linked)' when no list file exists" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"LINKED SIBLINGS"* ]]
+	[[ "$output" == *"(none linked)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: env-flags section shows '(none — defaults active)' with no DRYDOCK_* set" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Defensive unset — these may leak in from the developer shell.
+	unset DRYDOCK_NO_HARDENING DRYDOCK_TMPFS_SIZE DRYDOCK_ENGRAM_SHARED DRYDOCK_SKIP_AUTOSYNC
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"ENV FLAGS"* ]]
+	[[ "$output" == *"(none — defaults active)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: env-flags section surfaces DRYDOCK_NO_HARDENING when set" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	unset DRYDOCK_TMPFS_SIZE DRYDOCK_ENGRAM_SHARED DRYDOCK_SKIP_AUTOSYNC
+	export DRYDOCK_NO_HARDENING=1
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"DRYDOCK_NO_HARDENING"* ]]
+	[[ "$output" == *"=1"* ]]
+	# Hardening overlay must be reported as DISABLED, not active.
+	[[ "$output" == *"DISABLED"* ]]
+	[[ "$output" != *"(none — defaults active)"* ]]
+
+	unset DRYDOCK_NO_HARDENING
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: compose-overlays section lists base + hardening by default" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	unset DRYDOCK_NO_HARDENING
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"COMPOSE OVERLAYS"* ]]
+	[[ "$output" == *"docker-compose.yml"* ]]
+	[[ "$output" == *"base"* ]]
+	[[ "$output" == *"docker-compose.hardening.yml"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: active-sessions section shows '(none running)' when no docker container matches" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Stub DOCKER seam to emit no rows.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-empty-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$stub_dir/docker"
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"ACTIVE SESSIONS"* ]]
+	[[ "$output" == *"(none running)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: active-sessions lists the resume command for a running run session" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Stub DOCKER ps to emit one running run session for project "myproj".
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-runsess-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-a1b2c3d4|Up 5 minutes\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	local tmpdir="$BATS_TEST_TMPDIR/myproj"
+	mkdir -p "$tmpdir"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"drydock-myproj-a1b2c3d4"* ]]
+	# Resume cheat-sheet: the exec command to re-enter this live session.
+	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4 claude --continue"* ]]
+	# INV-2 caveat must be surfaced, not hidden.
+	[[ "$output" == *"INV-2"* ]]
+
+	cd - >/dev/null
+}
+
+@test "cmd_doctor: active-sessions lists a bash re-enter command for a -shell session" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Stub DOCKER ps to emit one running -shell companion for project "myproj".
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-shellsess-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-a1b2c3d4-shell|Up 2 minutes\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	local tmpdir="$BATS_TEST_TMPDIR/myproj"
+	mkdir -p "$tmpdir"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"drydock-myproj-a1b2c3d4-shell"* ]]
+	# A -shell companion reattaches into an interactive bash, not claude.
+	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4-shell bash"* ]]
+
+	cd - >/dev/null
+}
+
+@test "cmd_doctor: linked-siblings section lists entries from the project's list file" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Seed a list file at the path cmd_doctor will resolve via
+	# _links_list_file → _current_project_name → sanitize(basename(pwd)).
+	local proj_dir="$BATS_TEST_TMPDIR/myproj"
+	mkdir -p "$proj_dir"
+	mkdir -p "$fakehome/.config/drydock/links"
+	printf '%s|%s|\n' "/host/path/sibling-a" "/workspace-siblings/sibling-a" \
+		>"$fakehome/.config/drydock/links/myproj.list"
+	printf '%s|%s|rw\n' "/host/path/sibling-b" "/workspace-siblings/sibling-b" \
+		>>"$fakehome/.config/drydock/links/myproj.list"
+
+	cd "$proj_dir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"LINKED SIBLINGS"* ]]
+	[[ "$output" == *"/host/path/sibling-a"* ]]
+	[[ "$output" == *"/workspace-siblings/sibling-a"* ]]
+	# Mode appears as the dim metadata suffix ("· ro" / "· rw") in the new layout.
+	[[ "$output" == *"ro"* ]]
+	[[ "$output" == *"/host/path/sibling-b"* ]]
+	[[ "$output" == *"rw"* ]]
+	# Empty-state hint must NOT appear when entries exist.
+	[[ "$output" != *"(none linked)"* ]]
+
+	cd - >/dev/null
+	rm -rf "$proj_dir"
+}
+
 # ── cmd_run / cmd_shell name tests (concurrent-sessions, PR 2 Wire-in) ────────
 # Task 2.6: verify cmd_run uses DRYDOCK_SESSION_NAME for --name, and cmd_shell
 # appends -shell suffix. No existing container is killed or stopped (R4).
@@ -2046,4 +2389,460 @@ STUB
 	run _sibling_deploy_key_path "my-lib"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$fakehome/.config/drydock/keys/my-lib_deploy" ]
+}
+
+# ── cmd_doctor: OAuth overlay row (Fix3 zero-byte gate) ──────────────────────
+
+@test "cmd_doctor: zero-byte token file — OAuth overlay NOT reported as active (Fix3)" {
+	# Regression: cmd_doctor must only report the OAuth overlay active when the
+	# token file has non-empty content (matching the overlay-activation gate in
+	# export_compose_env / compose_files). A zero-byte file must NOT show as active.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a zero-byte token file ([ -f ] matches, but [ -s ] does not).
+	mkdir -p "$fakehome/.config/drydock"
+	printf '' >"$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# A zero-byte token file must NOT make the doctor report the overlay as active.
+	[[ "$output" != *"OAuth token present"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: whitespace-only token file — OAuth overlay NOT reported as active (FIX1 whitespace gate)" {
+	# Regression: a token file containing only whitespace (e.g. '   \n') must NOT
+	# activate the OAuth overlay in cmd_doctor. The activation gate uses head -1 |
+	# tr -d '[:space:]' to strip whitespace before testing non-empty — matching
+	# the same gate in export_compose_env / compose_files. Both zero-byte AND
+	# whitespace-only files must leave the OAuth overlay row silent.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a whitespace-only token file — [ -s ] is true (file has bytes),
+	# but the activation gate strips whitespace and tests non-empty.
+	mkdir -p "$fakehome/.config/drydock"
+	printf '   \n' >"$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# A whitespace-only token file must NOT make the doctor report the overlay as active.
+	[[ "$output" != *"OAuth token present"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: token aged >330 days — shows ⚠ warning with age and refresh hint (D9)" {
+	# D9 slice: cmd_doctor must emit a ⚠ row (not ✓) when the OAuth token file
+	# mtime is more than 330 days in the past, including the age in days and the
+	# drydock setup-token --force refresh hint.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a token file aged 400 days (well beyond the 330-day threshold).
+	mkdir -p "$fakehome/.config/drydock"
+	printf 'sk-ant-oat01-fake-token-content\n' >"$fakehome/.config/drydock/claude-oauth-token"
+	touch -d "400 days ago" "$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# Must show the ⚠ warning, not the ✓ present row.
+	[[ "$output" == *"⚠"* ]]
+	[[ "$output" != *"OAuth token present"* ]]
+	# Must include the age in days.
+	[[ "$output" == *"400"* ]]
+	# Must include the refresh hint.
+	[[ "$output" == *"drydock setup-token --force"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: token aged ≤330 days — shows ✓ OAuth token present (D9 negative)" {
+	# D9 slice: a fresh (or recent) token must still show the ✓ row unchanged.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	# Create a token file with a very recent mtime (1 day ago — well under 330).
+	mkdir -p "$fakehome/.config/drydock"
+	printf 'sk-ant-oat01-fake-token-content\n' >"$fakehome/.config/drydock/claude-oauth-token"
+	touch -d "1 day ago" "$fakehome/.config/drydock/claude-oauth-token"
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# Must show the ✓ present row, not the warning.
+	[[ "$output" == *"OAuth token present"* ]]
+	[[ "$output" != *"drydock setup-token --force"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+# ── cmd_setup_token ───────────────────────────────────────────────────────────
+
+# Helper: set up a fake HOME with the minimum structure and a fake claude binary.
+# The fake-claude script exits 0 (simulates a successful interactive flow).
+# The token is now supplied via stdin to drydock's paste prompt, not via stub stdout.
+_setup_token_env() {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Fake claude binary: exits 0 (interactive flow succeeded); prints nothing to
+	# stdout — the token arrives via drydock's IFS read paste prompt instead.
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-bin-$$"
+	mkdir -p "$fake_bin"
+	cat >"$fake_bin/fake-claude" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+}
+
+@test "cmd_setup_token: happy path — file written at correct path, mode 0600, content equals token" {
+	_setup_token_env
+	# Token is supplied via stdin to drydock's paste prompt (Fix 1: paste-based flow).
+	run cmd_setup_token <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
+	[ "$status" -eq 0 ]
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	[ -f "$token_file" ]
+	local perms
+	perms="$(stat -c '%a' "$token_file")"
+	[ "$perms" = "600" ]
+	local content
+	content="$(< "$token_file")"
+	[ "$content" = "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6" ]
+}
+
+@test "cmd_setup_token: refuse overwrite without --force — non-zero exit, existing file untouched" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'existing-token-content\n' >"$token_file"
+	chmod 600 "$token_file"
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	# Existing file must be untouched.
+	local content
+	content="$(< "$token_file")"
+	[ "$content" = "existing-token-content" ]
+}
+
+@test "cmd_setup_token: refuse overwrite includes age-in-days (SR-5a)" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'existing-token-content\n' >"$token_file"
+	chmod 600 "$token_file"
+	# Back-date the file by 10 days so age is deterministic and non-zero.
+	touch -d "10 days ago" "$token_file"
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	# Error output must include "day" (age-in-days wording).
+	[[ "$output" == *"day"* ]]
+}
+
+@test "cmd_setup_token: --force overwrite — overwrites with new token, exit 0" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'old-token-content\n' >"$token_file"
+	chmod 600 "$token_file"
+	run cmd_setup_token --force <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
+	[ "$status" -eq 0 ]
+	local content
+	content="$(< "$token_file")"
+	[ "$content" = "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6" ]
+}
+
+@test "cmd_setup_token: --force with no pre-existing file — succeeds as first-time setup" {
+	_setup_token_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	rm -f "$token_file"
+	run cmd_setup_token --force <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
+	[ "$status" -eq 0 ]
+	[ -f "$token_file" ]
+}
+
+@test "cmd_setup_token: paste failure (user pastes garbage) — non-zero exit, no file written" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-fail-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Stub exits 0 (flow succeeded); user pastes garbage that fails validation.
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-garbage-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup_token <<< "this is not a token"
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: claude absent from PATH (empty CLAUDE_BIN) — non-zero exit, no file written" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-nobin-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	export CLAUDE_BIN="$BATS_TEST_TMPDIR/nonexistent-claude-$$"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+	# SR-1: error output must instruct the user to install Claude Code CLI (W1).
+	[[ "$output" == *"install"* ]]
+}
+
+@test "cmd_setup_token: whitespace token rejected — non-zero exit, no file written (SR-2c)" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-ws-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Stub exits 0; user pastes a token-shaped string long enough to pass any
+	# length floor but containing an internal space — strict sk-ant- regex rejects it.
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-ws-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# The internal space makes this fail the strict ^sk-ant-[[:graph:]]{20,}$ check.
+	run cmd_setup_token <<< "sk-ant-this-is-long-enough-to-be-a-token but has spaces"
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: write failure — non-zero exit, no success message, no orphaned temp file (Fix2.4 false-success + Fix2-tempclean)" {
+	_setup_token_env
+	# Fake mv executable placed in a temp PATH directory — consistent with the
+	# fake-claude stub pattern; avoids fragile export -f mv across bats/bash versions.
+	local fake_mv_bin="$BATS_TEST_TMPDIR/fake-mv-bin-$$"
+	mkdir -p "$fake_mv_bin"
+	cat >"$fake_mv_bin/mv" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+	chmod +x "$fake_mv_bin/mv"
+	PATH="$fake_mv_bin:$PATH"
+	# Token arrives via stdin to drydock's paste prompt.
+	run cmd_setup_token <<< "sk-ant-oat-v1-A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6"
+	[ "$status" -ne 0 ]
+	[[ "$output" != *"OAuth token saved"* ]]
+	# No orphaned temp file must remain in the drydock config dir.
+	# (inline rm -f cleanup is required; EXIT trap alone is not sufficient after
+	# refactor — this assertion fails RED if cleanup is removed)
+	local drydock_dir="$HOME/.config/drydock"
+	! compgen -G "$drydock_dir/.oauth-*" >/dev/null 2>&1
+}
+
+@test "cmd_setup_token: user abort (claude exits non-zero) — non-zero exit, error mentions failure, no paste prompt, no file (Fix5)" {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-abort-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Fake claude that exits non-zero, simulating user aborting the browser flow.
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-abort-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\nexit 1\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup_token
+	[ "$status" -ne 0 ]
+	# Error output must mention the failure (status or "exited").
+	[[ "$output" == *"exited"* ]] || [[ "$output" == *"status"* ]]
+	# No token file must have been written.
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: dot-in-token accepted — token containing '.' is written (Fix3-dot)" {
+	# Regression: the validation regex must accept dot characters.
+	# sk-ant OAuth tokens may include '.' (base64/JWT segments); the [:graph:]
+	# POSIX class covers '.', '+', '/', '=' in addition to alphanumeric and '-'.
+	_setup_token_env
+	# A realistic base64/JWT-shaped token with embedded dots.
+	run cmd_setup_token <<< "sk-ant-oat01-AbC123.dEf456.gHi789-some-more-length-padding"
+	[ "$status" -eq 0 ]
+	[ -f "$HOME/.config/drydock/claude-oauth-token" ]
+}
+
+@test "cmd_setup_token: EOF on paste prompt — non-zero exit, diagnostic mentions EOF or no token pasted, no file written (Fix1-EOF)" {
+	# Regression: EOF / Ctrl-D at the paste prompt must produce an explicit error,
+	# not a silent exit. IFS= read -r returns non-zero on EOF; the || err guard
+	# catches it and emits a diagnostic containing "no token pasted"/"EOF"/"Ctrl-D".
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-token-eof-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	# Fake claude that exits 0 (browser flow succeeded).
+	local fake_bin="$BATS_TEST_TMPDIR/fake-claude-eof-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_bin/fake-claude"
+	chmod +x "$fake_bin/fake-claude"
+	export CLAUDE_BIN="$fake_bin/fake-claude"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Close stdin so read hits EOF immediately (no token pasted).
+	run cmd_setup_token </dev/null
+	[ "$status" -ne 0 ]
+	[ ! -f "$HOME/.config/drydock/claude-oauth-token" ]
+	# Must produce an explicit diagnostic — not just the generic regex-reject message.
+	[[ "$output" == *"no token pasted"* ]] || [[ "$output" == *"EOF"* ]] || [[ "$output" == *"Ctrl-D"* ]]
+}
+
+# ── cmd_revoke_token ──────────────────────────────────────────────────────────
+
+_setup_revoke_env() {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-revoke-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+}
+
+@test "cmd_revoke_token: file present — removes it, exit 0" {
+	_setup_revoke_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	mkdir -p "$(dirname "$token_file")"
+	printf 'some-token\n' >"$token_file"
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+	[ ! -f "$token_file" ]
+}
+
+@test "cmd_revoke_token: file absent — exit 0 (idempotent)" {
+	_setup_revoke_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	rm -f "$token_file"
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+}
+
+@test "cmd_revoke_token: second run on absent file — exit 0 (idempotent, run twice)" {
+	_setup_revoke_env
+	local token_file="$HOME/.config/drydock/claude-oauth-token"
+	rm -f "$token_file"
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+	run cmd_revoke_token
+	[ "$status" -eq 0 ]
+}
+
+@test "cmd_revoke_token: output contains server-side revocation notice" {
+	_setup_revoke_env
+	run cmd_revoke_token
+	[[ "$output" == *"claude.ai"* ]]
 }

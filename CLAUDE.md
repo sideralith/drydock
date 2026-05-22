@@ -49,8 +49,12 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 
 - **Rule**: Container mounts MUST point at container-specific state — the per-session
   `~/.claude-container-<disc>/` directory and `~/.claude-container-<disc>.json` file (each
-  seeded from the `~/.claude-container/` prototype), and `~/.engram-container/` — never at
-  the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`.
+  seeded from the `~/.claude-container/` prototype), `~/.engram-container/`, **and the shared
+  container-specific append-only conversation store at `~/.claude-container/projects/`** — never at
+  the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`. The host's `~/.claude/`,
+  `~/.claude.json`, and `~/.engram/` MUST NEVER be the source of the container's writable
+  Claude or engram state mount. (INV-3's deliberate `:ro` `~/.claude/hooks/` overlay is
+  not a state mount and is not affected by this prohibition.)
 - **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
   Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
   when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).
@@ -88,9 +92,39 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   on an unreliable-`fcntl`-lock filesystem (WSL2 9P, macOS virtiofs, Docker Desktop VM boundary) —
   silently corrupt `~/.engram/engram.db` via a WAL page clash. Every failure mode is silent: data
   loss or auth loss with no obvious cause.
+- **Carve-out — shared `projects/` conversation store**: `~/.claude-container/projects/` is mounted
+  `:rw` and shared across concurrent sessions — an intentional, scoped exception to per-session
+  isolation. It is safe because none of INV-2's four hazards apply: conversation history is
+  `projects/<slug>/<uuid>.jsonl` — one append-only file per conversation UUID. There is no
+  read-modify-write on a shared single file (hazards 1 and 3 — the `~/.claude.json` clobber and
+  the MCP-filter mutation — are RMW on one shared file), and there is no SQLite database (hazards
+  2 and 4 — the OAuth refresh race and `engram.db` WAL corruption — require a DB on an
+  unreliable-lock filesystem). Two concurrent containers write DIFFERENT `<uuid>.jsonl` files;
+  there is no shared writer of any single file. The carve-out is scoped to `projects/` only;
+  all other INV-2 protections remain absolute.
+- **Carve-out — host-authored container-config overlay**: `~/.config/drydock/claude-overlay/` is
+  an OPTIONAL host-side directory that mirrors the `~/.claude/` tree. When present, drydock copies
+  it whole-file and recursively on top of the freshly re-seeded per-session
+  `~/.claude-container-<disc>/` dir — host-authored, container-consumed, unidirectional. It is an
+  intentional, scoped exception to per-session prototype-only seeding. It is safe because none of
+  INV-2's four hazards apply: (1) the `~/.claude.json` last-writer-wins clobber requires
+  read-modify-write on one shared file — the overlay is a one-way host→session-dir copy with a
+  single writer per session, and `~/.claude.json` is in the overlay's forbidden set (rejected
+  fail-loud); (2) the `.credentials.json` OAuth refresh race requires the OAuth token file —
+  `.credentials.json` is likewise in the forbidden set; (3) the divergent MCP-filter mutation is a
+  RMW on the host's live `~/.claude.json` — the overlay never writes the host's `~/.claude/` at
+  all (unidirectional) and cannot deliver `~/.claude.json`; (4) the `engram.db` WAL corruption
+  requires a SQLite database on an unreliable-lock filesystem — the overlay carries plain config
+  files only. The scope limit is structural: the overlay mechanism rejects `~/.claude.json`,
+  `.credentials.json`, and any symlink fail-loud, aborting `drydock run` before container start.
+  All other INV-2 protections remain absolute.
 - **Where this lives in code**: the `HOST_CLAUDE` / `CONTAINER_CLAUDE` / `*_JSON` / `*_ENGRAM` path-constants block in `lib/paths.sh`;
   the `${DRYDOCK_SESSION_CLAUDE_DIR}` / `${DRYDOCK_SESSION_CLAUDE_JSON}` mount lines in `docker-compose.yml`;
-  `export_compose_env()` in `lib/compose.sh` (generates and exports the per-session discriminator paths).
+  the `${HOME}/.claude-container/projects:${HOME}/.claude/projects:rw` sub-mount line in
+  `docker-compose.yml`; `export_compose_env()` in `lib/compose.sh` (generates and exports the
+  per-session discriminator paths); `migrate_projects_to_shared_store()` in `lib/compose.sh`
+  (one-time sentinel-gated upgrade sweep); `apply_claude_overlay()` in `lib/compose.sh` (the
+  overlay step in `seed_session_config_dir`); the `HOST_CLAUDE_OVERLAY` constant in `lib/paths.sh`.
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-3: Hooks Read-Only Overlay
@@ -114,7 +148,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Where this lives in code**: the `${HOME}/.claude/hooks` `:ro` bind-mount line in `docker-compose.yml`;
   `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
   `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`, `10-git-safety.json`,
-  `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`);
+  `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`, `50-prod-ops.json`);
   `templates/hooks/drydock-block-destructive.sh` (PreToolUse guardrail hook, RO bind-mount).
 - **Deep dive**: [docs/security.md](docs/security.md)
 

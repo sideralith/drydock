@@ -79,8 +79,22 @@ Read(//**/.docker/config.json)
 Read(//**/.claude/.credentials.json)
 Read(//**/.claude-container*/.credentials.json)
 Read(__HOME__/.config/drydock/**)
+Read(//**/.env)
+Read(//**/.env.local)
+Read(//**/.env.production)
+Read(//**/.env.development)
+Read(//**/.env.test)
+Read(//**/.env.staging)
 # Edit(...) and Write(...) variants present for every entry — see 00-secrets.json
 ```
+
+**Why explicit `.env*` variants instead of a `.env.*` glob.** `.env.example`,
+`.env.template`, and `.env.sample` are conventional template files that should
+remain readable — they hold variable names and dummy values, not secrets. A
+glob like `Read(//**/.env.*)` would also block those templates and break a
+common onboarding flow. Enumerating the secret variants individually keeps
+the templates accessible. If your project uses an unusual `.env`-style name
+(e.g. `.env.private`), add a project-level deny in `.claude/settings.json`.
 
 The `//**/` prefix matches **at any mount depth**: a `.ssh/` directory inside a
 sibling at `/workspace-siblings/other-repo/.ssh/` is denied by the same rule
@@ -216,6 +230,43 @@ token would persist on disk, be discoverable via `find`, and not be scoped to
 the shell session. Docker secrets were evaluated and deferred; under threat
 model A the documented-and-flagged debug step already neutralizes the hazard.
 
+## Claude OAuth token (`docker-compose.oauth.yml`)
+
+When `drydock setup-token` is run, the resulting token is written to
+`~/.config/drydock/claude-oauth-token` with mode `0600`. This token grants
+approximately **1 year of Claude account access** — treat it as a high-value
+secret, at the same tier as a GitHub personal access token.
+
+### Mitigations in place
+
+| Mitigation | Detail |
+|---|---|
+| `0600` permissions | `umask 077` is set before `mktemp` so the temp file is created `0600` by intent; `mv -f` then atomically replaces the destination — never world-readable, not even transiently |
+| Location under `~/.config/drydock/` | Already covered by the image-baked deny rule `Read(__HOME__/.config/drydock/**)` in `00-secrets.json`. The agent inside the container cannot read the file via Claude Code's Read tool. |
+| Env-var-only delivery | The token value reaches the container exclusively as `CLAUDE_CODE_OAUTH_TOKEN` via the compose overlay. No bind-mount of the token file is ever created (SP-1 in the spec). |
+| No agent-path exposure | `docker-compose.oauth.yml` has no `volumes:` block — the file never appears at a path inside the container. |
+| Staleness warning | `drydock doctor` checks the token file's mtime; once the file is over 330 days old it shows a `⚠` row instead of `✓`, pointing at `drydock setup-token --force` to refresh. This gives ~35 days of runway before the ~1-year token expires. |
+
+### docker inspect renders the token in plaintext
+
+`docker inspect <container>` outputs the container's full `Env[]` array, which
+includes `CLAUDE_CODE_OAUTH_TOKEN` in plaintext. Do not pipe `docker inspect`
+output to logs or paste it in support requests.
+
+### Revocation is two-step
+
+`drydock revoke-token` removes the local file and deactivates the overlay for
+future sessions. The token itself remains valid server-side until revoked at
+claude.ai → Settings. Always do both steps to fully revoke.
+
+### Under the hood
+
+`export_compose_env()` reads the token file once per invocation, exports
+`DRYDOCK_OAUTH_TOKEN_VALUE`, and `compose_files()` includes the overlay only
+when that var is non-empty. The overlay injects the value as
+`CLAUDE_CODE_OAUTH_TOKEN` — Claude Code picks it up at precedence level 5
+(above `.credentials.json`), so sessions start without a browser login prompt.
+
 ## Destructive-command guardrail layer (v0.2.0+)
 
 drydock ships a two-tier defense against accident-class destructive commands.
@@ -230,7 +281,8 @@ matching commands are blocked at the framework level before execution.
 | Drop-in file | What it covers |
 |---|---|
 | `10-git-safety.json` | Protected-branch delete/rename (8 branches × 6 flag forms), history-rewrite (`push --mirror`, `filter-branch`, `update-ref -d`), remote-delete refspecs, GitHub destructive ops (`gh repo delete/archive/transfer`, `gh release delete`, `gh api DELETE refs/heads/*`) |
-| `30-os-safety.json` | `rm -rf` to system paths, `find / -delete`, disk-destruction tools (`dd`, `mkfs`, partition tools, `wipefs`), sudo + destructive verb, package-manager purge/remove, kernel module teardown, firewall flush, `crontab -r`, `kill -9 1`, `docker system/volume prune`, redirect to block devices or critical `/etc` files, `docker run --privileged` / `docker run -v /:` (host-root bind) |
+| `30-os-safety.json` | `rm -rf` to system paths, `find / -delete`, disk-destruction tools (`dd`, `mkfs`, partition tools, `wipefs`), sudo + destructive verb (incl. `sudo chown -R`, account ops `userdel` / `usermod --lock`, `systemctl stop`/`disable`/`mask`/`reset-failed`, `init 0`), package-manager purge/remove, kernel module teardown, firewall flush, `crontab -r`, `kill -9 1`, `docker system/volume prune`, redirect to block devices or critical `/etc` files, `docker run --privileged` / `docker run -v /:` (host-root bind) |
+| `50-prod-ops.json` | Production-infra ops a glob can express precisely — `terraform apply` / `terraform destroy`. kubectl/helm and DB-CLI-to-prod rules need multi-token logic and ship as hook residue (A2/A3) instead. |
 
 Deny patterns use strict word-boundary shapes to prevent false positives.
 For example, `git branch --delete main` is blocked but `git branch --merged`
@@ -238,13 +290,18 @@ and `git checkout fix/main-bug` are not.
 
 ### Tier 2 — `PreToolUse` hook
 
-A small Bash hook (`drydock-block-destructive.sh`) handles the five rule
-classes that the deny mechanism cannot express — cases requiring multi-token
-AND/OR logic or anchored substring matching:
+A small Bash hook (`drydock-block-destructive.sh`) handles the rule classes
+that the deny mechanism cannot express — cases requiring multi-token AND/OR
+logic or anchored substring matching:
 
 | Rule | Blocked example | Allowed example |
 |---|---|---|
 | A1 — ssh to production host | `ssh user@prod.example.com` | `ssh user@dev.example.com` |
+| A2 — kubectl/helm destructive verb against a prod context | `kubectl delete deploy api --context=prod` | `kubectl delete pod foo -n dev` |
+| A3 — DB CLI pointed at a prod host | `psql -h prod-db.example.com` | `psql -h localhost` |
+| A4 — `terraform apply`/`destroy` | `terraform -chdir=infra destroy` | `terraform plan` |
+| C1-residue — `rm -rf` to a system path root | `rm -fR /etc` | `rm -rf ./build` |
+| C7-residue — `sudo chmod` world-writable mode | `sudo chmod 777 /var/www` | `sudo chmod 755 file` |
 | C12 — fork bomb | `:() { :|:& };:` | `bash -c 'echo hello'` |
 | C17 — `rm` of `.` or `.git` | `rm -rf .` | `rm -rf ./tmp` |
 | C18 — `rm` of parent traversal | `rm -rf ../sibling` | `rm -rf ./dist` |
@@ -353,11 +410,17 @@ root-equivalent (see below) — INV-8 is additive defense in depth, not a replac
 - **Agent committing nonsense to the project tree** — `$PROJECT_DIR` is
   mounted RW. The agent can write anything in it. (That's the point — it
   needs to do its job.) Use git review discipline.
-- **Agent reading anything inside `$PROJECT_DIR`, including `.env`** —
-  mitigated, not prevented, by a `Read(.env)` deny in your global
-  `~/.claude/settings.json` (you set that up yourself; it's not part of
-  drydock — though drydock's managed-settings layer does add `Read(~/.ssh/**)` etc.
-  as image-baked policy that applies automatically to every container session).
+- **Agent reading arbitrary content inside `$PROJECT_DIR`** — the project
+  tree is mounted RW and the agent can read any file in it for legitimate
+  work. Drydock's `00-secrets.json` does cover the **common secret-file
+  conventions** automatically: `.env`, `.env.local`, `.env.production`,
+  `.env.development`, `.env.test`, `.env.staging`, plus `.ssh/**`, `.aws/**`,
+  `.gnupg/**`, `.kube/**`, `.docker/config.json` at any mount depth — that's
+  what the managed-settings layer ships, no per-user setup required.
+  `.env.example` and similar template suffixes are intentionally NOT denied
+  (they hold variable names and dummy values, not secrets). If your project
+  stores secrets under non-conventional filenames (custom `.creds`,
+  `.env.private`, etc.) add a project-level deny in `.claude/settings.json`.
 - **Network exfiltration** — the container shares the host's network
   namespace (`network_mode: host`). The agent can make arbitrary outbound
   connections.
