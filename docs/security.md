@@ -281,7 +281,8 @@ matching commands are blocked at the framework level before execution.
 | Drop-in file | What it covers |
 |---|---|
 | `10-git-safety.json` | Protected-branch delete/rename (8 branches × 6 flag forms), history-rewrite (`push --mirror`, `filter-branch`, `update-ref -d`), remote-delete refspecs, GitHub destructive ops (`gh repo delete/archive/transfer`, `gh release delete`, `gh api DELETE refs/heads/*`) |
-| `30-os-safety.json` | `rm -rf` to system paths, `find / -delete`, disk-destruction tools (`dd`, `mkfs`, partition tools, `wipefs`), sudo + destructive verb, package-manager purge/remove, kernel module teardown, firewall flush, `crontab -r`, `kill -9 1`, `docker system/volume prune`, redirect to block devices or critical `/etc` files, `docker run --privileged` / `docker run -v /:` (host-root bind) |
+| `30-os-safety.json` | `rm -rf` to system paths, `find / -delete`, disk-destruction tools (`dd`, `mkfs`, partition tools, `wipefs`), sudo + destructive verb (incl. `sudo chown -R`, account ops `userdel` / `usermod --lock`, `systemctl stop`/`disable`/`mask`/`reset-failed`, `init 0`), package-manager purge/remove, kernel module teardown, firewall flush, `crontab -r`, `kill -9 1`, `docker system/volume prune`, redirect to block devices or critical `/etc` files, `docker run --privileged` / `docker run -v /:` (host-root bind) |
+| `50-prod-ops.json` | Production-infra ops a glob can express precisely — `terraform apply` / `terraform destroy`. kubectl/helm and DB-CLI-to-prod rules need multi-token logic and ship as hook residue (A2/A3) instead. |
 
 Deny patterns use strict word-boundary shapes to prevent false positives.
 For example, `git branch --delete main` is blocked but `git branch --merged`
@@ -289,13 +290,18 @@ and `git checkout fix/main-bug` are not.
 
 ### Tier 2 — `PreToolUse` hook
 
-A small Bash hook (`drydock-block-destructive.sh`) handles the five rule
-classes that the deny mechanism cannot express — cases requiring multi-token
-AND/OR logic or anchored substring matching:
+A small Bash hook (`drydock-block-destructive.sh`) handles the rule classes
+that the deny mechanism cannot express — cases requiring multi-token AND/OR
+logic or anchored substring matching:
 
 | Rule | Blocked example | Allowed example |
 |---|---|---|
 | A1 — ssh to production host | `ssh user@prod.example.com` | `ssh user@dev.example.com` |
+| A2 — kubectl/helm destructive verb against a prod context | `kubectl delete deploy api --context=prod` | `kubectl delete pod foo -n dev` |
+| A3 — DB CLI pointed at a prod host | `psql -h prod-db.example.com` | `psql -h localhost` |
+| A4 — `terraform apply`/`destroy` | `terraform -chdir=infra destroy` | `terraform plan` |
+| C1-residue — `rm -rf` to a system path root | `rm -fR /etc` | `rm -rf ./build` |
+| C7-residue — `sudo chmod` world-writable mode | `sudo chmod 777 /var/www` | `sudo chmod 755 file` |
 | C12 — fork bomb | `:() { :|:& };:` | `bash -c 'echo hello'` |
 | C17 — `rm` of `.` or `.git` | `rm -rf .` | `rm -rf ./tmp` |
 | C18 — `rm` of parent traversal | `rm -rf ../sibling` | `rm -rf ./dist` |

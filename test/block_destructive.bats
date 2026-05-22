@@ -28,7 +28,8 @@
 # ── Hook I/O Contract (ADR-7) ────────────────────────────────────────────────
 # - Reads PreToolUse JSON on stdin
 # - Extracts .tool_input.command via jq
-# - Applies 5 residue regexes (A1, C12, C17, C18, C20)
+# - Applies the residue regex set (A1, A2, A3, A4, C1-residue, C7-residue,
+#   C12, C17, C18, C20)
 # - On match: prints reason to stderr, exits 2 (blocked)
 # - On no match: exits 0 (allowed)
 #
@@ -585,4 +586,352 @@ teardown() {
 @test "block_destructive: FIX-31-followup allows ANSI-C-quoted safe path \$'./dist'" {
     run bash "$HOOK" <<< "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf \$'./dist'\"}}"
     [ "$status" -eq 0 ]
+}
+
+# ── #76: A2 — kubectl/helm destructive verb against a prod context ───────────
+# The deny layer cannot express this: it needs TWO conditions (a destructive
+# verb AND a prod-scoped context/namespace flag). The prod marker is scoped to
+# --context / --kube-context / -n / --namespace values — NOT any bare "prod"
+# token. A resource named "prod-api" is not a prod context and must NOT block.
+@test "block_destructive: #76 A2 blocks 'kubectl delete deployment api --context=prod'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete deployment api --context=prod"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks 'kubectl delete pod foo -n prod'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo -n prod"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks 'kubectl delete namespace test --context production-cluster'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete namespace test --context production-cluster"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks 'kubectl drain node-1 --context=prod'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl drain node-1 --context=prod"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks 'helm uninstall myapp --kube-context=prod'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"helm uninstall myapp --kube-context=prod"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks 'helm uninstall myapp --namespace production'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"helm uninstall myapp --namespace production"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 allows 'kubectl get pods -n prod' (no destructive verb)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl get pods -n prod"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A2 allows 'kubectl delete pod foo -n dev' (dev namespace)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo -n dev"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A2 allows 'kubectl delete pod prod-api -n dev' (prod in resource name, not context)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete pod prod-api -n dev"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A2 allows 'kubectl delete pod foo' (no context/namespace flag)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A2 allows 'helm list --kube-context=prod' (no destructive verb)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"helm list --kube-context=prod"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A2 blocks quoted context value 'kubectl delete deploy api --context=\"prod\"'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete deploy api --context=\"prod\""}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks attached short flag 'kubectl delete pod foo -nprod'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo -nprod"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks uppercase namespace 'kubectl delete pod foo -n PROD'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo -n PROD"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 blocks mixed-case context 'helm uninstall x --context=Production'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"helm uninstall x --context=Production"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 segment-anchored: allows 'kubectl get pods --context=prod && helm delete x' (delete has no prod ctx)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl get pods --context=prod && helm delete x"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A2 pipe-split: allows 'kubectl get pods --context=prod -o name | grep delete' (delete is a grep arg)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl get pods --context=prod -o name | grep delete"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A2 blocks global flag before verb 'kubectl -n prod delete pod foo'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl -n prod delete pod foo"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A2 pipe-split: blocks 'kubectl delete pod foo --context=prod | tee log' (delete before the pipe)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"kubectl delete pod foo --context=prod | tee log"}}'
+    [ "$status" -eq 2 ]
+}
+
+# ── #76: A3 — DB CLI pointed at a production host ────────────────────────────
+# Block a DB CLI (psql/mysql/mongo/mongosh/redis-cli) whose -h/--host value
+# contains a prod/production token. A DB CLI against localhost or a dev host
+# must NOT block.
+@test "block_destructive: #76 A3 blocks 'psql -h prod-db.example.com -U admin'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"psql -h prod-db.example.com -U admin"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 blocks 'mysql -h production.internal'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"mysql -h production.internal"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 blocks 'mongosh --host prod-cluster'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"mongosh --host prod-cluster"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 blocks 'redis-cli -h prod.cache.local'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"redis-cli -h prod.cache.local"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 blocks 'psql --host=prod-db'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"psql --host=prod-db"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 allows 'psql -h localhost'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"psql -h localhost"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A3 allows 'mysql -h dev-db.example.com'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"mysql -h dev-db.example.com"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A3 allows 'psql -h staging.internal' (staging — no prod token)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"psql -h staging.internal"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A3 allows 'redis-cli -h 127.0.0.1'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"redis-cli -h 127.0.0.1"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A3 blocks quoted host value 'psql --host=\"prod-db\"'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"psql --host=\"prod-db\""}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 blocks attached short flag 'psql -hprod-db'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"psql -hprod-db"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 blocks uppercase host 'mysql -h PROD.internal'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"mysql -h PROD.internal"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A3 allows 'psql my_production_db' (prod in db name, no -h host)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"psql my_production_db"}}'
+    [ "$status" -eq 0 ]
+}
+
+# ── #76: A4 — terraform apply/destroy (hook backstop for interspersed flags) ──
+# The deny layer covers the common forms (terraform apply* / terraform
+# destroy*); the hook backstops forms with intervening flags such as
+# 'terraform -chdir=… destroy'. 'terraform plan' must NOT block.
+@test "block_destructive: #76 A4 blocks 'terraform destroy'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform destroy"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A4 blocks 'terraform -chdir=infra destroy' (interspersed flag)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform -chdir=infra destroy"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A4 blocks 'terraform -chdir=./env/prod apply' (interspersed flag)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform -chdir=./env/prod apply"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A4 blocks 'terraform apply -auto-approve'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform apply -auto-approve"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A4 allows 'terraform plan'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform plan"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A4 allows 'terraform -chdir=infra plan'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform -chdir=infra plan"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A4 allows 'terraform output' (read-only subcommand)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform output"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A4 allows 'terraform fmt apply.tf' (apply in filename, not subcommand)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform fmt apply.tf"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A4 segment-anchored: blocks 'cd infra && terraform destroy'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"cd infra && terraform destroy"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 A4 segment-anchored: allows 'terraform plan && echo done'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform plan && echo done"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A4 allows 'terraform show apply' (apply is a positional arg, not the subcommand)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform show apply"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 A4 allows 'terraform plan -out apply' (plan file named apply)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"terraform plan -out apply"}}'
+    [ "$status" -eq 0 ]
+}
+
+# ── #76: C7-residue — sudo chmod with a world-writable mode ──────────────────
+# The deny layer cannot inspect the "others" write bit. The hook blocks a
+# 'sudo chmod' whose mode is world-writable: numeric mode whose last octal
+# digit has the write bit (2/3/6/7), or a symbolic clause granting write to
+# 'o' or 'a'. chmod WITHOUT sudo is out of scope (not blocked).
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod 777 /var/www'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 777 /var/www"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod -R 777 /srv'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod -R 777 /srv"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod 666 /etc/foo'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 666 /etc/foo"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod 2777 /opt/app' (4-digit mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 2777 /opt/app"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod o+w /etc/passwd' (symbolic others-write)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod o+w /etc/passwd"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod a+w file' (symbolic all-write)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod a+w file"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod -R o+w /srv' (symbolic, flag before mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod -R o+w /srv"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod u=rw,o+w file' (comma-joined world-writable clause)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod u=rw,o+w file"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod 755 /usr/bin/foo'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 755 /usr/bin/foo"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod 644 /etc/foo'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 644 /etc/foo"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod 775 file' (group-write, not world)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 775 file"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod o-w file' (removes others-write)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod o-w file"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod u+w file' (user-only write)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod u+w file"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod g+w file' (group-only write)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod g+w file"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'chmod 777 file' (no sudo — out of scope)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"chmod 777 file"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod 755 222' (numeric filename, benign mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 755 222"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod 644 777' (numeric filename, benign mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 644 777"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod 644 a+w' (clause-shaped filename, benign mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 644 a+w"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod --reference=foo o+wfile.txt' (--reference: no literal mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod --reference=foo o+wfile.txt"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod --reference=/etc/skel 777' (--reference: 777 is the target file)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod --reference=/etc/skel 777"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue allows 'sudo chmod 777 /var/www --reference=foo' (--reference present: 777 is a filename, not a mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod 777 /var/www --reference=foo"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: #76 C7-residue blocks 'sudo chmod -R -v 777 /srv' (multiple flags before mode)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"sudo chmod -R -v 777 /srv"}}'
+    [ "$status" -eq 2 ]
 }
