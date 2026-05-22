@@ -35,6 +35,15 @@ feature, not a bug: it prevents agents from accessing the host's primary SSH and
 GPG identities. Deploy keys live under ~/.config/drydock/keys/<project>_deploy and
 are mounted via the optional SSH overlay when needed.
 
+### Container state model (INV-2)
+Config under ~/.claude/ and ~/.claude.json here are per-session copies, re-seeded
+from a prototype on every `drydock run` — edits made inside the container do NOT
+persist (the ~/.claude/projects/ conversation store is the shared, durable
+exception). For Claude config that must survive a restart, use one of:
+  - host ~/.claude/ + `drydock sync` (synced to the prototype, seeded every run);
+  - the project repo's own .mcp.json (bind-mounted, immune to re-seed) — the right home for project MCP servers;
+  - the host overlay ~/.config/drydock/claude-overlay/.
+
 ### Security framing (INV-6 — Docker socket)
 The Docker socket is bind-mounted from the host. Any process with socket access can run
 `docker run -v /:/host --privileged` — this is root-equivalent host access, not a security sandbox.

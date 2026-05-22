@@ -132,6 +132,52 @@ MOUNTINFO
 	[[ "$output" == *"XDG_CACHE_HOME"* ]]
 }
 
+# ── Scenario 3d — INV-2 container state model section (issue #79) ────────────
+# GIVEN marker present
+# WHEN  hook runs
+# THEN  stdout teaches the per-session ephemeral state model and the three
+#       durable-config paths.
+
+@test "hook: stdout contains the Container state model section header" {
+	run env \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Container state model"* ]]
+}
+
+@test "hook: stdout explains ~/.claude config is a per-session, re-seeded copy" {
+	run env \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"per-session"* ]]
+	[[ "$output" == *"re-seeded"* ]]
+}
+
+@test "hook: stdout names the projects/ store as the durable carve-out" {
+	run env \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"~/.claude/projects/"* ]]
+}
+
+@test "hook: stdout lists the three durable-config paths (#79)" {
+	run env \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	# Path 1: host sync.   Path 2: repo .mcp.json.   Path 3: host overlay.
+	[[ "$output" == *"drydock sync"* ]]
+	[[ "$output" == *".mcp.json"* ]]
+	[[ "$output" == *"claude-overlay"* ]]
+}
+
 # ── Scenario 4a — noexec /tmp detected ───────────────────────────────────────
 # GIVEN marker present AND mountinfo fixture has /tmp with noexec
 # WHEN  hook runs
