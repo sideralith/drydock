@@ -178,6 +178,23 @@ MOUNTINFO
 	[[ "$output" == *"claude-overlay"* ]]
 }
 
+# ── Scenario 3e — INV-N citation tokens stay out of emitted context (#79) ────
+# GIVEN marker present
+# WHEN  hook runs
+# THEN  stdout carries no `INV-N` label. The tokens are drydock-internal
+#       cross-artifact citation IDs; emitted into an arbitrary project's agent
+#       context they are noise and can collide with that project's own
+#       invariant numbering. Contributor traceability lives in script comments.
+
+@test "hook: stdout omits drydock-internal INV-N citation tokens" {
+	run env \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"INV-"* ]]
+}
+
 # ── Scenario 4a — noexec /tmp detected ───────────────────────────────────────
 # GIVEN marker present AND mountinfo fixture has /tmp with noexec
 # WHEN  hook runs

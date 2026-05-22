@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 # drydock-session-start.sh — Claude Code SessionStart hook for drydock containers.
 #
-# Delivers session context to Claude: identity markers, security framing (INV-6),
-# and live probes (noexec /tmp, tool availability).
+# Delivers session context to Claude: identity markers, credential and socket
+# security framing, the container state model, and live probes (noexec /tmp,
+# tool availability).
+#
+# The emitted text deliberately omits drydock's internal INV-N citation tokens:
+# a drydock session works on arbitrary projects, and an INV-N label is a pointer
+# into drydock's own CLAUDE.md — noise to an agent that is not reading it, and a
+# collision risk with that project's own invariant numbering. Section → drydock
+# invariant map, kept here for contributors (not emitted):
+#   credential isolation  → INV-1
+#   container state model → INV-2
+#   Docker socket         → INV-6
 #
 # HOST-SAFETY GUARD (design D-3): this script is absent on the host; the guard in
 # settings.json's hook command uses `[ -x /opt/drydock/hooks/drydock-session-start.sh ]`
@@ -29,13 +39,13 @@ cat <<'STATIC'
 
 You are running inside a drydock container (containerized Claude Code workspace).
 
-### Security framing (INV-1 — credential isolation)
+### Security framing — credential isolation
 ~/.ssh and ~/.gnupg are deliberately NOT mounted in this container. This is a
 feature, not a bug: it prevents agents from accessing the host's primary SSH and
 GPG identities. Deploy keys live under ~/.config/drydock/keys/<project>_deploy and
 are mounted via the optional SSH overlay when needed.
 
-### Container state model (INV-2)
+### Container state model
 Config under ~/.claude/ and ~/.claude.json here are per-session copies, re-seeded
 from a prototype on every `drydock run` — edits made inside the container do NOT
 persist (the ~/.claude/projects/ conversation store is the shared, durable
@@ -44,7 +54,7 @@ exception). For Claude config that must survive a restart, use one of:
   - the project repo's own .mcp.json (bind-mounted, immune to re-seed) — the right home for project MCP servers;
   - the host overlay ~/.config/drydock/claude-overlay/.
 
-### Security framing (INV-6 — Docker socket)
+### Security framing — Docker socket
 The Docker socket is bind-mounted from the host. Any process with socket access can run
 `docker run -v /:/host --privileged` — this is root-equivalent host access, not a security sandbox.
 drydock defends against agent accidents (typos, runaway loops), not adversaries.
