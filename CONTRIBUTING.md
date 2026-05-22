@@ -163,11 +163,25 @@ GitHub Issues is the only intake channel — there is no Discord, mailing list, 
 
 3. **Commit** using Conventional Commits. See [CLAUDE.md §5: Tracking & Contribution](CLAUDE.md#5-tracking--contribution) for the full conventions table: allowed types, the prohibition on `Co-Authored-By` trailers, and the `--no-verify` / `--force` rules. Do not duplicate the table here.
 
-4. **Push** to your fork and open a PR against `main`.
+4. **Push** to your fork and open a PR against **`dev`** — not `main`.
+
+   drydock uses a two-branch model. `dev` is the integration branch: every
+   feature and fix PR lands there, and that is where day-to-day development
+   happens. `main` holds only released versions — each commit on `main` is a
+   shipped release. A normal contribution therefore always targets `dev`;
+   `main` is never a PR target for feature or fix work.
+
+   A release is itself a PR — `dev` → `main`, opened by a maintainer when a
+   batch of changes is ready to ship. That merge bumps `DRYDOCK_VERSION`
+   (`lib/common.sh`), is tagged `vX.Y.Z`, and is published as a GitHub Release.
+   So every PR merged into `main` *is* a new tagged version; PRs merged into
+   `dev` are the individual changes that accumulate into the next one.
 
 5. **CI must pass.** The three gates are documented in [§ Code style](#code-style); a red CI blocks merge.
 
 6. A maintainer will review. For now, write a clear PR description (what changed, why, how tested).
+
+7. **On merge**, the maintainer manually closes the linked issue with a comment referencing the PR. GitHub does not auto-close it when the merge target is not the default branch, so the close is a deliberate step — done at merge time, not deferred to a later release.
 
 ## Code style
 
