@@ -112,15 +112,16 @@ rm -rf "$INTTEST_ROOT"
 #   66  (DRYDOCK_SESSION_CLAUDE_DIR)  → .claude-container-<disc>/   (per-session)
 #   67  (DRYDOCK_SESSION_CLAUDE_JSON) → .claude-container-<disc>.json
 #   77                               → .claude-container/projects/
-#   80                               → .claude/hooks/
+#   80  (DRYDOCK_SESSION_CLAUDE_DIR/hooks) → .claude-container-<disc>/hooks/
 #   83                               → .local/
 #   86                               → .gitconfig
 #   87                               → .config/gh/
 # (.claude-container/ + .claude-container.json are the seed prototype copied
-#  into each per-session pair by seed_session.)
+#  into each per-session pair by seed_session. seed_session creates the
+#  per-session hooks/ subdir below as part of that seed.)
 precreate_mount_sources() {
 	mkdir -p \
-		"$FAKE_HOME/.claude/hooks" \
+		"$FAKE_HOME/.claude-container/hooks" \
 		"$FAKE_HOME/.claude-container/projects" \
 		"$FAKE_HOME/.local" \
 		"$FAKE_HOME/.config/gh"

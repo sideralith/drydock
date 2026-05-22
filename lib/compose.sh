@@ -992,6 +992,14 @@ ensure_runtime_dirs() {
 		note "runtime state missing — running 'drydock setup' automatically"
 		cmd_setup
 	fi
+	# Defense-in-depth for the #71 hooks RO overlay source. cmd_setup creates
+	# CONTAINER_CLAUDE/hooks/ only on fresh-init; cmd_sync's rsync copies it
+	# only if host ~/.claude/hooks/ exists. The narrow case where neither path
+	# populates the dir — pre-existing prototype + no host hooks dir — would
+	# leave the docker-compose bind-mount source missing, and Docker would
+	# auto-create it as a root-owned directory at run time, breaking perms.
+	# Idempotent mkdir -p closes that gap cheaply on every invocation.
+	mkdir -p "$CONTAINER_CLAUDE/hooks"
 	# One-time consolidation of pre-upgrade scattered per-session projects/ trees
 	# into the shared store (issue #68). Sentinel-gated; no-op after first run.
 	migrate_projects_to_shared_store

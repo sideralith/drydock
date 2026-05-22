@@ -52,9 +52,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   seeded from the `~/.claude-container/` prototype), `~/.engram-container/`, **and the shared
   container-specific append-only conversation store at `~/.claude-container/projects/`** — never at
   the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`. The host's `~/.claude/`,
-  `~/.claude.json`, and `~/.engram/` MUST NEVER be the source of the container's writable
-  Claude or engram state mount. (INV-3's deliberate `:ro` `~/.claude/hooks/` overlay is
-  not a state mount and is not affected by this prohibition.)
+  `~/.claude.json`, and `~/.engram/` MUST NEVER be the source of any container mount —
+  writable or read-only. (INV-3's `:ro` hooks overlay sources from the per-session
+  `~/.claude-container-<disc>/hooks/` subpath, not from host `~/.claude/hooks/`, so it
+  is consistent with this rule — no carve-out required.)
 - **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
   Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
   when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).
@@ -129,27 +130,37 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 
 ### INV-3: Hooks Read-Only Overlay
 
-- **Rule**: `~/.claude/hooks/` MUST be bind-mounted `:ro` on top of the container's `.claude`
-  mount. The agent MUST NOT have write access to its own hook scripts. Additionally, drydock's
-  agent policy — the `permissions.deny` block and the `hooks.SessionStart` entry — MUST be
-  delivered via a Claude Code managed-settings drop-in baked into the image and owned by root.
-  The agent MUST NOT have write access to these policy files.
+- **Rule**: The per-session `~/.claude-container-<disc>/hooks/` subpath MUST be bind-mounted
+  `:ro` on top of the container's `.claude` mount. The agent MUST NOT have write access to its
+  own hook scripts. Additionally, drydock's agent policy — the `permissions.deny` block and the
+  `hooks.SessionStart` entry — MUST be delivered via a Claude Code managed-settings drop-in
+  baked into the image and owned by root. The agent MUST NOT have write access to these policy
+  files.
 - **Why**: The hooks directory and the managed-settings layer together form the tier-1 defense.
-  The hook scripts (guardrails, block-destructive) are RO via bind-mount. The deny block and the
-  SessionStart hook entry are tamper-proof via image-layer ownership: they live at
-  `/etc/claude-code/managed-settings.d/` (root-owned, non-root container user), loaded by Claude
-  Code at highest precedence and not overridable from project settings. Both protections are
-  structural, not advisory. Before v0.2.0, the deny block and hook entry lived in a per-project
-  `settings.json` that a sufficiently instruction-following agent could overwrite, silently
-  weakening the guardrails for the remainder of the session.
+  The hook scripts (guardrails, block-destructive) are RO via bind-mount. Sourcing the overlay
+  from the per-session `~/.claude-container-<disc>/hooks/` (NOT host `~/.claude/hooks/`) keeps
+  INV-2's "container never reads host `~/.claude/` directly" rule unconditional and bounds the
+  blast radius of accidental host hook edits: a fat-fingered change does not propagate to
+  running sessions, only to future ones (after the next `drydock sync` and seed). The deny
+  block and the SessionStart hook entry are tamper-proof via image-layer ownership: they live
+  at `/etc/claude-code/managed-settings.d/` (root-owned, non-root container user), loaded by
+  Claude Code at highest precedence and not overridable from project settings. Both protections
+  are structural, not advisory. Before v0.2.0, the deny block and hook entry lived in a
+  per-project `settings.json` that a sufficiently instruction-following agent could overwrite,
+  silently weakening the guardrails for the remainder of the session.
 - **Consequence of violating**: A buggy or prompt-injected agent disables its own guardrails
   mid-session. Hook-based protections are silently bypassed for the remainder of the session
   with no indication to the operator.
-- **Where this lives in code**: the `${HOME}/.claude/hooks` `:ro` bind-mount line in `docker-compose.yml`;
-  `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
-  `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`, `10-git-safety.json`,
-  `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`, `50-prod-ops.json`);
-  `templates/hooks/drydock-block-destructive.sh` (PreToolUse guardrail hook, RO bind-mount).
+- **Where this lives in code**: the `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks` `:ro` bind-mount line
+  in `docker-compose.yml`; the `hooks` entry in `cmd_setup`'s `mkdir -p` list in
+  `lib/commands.sh` (guarantees the prototype always has the subdir so Docker never has to
+  auto-create the bind-mount source as root); the prototype-copy loop in
+  `seed_session_config_dir` in `lib/compose.sh` (propagates `hooks/` from the prototype into
+  each per-session dir); `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/`
+  into the image); `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`,
+  `10-git-safety.json`, `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`,
+  `50-prod-ops.json`); `templates/hooks/drydock-block-destructive.sh` (PreToolUse guardrail
+  hook, RO bind-mount).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-4: Engram is Optional

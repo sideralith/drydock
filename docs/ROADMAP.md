@@ -486,27 +486,33 @@ check.
 
 ### hooks-mount-source
 
-**Status: Planned (v0.2.2, issue #71).**
+**Status: Done — shipping in v0.2.2 (issue #71).**
 
-**Problem.** drydock's hook scripts are bind-mounted RO from the host's
-`~/.claude/hooks/` (INV-3). That means the container sees the host's hook
-directory directly — a tight coupling: a user with no host Claude Code
-install has an empty hooks dir mounted, and drydock-shipped hook scripts
-must live on the host side. Evaluate sourcing from
-`~/.claude-container/hooks/` instead — the prototype dir drydock already
-controls — so drydock-shipped hooks ride with the install and host
-overrides become an explicit opt-in.
+**Problem.** drydock's `:ro` hooks overlay was bind-mounted directly from
+the host's `~/.claude/hooks/` (INV-3) — the only mount where the container
+read directly from host `~/.claude/`, a lone exception to INV-2's
+container-state-only rule. The original rationale (always-current hooks,
+no sync lag) did not hold: `ensure_synced` runs on every `drydock run` /
+`shell`, the rsync does not exclude `hooks/`, and the staleness probe does
+not prune it — the synced copy is always current in normal operation.
+
+**Resolution.** The `:ro` overlay now sources from the per-session
+`${DRYDOCK_SESSION_CLAUDE_DIR}/hooks/` subpath (the seeded copy from the
+prototype) — NOT from host `~/.claude/hooks/`. The `:ro` flag and the
+"agent cannot write its own hooks" guarantee are unchanged. INV-2 becomes
+unconditional ("the container never reads host `~/.claude/` directly")
+with no carve-out for hooks. Bounded blast radius under threat model A:
+a fat-fingered host hook edit no longer propagates live to running
+sessions — only future sessions pick it up via the next sync + seed.
+`cmd_setup` now `mkdir -p`s the prototype's `hooks/` so the bind-mount
+source always exists even on a fresh host with no `~/.claude/hooks/`.
 
 **Why this scope.** Infrastructure polish — no new user-visible behaviour;
 the change is "where the hook scripts come from."
 
-**Invariants touched.** INV-3 — the RO mount property remains; only the
-source path changes. The "agent cannot write its own hooks" guarantee is
-preserved regardless of source.
-
-**Open questions.** Whether a host-override mechanism is still needed; how
-auto-sync interacts; whether the existing `~/.claude/hooks/` mount becomes
-a fallback or is removed.
+**Invariants touched.** INV-2 — the carve-out for the hooks overlay is
+removed; the rule is now unconditional. INV-3 — the RO mount property
+and the agent-cannot-write-its-own-hooks guarantee are preserved.
 
 **Provenance.** Issue [#71][i71].
 

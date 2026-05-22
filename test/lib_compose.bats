@@ -2138,10 +2138,38 @@ _setup_wiring_home() {
 
 @test "SR-9: no compose file uses host ~/.claude/projects as a mount SOURCE" {
 	# The left-hand side of the projects mount must be ~/.claude-container/projects,
-	# NEVER the host ~/.claude/projects. (The hooks :ro line using ~/.claude/hooks
-	# as a source is intentional and must remain — this test targets projects/ only.)
+	# NEVER the host ~/.claude/projects.
 	# Assert that no volume line has ${HOME}/.claude/projects as the source (LHS).
 	! grep -E '"\$\{HOME\}/\.claude/projects:' "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+# ── #71 structural: hooks RO overlay source is the per-session dir ───────────
+# The agent-cannot-write-its-own-hooks guarantee (INV-3) holds regardless of
+# source path because the mount flag is :ro. Issue #71 moves the SOURCE from
+# the host's ~/.claude/hooks/ to the per-session container-state dir's hooks/
+# subpath so the container never reads directly from host ~/.claude/ (the lone
+# INV-2 exception is eliminated). Both invariants are checked here.
+
+@test "#71: docker-compose.yml hooks :ro overlay sources from the per-session dir" {
+	# The RO overlay must source from ${DRYDOCK_SESSION_CLAUDE_DIR}/hooks (the
+	# per-session seeded dir), NOT from ${HOME}/.claude/hooks (host-direct).
+	grep -qF '${DRYDOCK_SESSION_CLAUDE_DIR}/hooks:${HOME}/.claude/hooks:ro' \
+		"$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "#71: no compose file uses host ~/.claude/hooks as a mount SOURCE" {
+	# The left-hand side of the hooks mount must be the per-session dir, NEVER
+	# the host ~/.claude/hooks. This eliminates the last container-reads-host
+	# exception in INV-2.
+	! grep -E '"\$\{HOME\}/\.claude/hooks:' "$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "#71: hooks mount overlay preserves the :ro flag (INV-3)" {
+	# Whatever the source, the hooks subpath MUST be mounted :ro on top of the
+	# per-session .claude mount. Without :ro the agent could rewrite its own
+	# hooks and disable its own guardrails — the INV-3 core guarantee.
+	grep -qE '/hooks:\$\{HOME\}/\.claude/hooks:ro' \
+		"$DRYDOCK_HOME/docker-compose.yml"
 }
 
 # ── Phase 2: seed_session_config_dir — Bats Tests (SR-6, SR-11, SR-7, design-risk-6) ──
@@ -2458,8 +2486,10 @@ _make_prototype_with_projects() {
 	local inv2_section
 	inv2_section="$(awk '/^### INV-2:/,/^### INV-3:/{if (/^### INV-3:/) exit; print}' "$DRYDOCK_HOME/CLAUDE.md")"
 
-	# Anchor 1: the scoped prohibition on host paths as writable state mount source
-	echo "$inv2_section" | grep -qE "MUST NEVER be the source of the container.s writable"
+	# Anchor 1: the prohibition on host paths as ANY container-mount source.
+	# Strengthened in #71: covers writable AND read-only mounts (the hooks RO
+	# overlay no longer carves out an exception).
+	echo "$inv2_section" | grep -qE "MUST NEVER be the source of any container mount"
 
 	# Anchor 2: the append-only projects/ carve-out
 	echo "$inv2_section" | grep -q "append-only"

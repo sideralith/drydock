@@ -5,6 +5,28 @@ All notable changes to drydock are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+CI hygiene & infrastructure polish for the v0.2.2 cycle.
+
+### Changed
+- **Hooks RO overlay sources from the per-session container-state dir** —
+  `docker-compose.yml`'s `:ro` hooks mount now sources from
+  `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks` (the per-session seeded dir) instead
+  of host `~/.claude/hooks/`. This eliminates the lone container-reads-host
+  exception in INV-2: the rule is now unconditional ("the container never
+  reads host `~/.claude/` directly") with no carve-out. The `:ro` flag and
+  INV-3's "agent cannot write its own hooks" guarantee are unchanged.
+  Behavior change under threat model A (INV-7): a fat-fingered host hook
+  edit no longer propagates live to running sessions; only future sessions
+  pick it up via the next sync + seed (bounded blast radius). The original
+  argument for host-direct sourcing (always-current hooks) did not hold —
+  `ensure_synced` runs on every `drydock run` / `shell`, the rsync does not
+  exclude `hooks/`, and `~/.claude-container/hooks/` is always current
+  before a session starts in normal operation. `cmd_setup` now `mkdir -p`s
+  the prototype's `hooks/` so the bind-mount source always exists even on
+  a fresh host with no personal `~/.claude/hooks/`. Closes #71.
+
 ## [0.2.1] - 2026-05-22
 
 OAuth token persistence, container-config overlay, expanded destructive-command
