@@ -234,3 +234,113 @@ STUB
 	content="$(cat "$fake_home/.claude-container-test/playwright.json")"
 	[ "$content" = "playwright-config" ]
 }
+
+# ── Case 12: type collision — overlay dir vs seeded file → err ────────────────
+# If the prototype seeded a regular file at path X and the overlay supplies a
+# directory at X, the function must abort via err naming the path — not mkdir-p
+# over the existing file (which would fail with a raw kernel error instead of a
+# friendly drydock message).
+
+@test "apply_claude_overlay: overlay dir collides with seeded file → fails with drydock err naming path" {
+	mkdir -p "$OVERLAY_DIR"
+	mkdir -p "$OVERLAY_DIR/settings.json"   # overlay delivers a DIRECTORY
+
+	# Seed a regular FILE at the same relative path.
+	printf 'seeded' >"$SESSION_DIR/settings.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+	[[ "$output" == *"settings.json"* ]]
+}
+
+# ── Case 13: type collision — overlay file vs seeded dir → err ────────────────
+# If the prototype seeded a directory at path X and the overlay supplies a
+# regular file at X, cp -p would silently copy the file INTO the dir (wrong
+# result, no error).  The function must abort via err naming the path.
+
+@test "apply_claude_overlay: overlay file collides with seeded dir → fails with drydock err naming path" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'overlay-content' >"$OVERLAY_DIR/plugins"   # overlay delivers a FILE
+
+	# Seed a DIRECTORY at the same relative path.
+	mkdir -p "$SESSION_DIR/plugins"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+	[[ "$output" == *"plugins"* ]]
+	# The file must NOT have been silently copied inside the directory.
+	[ ! -f "$SESSION_DIR/plugins/plugins" ]
+	[ ! -f "$SESSION_DIR/plugins" ]
+}
+
+# ── Case 14: unreadable overlay subdir → abort non-zero ─────────────────────
+# An unreadable subtree (chmod 000 subdir) must make apply_claude_overlay
+# abort non-zero — the 2>/dev/null suppression that existed before the fix
+# would have silently returned 0.
+# Skipped when running as root (chmod 000 is bypassable by root).
+
+@test "apply_claude_overlay: unreadable overlay subdir → aborts non-zero (not silent skip)" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 000 — test not meaningful"
+
+	mkdir -p "$OVERLAY_DIR/secret-subdir"
+	printf 'hidden' >"$OVERLAY_DIR/secret-subdir/file.txt"
+	chmod 000 "$OVERLAY_DIR/secret-subdir"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Restore permissions before any assertion so bats can clean up.
+	chmod 755 "$OVERLAY_DIR/secret-subdir"
+
+	[ "$status" -ne 0 ]
+}
+
+# ── Case 15: integration — forbidden overlay file makes seed abort non-zero ───
+# Verifies that apply_claude_overlay's err bubbles all the way up through
+# seed_session_config_dir (which calls apply_claude_overlay as its last step).
+
+@test "apply_claude_overlay: integration — forbidden .claude.json causes seed_session_config_dir to abort" {
+	local fake_home="$BATS_TEST_TMPDIR/integrate-home-abort"
+	mkdir -p "$fake_home/.claude-container"
+	printf 'proto-settings' >"$fake_home/.claude-container/settings.json"
+	printf 'proto-json' >"$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	local overlay_dir="$fake_home/.config/drydock/claude-overlay"
+	mkdir -p "$overlay_dir"
+	printf '{}' >"$overlay_dir/.claude.json"   # forbidden by INV-2
+	HOST_CLAUDE_OVERLAY="$overlay_dir"
+
+	run seed_session_config_dir "test"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *".claude.json"* ]]
+}
+
+# ── Case 16: symlink rejection — target content NOT delivered ────────────────
+# Strengthens the existing symlink cases (9, 10) with a negative assertion:
+# the symlink target's content must NOT appear in the session dir.
+
+@test "apply_claude_overlay: symlink rejection — target content not delivered into session dir" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'real-content' >"$BATS_TEST_TMPDIR/real-file.txt"
+	ln -s "$BATS_TEST_TMPDIR/real-file.txt" "$OVERLAY_DIR/evil.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"evil.json"* ]]
+	# The symlink target's content must NOT have been delivered.
+	[ ! -e "$SESSION_DIR/evil.json" ]
+}
+
+@test "apply_claude_overlay: symlink-to-.credentials.json — target content not delivered into session dir" {
+	mkdir -p "$OVERLAY_DIR"
+	printf '{}' >"$BATS_TEST_TMPDIR/creds.json"
+	ln -s "$BATS_TEST_TMPDIR/creds.json" "$OVERLAY_DIR/creds"
+
+	run apply_claude_overlay "$SESSION_DIR"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"creds"* ]]
+	# The symlink target's content must NOT have been delivered.
+	[ ! -e "$SESSION_DIR/creds" ]
+}

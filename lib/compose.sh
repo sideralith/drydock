@@ -840,13 +840,25 @@ apply_claude_overlay() {
 	local session_dir="$1"
 	[ -n "$session_dir" ] || return 0
 	[ -d "$HOST_CLAUDE_OVERLAY" ] || return 0
-	local _entry _rel
+	# Fix #4: normalise trailing slash once so _rel stripping is always correct.
+	local _root="${HOST_CLAUDE_OVERLAY%/}"
+	local _entry _rel _dest _tmp
+	# Fix #1 + #5: capture find output to a temp file so we can check find's
+	# exit status (process-substitution silently eats it).  Prune the projects/
+	# subtree so we never descend it only to skip every entry (perf hardening).
+	_tmp=$(mktemp) || err "drydock: mktemp failed for overlay traversal"
+	# shellcheck disable=SC2064
+	trap "rm -f '$_tmp'" RETURN
+	if ! find "$_root" -mindepth 1 \( -path "$_root/projects" -type d -prune \) -o -print0 >"$_tmp"; then
+		err "drydock: overlay traversal failed under '$_root' — unreadable subtree? (check permissions)"
+	fi
 	while IFS= read -r -d '' _entry; do
 		# Symlink check FIRST — -f/-d follow links; -L does not.
 		if [ -L "$_entry" ]; then
 			err "drydock: overlay rejects symlink '$_entry' — symlinks are not allowed in ~/.config/drydock/claude-overlay/ (copy the real file instead)"
 		fi
-		_rel="${_entry#"$HOST_CLAUDE_OVERLAY"/}"
+		# Fix #4: use _root (trailing-slash-normalised) for rel-path stripping.
+		_rel="${_entry#"$_root"/}"
 		# Forbidden set: depth-1 .claude.json / .credentials.json (INV-2).
 		# Depth-1 means _rel contains no slash — it is a direct overlay child.
 		case "$_rel" in
@@ -854,20 +866,29 @@ apply_claude_overlay() {
 			err "drydock: overlay cannot deliver '$_rel' — .claude.json and .credentials.json are forbidden by INV-2; remove it from ~/.config/drydock/claude-overlay/"
 			;;
 		esac
-		# projects/ is conversation history (shared :rw sub-mount), not config —
-		# shadowed by the mount; skip silently (same rule as the prototype loop).
-		if [ "$_rel" = projects ] || [[ "$_rel" == projects/* ]]; then
+		# Fix #3: gate the silent projects/ skip on [ -d ] — a non-directory entry
+		# named projects falls through to type-collision or unsupported-entry handling.
+		if [ -d "$_entry" ] && { [ "$_rel" = projects ] || [[ "$_rel" == projects/* ]]; }; then
 			continue
 		fi
+		_dest="$session_dir/$_rel"
+		# Fix #2: detect type collision between overlay entry and seeded target.
+		# Fail-loud rather than silently producing the wrong result.
+		if [ -d "$_entry" ] && [ -f "$_dest" ]; then
+			err "drydock: overlay directory '$_rel' collides with seeded file at '$_dest' — type mismatch; remove the conflicting overlay entry"
+		fi
+		if [ -f "$_entry" ] && [ -d "$_dest" ]; then
+			err "drydock: overlay file '$_rel' collides with seeded directory at '$_dest' — type mismatch; remove the conflicting overlay entry"
+		fi
 		if [ -d "$_entry" ]; then
-			mkdir -p "$session_dir/$_rel"
+			mkdir -p "$_dest"
 		elif [ -f "$_entry" ]; then
-			mkdir -p "$(dirname "$session_dir/$_rel")"
-			cp -p "$_entry" "$session_dir/$_rel"
+			mkdir -p "$(dirname "$_dest")"
+			cp -p "$_entry" "$_dest"
 		else
 			err "drydock: overlay contains unsupported entry '$_entry' — only directories and regular files are allowed"
 		fi
-	done < <(find "$HOST_CLAUDE_OVERLAY" -mindepth 1 -print0 2>/dev/null)
+	done <"$_tmp"
 }
 
 # migrate_projects_to_shared_store — one-time sentinel-gated sweep that
