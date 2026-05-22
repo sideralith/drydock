@@ -318,7 +318,7 @@ STUB
 }
 
 # ── Case 16: symlink rejection — target content NOT delivered ────────────────
-# Strengthens the existing symlink cases (9, 10) with a negative assertion:
+# Strengthens the existing symlink cases (8) with a negative assertion:
 # the symlink target's content must NOT appear in the session dir.
 
 @test "apply_claude_overlay: symlink rejection — target content not delivered into session dir" {
@@ -521,4 +521,36 @@ STUB
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"drydock:"* ]]
 	[[ "$output" == *"projects"* ]]
+}
+
+# ── Case 24: _dest ancestor symlink → write-escape guard ─────────────────────
+# cp -a (used by seed_session_config_dir to copy the prototype) PRESERVES
+# symlinks.  If the prototype ~/.claude-container/ carries a symlink at e.g.
+# "foo" pointing outside the session dir, and the overlay supplies a file at
+# "foo/bar.json", Pass 2's mkdir -p / cp -p follow the symlink and write
+# OUTSIDE $session_dir onto the host filesystem.
+#
+# The guard must catch any symlink anywhere on the _dest path within the
+# session dir — including the ancestor-symlink case (the main cp -a vector).
+# Strengthens the existing symlink cases (8).
+
+@test "apply_claude_overlay: symlink at session-dir ancestor → write-escape blocked, exits non-zero" {
+	mkdir -p "$OVERLAY_DIR/foo"
+	printf 'payload' >"$OVERLAY_DIR/foo/bar.json"
+
+	# Simulate a cp -a-preserved prototype symlink: $SESSION_DIR/foo is a
+	# symlink pointing at a directory OUTSIDE the session dir.
+	local outside_target="$BATS_TEST_TMPDIR/outside-$$"
+	mkdir -p "$outside_target"
+	ln -s "$outside_target" "$SESSION_DIR/foo"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must fail: the overlay target resolves through a symlink.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+
+	# Security property: nothing was written to the symlink's target outside
+	# the session dir.
+	[ ! -e "$outside_target/bar.json" ]
 }

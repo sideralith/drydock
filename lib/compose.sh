@@ -829,10 +829,12 @@ seed_session_config_dir() {
 # Behaviour:
 #   - Absent/empty overlay → silent return 0 (default for every non-user).
 #   - Two-pass validate-then-copy: pass 1 checks every entry (symlinks, INV-2
-#     forbidden basenames, type-collisions, unsupported entries) and aborts
-#     via err on the FIRST violation — before anything is copied.  Pass 2 runs
-#     only after every entry passes, and does mkdir -p / cp -p.  This prevents
-#     partial-apply: no file is ever written when the overlay contains an error.
+#     forbidden basenames, type-collisions, symlinked destinations, unsupported
+#     entries) and aborts via err on the FIRST violation — before anything is
+#     copied.  Pass 2 runs only after every entry passes, and does mkdir -p /
+#     cp -p.  Validation errors (Pass 1) are caught before any write; an I/O
+#     failure mid-Pass-2 still aborts fail-loud, and the next
+#     seed_session_config_dir re-seed's rm -rf clears any partial state.
 #   - projects/ subtree is pruned by find (-type d -prune); it is never
 #     traversed or copied (shadowed by the :rw sub-mount, INV-2 carve-out).
 #   - Any scope violation is fail-loud: err names the offending path and
@@ -840,14 +842,16 @@ seed_session_config_dir() {
 apply_claude_overlay() {
 	local session_dir="$1"
 	[ -n "$session_dir" ] || return 0
+	# Normalise trailing slash FIRST so _root is canonical before any test.
+	local _root="${HOST_CLAUDE_OVERLAY%/}"
 	# Fix #3 (symlinked overlay root): reject before the -d check, which follows
 	# symlinks.  find does not traverse into a symlinked start-point, so a
 	# symlinked root silently produces zero traversal — fail-loud instead.
-	[ -L "$HOST_CLAUDE_OVERLAY" ] && err "drydock: overlay root must not be a symlink: $HOST_CLAUDE_OVERLAY"
-	[ -d "$HOST_CLAUDE_OVERLAY" ] || return 0
-	# Normalise trailing slash once so _rel stripping is always correct.
-	local _root="${HOST_CLAUDE_OVERLAY%/}"
-	local _entry _rel _dest _tmp
+	# Test against _root (not the raw constant) so a trailing slash cannot make
+	# [ -L ] dereference and return false.
+	[ -L "$_root" ] && err "drydock: overlay root must not be a symlink: $_root"
+	[ -d "$_root" ] || return 0
+	local _entry _rel _dest _tmp _check
 	local -a _entries
 	# Capture find output to a temp file so we can check find's exit status
 	# (process-substitution silently eats it).  Prune the projects/ subtree so
@@ -878,6 +882,19 @@ apply_claude_overlay() {
 			;;
 		esac
 		_dest="$session_dir/$_rel"
+		# Write-escape guard: reject when any path component of _dest within
+		# $session_dir is a symlink.  mkdir -p and cp -p follow every component,
+		# so a symlinked ancestor (e.g. a cp -a-preserved prototype symlink at
+		# $session_dir/foo -> /outside) writes through to the host filesystem.
+		# Walk from leaf up to (but not including) $session_dir, testing [ -L ]
+		# at each step — one loop covers both leaf and ancestor-symlink vectors.
+		_check="$_dest"
+		while [ "$_check" != "$session_dir" ] && [ ${#_check} -gt ${#session_dir} ]; do
+			if [ -L "$_check" ]; then
+				err "drydock: overlay target '$_rel' resolves through a symlink at the session dir — refusing to write outside the session dir"
+			fi
+			_check="$(dirname "$_check")"
+		done
 		# Detect type collision between overlay entry and seeded target.
 		# Fail-loud rather than silently producing the wrong result.
 		if [ -d "$_entry" ] && [ -f "$_dest" ]; then

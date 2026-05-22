@@ -281,9 +281,10 @@ would require a dependency on `jq` in the host's seeding path and non-trivial me
 semantics. Format A is sufficient for the primary use case (plugin config files that
 do not already exist in the prototype). Format B is deferred until concrete demand.
 
-**Scope limit and INV-2 carve-out**: each entry in the overlay is validated before
-copy in a single `find` pass. The validation rejects three classes of entries and
-aborts `drydock run` before container start (fail-loud, named path):
+**Scope limit and INV-2 carve-out**: each entry in the overlay is validated in
+full before any copy runs (two-pass: every entry is validated, then all entries
+are copied). The validation rejects three classes of entries and aborts
+`drydock run` before container start (fail-loud, named path):
 - **Symlinks**: rejected outright. The use case (plugin config files) needs no
   symlinks; rejecting them eliminates the path-resolution bypass class without
   building a `realpath` engine. A symlink named `foo.json` pointing at
