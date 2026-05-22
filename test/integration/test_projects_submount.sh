@@ -26,10 +26,13 @@
 # confirm the sub-mount is the same backing store (shared-store persistence
 # across two distinct container invocations proves the mount is correct).
 #
-# CI wiring note: if a GitHub Actions workflow exists, add this as a separate job
-# with `RUN_INTEGRATION: 1` and Docker available. For now this is a local-only
-# pre-PR gate — run it before merging changes to docker-compose.yml or the
-# compose volume list.
+# CI wiring note: this test is LOCAL-ONLY and cannot run in GitHub Actions.
+# docker-compose.yml uses `network_mode: host`, which maps to the GHA runner's
+# container network namespace rather than a bare Linux host — `docker compose run`
+# with that mode produces unreliable results in DinD CI environments. The smoke
+# workflow explicitly documents the same limitation for `drydock run`. Run this
+# test locally before merging changes to docker-compose.yml or the compose volume
+# list, or on a self-hosted runner with true host networking.
 set -euo pipefail
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
