@@ -554,3 +554,44 @@ STUB
 	# the session dir.
 	[ ! -e "$outside_target/bar.json" ]
 }
+
+# ── Case 25: _dest leaf symlink → write-escape guard ─────────────────────────
+# Complements Case 24 (ancestor-symlink vector).  The write-escape guard's
+# while loop initialises _check="$_dest" and tests [ -L ] on the leaf BEFORE
+# the first dirname — so a pre-seeded symlink AT the destination leaf (not an
+# ancestor directory) is also caught.
+#
+# Scenario: the session dir already has $SESSION_DIR/locked.json as a symlink
+# pointing to a file OUTSIDE the session dir; the overlay supplies a regular
+# file named locked.json.  The guard must block the write before cp -p follows
+# the symlink and overwrites the outside target.
+#
+# A future refactor that changed the loop to start at dirname "$_dest" would
+# silently pass Cases 8/16/24 while reopening this leaf vector — this test
+# makes that regression immediately visible.
+
+@test "apply_claude_overlay: symlink at session-dir leaf → write-escape blocked, exits non-zero, outside target untouched" {
+	mkdir -p "$OVERLAY_DIR"
+	printf 'payload' >"$OVERLAY_DIR/locked.json"
+
+	# Pre-seed the outside target directory and a canary file to verify it is
+	# not touched.
+	local outside_dir="$BATS_TEST_TMPDIR/outside"
+	mkdir -p "$outside_dir"
+	# The outside file does NOT exist yet — assert it remains absent after the
+	# blocked write.  (Absence is a stronger assertion than "content unchanged"
+	# because cp -p would create it if the guard fails.)
+
+	# Simulate a cp -a-preserved prototype leaf symlink: $SESSION_DIR/locked.json
+	# is a symlink pointing at a path OUTSIDE the session dir.
+	ln -s "$outside_dir/locked.json" "$SESSION_DIR/locked.json"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must fail: the overlay destination is itself a symlink.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+
+	# Security property: the outside target was NOT written through.
+	[ ! -e "$outside_dir/locked.json" ]
+}
