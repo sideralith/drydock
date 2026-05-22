@@ -411,12 +411,13 @@ STUB
 	[[ "$output" == *"drydock:"* ]]
 }
 
-# ── Case 20: temp-file cleanup on fail-loud abort ────────────────────────────
-# When apply_claude_overlay aborts via err (exit 1), the mktemp temp file must
-# not be left behind in TMPDIR.  We snapshot the TMPDIR entry count before and
-# verify it does not increase after an abort triggered by a forbidden entry.
+# ── Case 20: temp file removed before validation loop ────────────────────────
+# The mktemp temp file is rm -f'd immediately after mapfile reads all entries
+# into the _entries array — BEFORE the validation loop.  This test documents
+# that invariant: a forbidden entry causes err+exit, but the temp file was
+# already gone before the loop ran, so no leak is possible.
 
-@test "apply_claude_overlay: temp file cleaned up on fail-loud abort (forbidden .claude.json)" {
+@test "apply_claude_overlay: temp file removed before validation loop (forbidden .claude.json)" {
 	mkdir -p "$OVERLAY_DIR"
 	printf '{}' >"$OVERLAY_DIR/.claude.json"   # will trigger err
 
@@ -436,7 +437,7 @@ STUB
 	[ "$after" -eq "$before" ]
 }
 
-# ── Case 14 (strengthened): unreadable subdir — session dir gets zero files ──
+# ── Case 21 (strengthened): unreadable subdir — session dir gets zero files ──
 # Extends Case 14: not only must the abort be non-zero, but the session dir
 # must receive zero files (abort must happen before any copy completes).
 
@@ -460,4 +461,64 @@ STUB
 	local count
 	count=$(find "$SESSION_DIR" -mindepth 1 | wc -l)
 	[ "$count" -eq 0 ]
+}
+
+# ── Case 22: two-pass proof — valid file NOT copied when overlay also has forbidden file ──
+# The key correctness test for the two-pass validate-then-copy split.
+# An overlay with a valid file alongside a forbidden .claude.json must:
+#   (a) abort non-zero, AND
+#   (b) NOT copy the valid file into the session dir.
+# On the single-pass code, find's readdir() order determines whether the valid
+# file is copied before the forbidden one is reached — a filesystem-dependent
+# partial-apply race.  With multiple valid siblings alongside the forbidden
+# entry, the probability that ALL land after .claude.json in readdir order is
+# low, making the single-pass bug reliably observable as a RED test.
+# After the two-pass split this must be GREEN: validation completes for every
+# entry before any copy runs.
+
+@test "apply_claude_overlay: two-pass proof — valid files NOT copied when overlay contains forbidden .claude.json" {
+	mkdir -p "$OVERLAY_DIR"
+	# Multiple valid files alongside the forbidden entry — ensures readdir
+	# order cannot accidentally hide the single-pass bug.
+	printf 'good-a' >"$OVERLAY_DIR/good-a.json"
+	printf 'good-b' >"$OVERLAY_DIR/good-b.json"
+	printf 'good-c' >"$OVERLAY_DIR/good-c.json"
+	printf 'good-d' >"$OVERLAY_DIR/good-d.json"
+	printf '{}' >"$OVERLAY_DIR/.claude.json"   # forbidden — triggers err
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must have failed.
+	[ "$status" -ne 0 ]
+
+	# None of the valid files must have been copied (two-pass: validate ALL
+	# entries before copying ANY — partial-apply is not allowed).
+	[ ! -e "$SESSION_DIR/good-a.json" ]
+	[ ! -e "$SESSION_DIR/good-b.json" ]
+	[ ! -e "$SESSION_DIR/good-c.json" ]
+	[ ! -e "$SESSION_DIR/good-d.json" ]
+}
+
+# ── Case 23: depth-1 regular file named "projects" → type-collision err ────────
+# seed_session_config_dir pre-creates projects/ as a directory in the session
+# dir (empty mount-point for the shared :rw sub-mount).  A regular FILE named
+# "projects" in the overlay collides with that pre-seeded directory → err.
+# The find prune (-path "$_root/projects" -type d -prune) is -type d gated:
+# it only prunes a DIRECTORY named projects at the overlay root.  A regular FILE
+# named projects is NOT pruned — it passes through to the type-collision guard.
+
+@test "apply_claude_overlay: depth-1 regular file named 'projects' → type-collision err (collides with seeded projects/ dir)" {
+	mkdir -p "$OVERLAY_DIR"
+	# A regular FILE named "projects" at the overlay root.
+	printf 'not-a-dir' >"$OVERLAY_DIR/projects"
+
+	# Mirror seed_session_config_dir: pre-create projects/ as a directory.
+	mkdir -p "$SESSION_DIR/projects"
+
+	run apply_claude_overlay "$SESSION_DIR"
+
+	# Must fail: overlay file 'projects' collides with seeded directory 'projects/'.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"drydock:"* ]]
+	[[ "$output" == *"projects"* ]]
 }

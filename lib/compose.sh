@@ -828,12 +828,13 @@ seed_session_config_dir() {
 #
 # Behaviour:
 #   - Absent/empty overlay → silent return 0 (default for every non-user).
-#   - Single validated find-pass: symlinks rejected (err), top-level
-#     .claude.json/.credentials.json rejected (err — INV-2 forbidden set),
-#     non-regular entries rejected (err), projects/ subtree silently skipped
-#     (shadowed by the :rw sub-mount, same rule as the prototype copy loop).
-#   - Directories mirrored with mkdir -p; regular files copied with cp -p
-#     (whole-file overwrite of the seeded copy).
+#   - Two-pass validate-then-copy: pass 1 checks every entry (symlinks, INV-2
+#     forbidden basenames, type-collisions, unsupported entries) and aborts
+#     via err on the FIRST violation — before anything is copied.  Pass 2 runs
+#     only after every entry passes, and does mkdir -p / cp -p.  This prevents
+#     partial-apply: no file is ever written when the overlay contains an error.
+#   - projects/ subtree is pruned by find (-type d -prune); it is never
+#     traversed or copied (shadowed by the :rw sub-mount, INV-2 carve-out).
 #   - Any scope violation is fail-loud: err names the offending path and
 #     aborts drydock run before container start. Never silent-skip.
 apply_claude_overlay() {
@@ -857,10 +858,12 @@ apply_claude_overlay() {
 		err "drydock: overlay traversal failed under '$_root' — unreadable subtree? (check permissions)"
 	fi
 	# Fix #1 (temp file leaks): read ALL entries into an array now, then delete
-	# the temp file immediately — before the validation/copy loop can err+exit.
+	# the temp file immediately — before any validation or copy loop can err+exit.
 	# This guarantees the temp file is gone regardless of which err path fires.
 	mapfile -d '' _entries <"$_tmp"
 	rm -f "$_tmp"
+	# Pass 1 — validate every entry BEFORE copying anything.
+	# Any violation aborts immediately via err, leaving the session dir untouched.
 	for _entry in "${_entries[@]}"; do
 		# Symlink check FIRST — -f/-d follow links; -L does not.
 		if [ -L "$_entry" ]; then
@@ -874,11 +877,6 @@ apply_claude_overlay() {
 			err "drydock: overlay cannot deliver '$_rel' — .claude.json and .credentials.json are forbidden by INV-2; remove it from ~/.config/drydock/claude-overlay/"
 			;;
 		esac
-		# Gate the silent projects/ skip on [ -d ] — a non-directory entry
-		# named projects falls through to type-collision or unsupported-entry handling.
-		if [ -d "$_entry" ] && { [ "$_rel" = projects ] || [[ "$_rel" == projects/* ]]; }; then
-			continue
-		fi
 		_dest="$session_dir/$_rel"
 		# Detect type collision between overlay entry and seeded target.
 		# Fail-loud rather than silently producing the wrong result.
@@ -888,14 +886,22 @@ apply_claude_overlay() {
 		if [ -f "$_entry" ] && [ -d "$_dest" ]; then
 			err "drydock: overlay file '$_rel' collides with seeded directory at '$_dest' — type mismatch; remove the conflicting overlay entry"
 		fi
+		# Reject anything that is neither a directory nor a regular file (e.g.
+		# FIFOs, device nodes, sockets).  Must be in pass 1 so unsupported
+		# entries abort before any copy runs — not mid-copy.
+		if [ ! -d "$_entry" ] && [ ! -f "$_entry" ]; then
+			err "drydock: overlay contains unsupported entry '$_entry' — only directories and regular files are allowed"
+		fi
+	done
+	# Pass 2 — copy.  Runs only after the entire array passed validation.
+	for _entry in "${_entries[@]}"; do
+		_rel="${_entry#"$_root"/}"
+		_dest="$session_dir/$_rel"
 		if [ -d "$_entry" ]; then
-			# Fix #2 (mkdir/cp fail-loud): guard copy operations with err.
 			mkdir -p "$_dest" || err "drydock: overlay failed to create directory '$_dest'"
-		elif [ -f "$_entry" ]; then
+		else
 			mkdir -p "$(dirname "$_dest")" || err "drydock: overlay failed to create directory '$(dirname "$_dest")'"
 			cp -p "$_entry" "$_dest" || err "drydock: overlay failed to copy '$_rel' into session dir"
-		else
-			err "drydock: overlay contains unsupported entry '$_entry' — only directories and regular files are allowed"
 		fi
 	done
 }
