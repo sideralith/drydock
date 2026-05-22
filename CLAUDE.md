@@ -52,7 +52,9 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   seeded from the `~/.claude-container/` prototype), `~/.engram-container/`, **and the shared
   container-specific append-only conversation store at `~/.claude-container/projects/`** — never at
   the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`. The host's `~/.claude/`,
-  `~/.claude.json`, and `~/.engram/` MUST NEVER be mounted into the container.
+  `~/.claude.json`, and `~/.engram/` MUST NEVER be the source of the container's writable
+  Claude or engram state mount. (INV-3's deliberate `:ro` `~/.claude/hooks/` overlay is
+  not a state mount and is not affected by this prohibition.)
 - **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
   Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
   when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).

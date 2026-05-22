@@ -2451,12 +2451,17 @@ _make_prototype_with_projects() {
 
 # ── Phase 10: SR-10 doc grep assertions ──────────────────────────────────────
 
-@test "SR-10: CLAUDE.md contains append-only projects/ carve-out text" {
-	grep -q "append-only" "$DRYDOCK_HOME/CLAUDE.md"
-	grep -q "projects/" "$DRYDOCK_HOME/CLAUDE.md"
-}
+@test "SR-10: CLAUDE.md INV-2 section contains host-mount prohibition and append-only projects/ carve-out" {
+	# Extract only the INV-2 section (from '### INV-2' up to but not including '### INV-3')
+	# and assert BOTH anchors are present within that slice.  Greping the whole file would
+	# pass even if INV-2's text were deleted (phrases appear in other invariants).
+	local inv2_section
+	inv2_section="$(awk '/^### INV-2:/,/^### INV-3:/{if (/^### INV-3:/) exit; print}' "$DRYDOCK_HOME/CLAUDE.md")"
 
-@test "SR-10: CLAUDE.md still prohibits mounting host ~/.claude/" {
-	# The absolute prohibition on host ~/.claude/ must remain in INV-2 rule text.
-	grep -qE "MUST NEVER|must never" "$DRYDOCK_HOME/CLAUDE.md"
+	# Anchor 1: the scoped prohibition on host paths as writable state mount source
+	echo "$inv2_section" | grep -qE "MUST NEVER be the source of the container.s writable"
+
+	# Anchor 2: the append-only projects/ carve-out
+	echo "$inv2_section" | grep -q "append-only"
+	echo "$inv2_section" | grep -q "projects/"
 }
