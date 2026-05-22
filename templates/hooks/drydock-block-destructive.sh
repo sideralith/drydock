@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 # drydock-block-destructive.sh — Claude Code PreToolUse hook for drydock containers.
 #
-# Blocks the six residue rule classes that the declarative deny layer cannot
+# Blocks the residue rule classes that the declarative deny layer cannot
 # express without false-positives. All other rules ship as Bash(...) deny patterns
-# in managed-settings drop-ins (10-git-safety.json, 30-os-safety.json).
+# in managed-settings drop-ins (10-git-safety.json, 30-os-safety.json,
+# 50-prod-ops.json).
 #
 # Rule residue (ADR-7):
 #   A1       — ssh to a production host (ssh token AND prod/production hostname)
+#   A2       — kubectl/helm destructive verb (delete/destroy/uninstall/drain)
+#              against a production context. Needs TWO conditions: the verb AND
+#              a prod-scoped --context / --kube-context / -n / --namespace value.
+#              A bare "prod" token (e.g. a resource name "prod-api") does NOT
+#              block — the prod marker must be a context/namespace flag value.
+#   A3       — a DB CLI (psql/mysql/mongo/mongosh/redis-cli) whose -h/--host
+#              value contains a prod/production token. localhost and dev hosts
+#              are not blocked. Connection-URI forms are a documented non-goal.
+#   A4       — terraform apply/destroy. The deny layer covers the common forms
+#              (terraform apply* / terraform destroy*); this rule backstops
+#              forms with intervening flags (terraform -chdir=… destroy).
 #   C1-res   — rm with ANY recursive flag form (-r/-R/-rf/-Rf/-fr/-fR and bundled)
 #              targeting a system path root (/, /etc, /usr, /var, /boot, /opt,
 #              /lib, /lib32, /lib64, /sbin, /bin, /sys, /proc, /dev, /root, /home).
@@ -15,6 +27,10 @@
 #              forms that cannot be expressed as Bash(...) globs because *-r* only
 #              matches a literal lowercase 'r'. The deny layer covers *-r* and *-R*
 #              for the common flag orderings; this rule catches the residue.
+#   C7-res   — sudo chmod with a world-writable mode: a numeric mode whose final
+#              octal digit (others) carries the write bit (2/3/6/7), or a symbolic
+#              clause granting write to 'o'/'a'. A Bash(...) glob cannot inspect
+#              the others write bit. chmod WITHOUT sudo is out of scope.
 #   C12      — fork bomb (:() { :|: & };: shape)
 #   C17      — rm of . or .git (anchored: no extension, no trailing path component)
 #   C18      — rm with ../ traversal or bare .. target
@@ -225,6 +241,140 @@ for _seg in "${_segments[@]}"; do
 		if [[ "$_seg" =~ [[:space:]]\.\.(/|[[:space:]]|$) ]]; then
 			echo "drydock guardrail: rm with parent-directory traversal is blocked (C18)." >&2
 			echo "Specify the target with an absolute path or relative to the project root." >&2
+			exit 2
+		fi
+	fi
+done
+
+# ── Rule A2: kubectl/helm destructive verb against a production context ──────
+# Block: a kubectl/helm invocation that has BOTH a destructive verb
+# (delete/destroy/uninstall/drain) AND a prod-scoped context. The prod marker
+# is the VALUE of a --context / --kube-context / --namespace / -n flag — not a
+# bare "prod" token. This keeps "kubectl delete pod prod-api -n dev" (prod in a
+# resource name, dev namespace) out of the block set.
+# Allow: kubectl get -n prod (read-only verb); kubectl delete pod foo -n dev.
+#
+# The flag/value separator is [[:space:]=]* (zero-or-more) so the attached
+# short-flag form '-nprod' is matched alongside '-n prod' and '-n=prod'.
+# Case-insensitive (nocasematch) so 'PROD'/'Production' match, mirroring A1.
+#
+# The match is checked per pipe-part, not per whole segment: a destructive
+# verb in a command piped FROM a kubectl invocation (kubectl get … --context=prod
+# | grep delete) must not be read as a kubectl subcommand. Splitting on '|'
+# keeps the verb, the kubectl token, and the prod context within one real
+# invocation. The verb itself is NOT position-anchored: kubectl accepts global
+# flags before the subcommand (kubectl -n prod delete …), and anchoring to the
+# token after kubectl+flags would miss that form (the '-n' value 'prod' sits
+# between the flag and the verb). Residual: a destructive verb word used as a
+# positional argument (a resource literally named 'delete') in a prod-context
+# invocation still blocks — accepted accident-floor noise, same class as A1.
+_a2_match() (
+	local seg="$1"
+	shopt -s nocasematch
+	[[ "$seg" =~ (^|[[:space:]])(kubectl|helm)[[:space:]] ]] &&
+		[[ "$seg" =~ [[:space:]](delete|destroy|uninstall|drain)([[:space:]]|$) ]] &&
+		[[ "$seg" =~ [[:space:]](--context|--kube-context|--namespace|-n)[[:space:]=]*[^[:space:]]*prod ]]
+)
+
+for _seg in "${_segments[@]}"; do
+	IFS='|' read -ra _a2_parts <<<"$_seg"
+	for _a2_part in "${_a2_parts[@]}"; do
+		if _a2_match "$_a2_part"; then
+			echo "drydock guardrail: a kubectl/helm destructive verb against a production context is blocked (A2)." >&2
+			echo "Target a non-production context, or perform production changes through your deployment pipeline." >&2
+			exit 2
+		fi
+	done
+done
+
+# ── Rule A3: database CLI pointed at a production host ───────────────────────
+# Block: a DB CLI (psql/mysql/mongo/mongosh/redis-cli) whose -h/--host value
+# contains a prod/production token.
+# Allow: a DB CLI against localhost, a dev host, or staging; a DB name that
+# merely contains "prod" with no -h/--host flag.
+#
+# Separator [[:space:]=]* (zero-or-more) so the attached form '-hprod-db' is
+# matched alongside '-h prod-db' and '--host=prod-db'. Case-insensitive
+# (nocasematch) so an uppercase 'PROD-db' host token matches, mirroring A1.
+#
+# Per-segment: the DB CLI and the -h/--host flag must belong to the same call.
+_a3_match() (
+	local seg="$1"
+	shopt -s nocasematch
+	[[ "$seg" =~ (^|[[:space:]])(psql|mysql|mongo|mongosh|redis-cli)[[:space:]] ]] &&
+		[[ "$seg" =~ [[:space:]](-h|--host)[[:space:]=]*[^[:space:]]*prod ]]
+)
+
+for _seg in "${_segments[@]}"; do
+	if _a3_match "$_seg"; then
+		echo "drydock guardrail: a database CLI pointed at a production host is blocked (A3)." >&2
+		echo "Connect to a local or development database instead." >&2
+		exit 2
+	fi
+done
+
+# ── Rule A4: terraform apply/destroy ─────────────────────────────────────────
+# Block: terraform with an apply or destroy subcommand. The deny layer covers
+# the leading forms (terraform apply* / terraform destroy*); this rule is the
+# backstop for forms with intervening flags (terraform -chdir=… destroy).
+# Allow: terraform plan / output / validate / show (read-only subcommands);
+# "apply"/"destroy" appearing as a positional argument rather than the
+# subcommand (terraform show apply, terraform plan -out apply).
+#
+# The subcommand is anchored: 'terraform', then zero or more flag tokens
+# (-chdir=…), then exactly the next token must be apply/destroy. This keeps
+# apply/destroy as a non-subcommand argument or filename out of the block set.
+#
+# Per-segment: the terraform token and the subcommand must share a segment.
+for _seg in "${_segments[@]}"; do
+	if [[ "$_seg" =~ (^|[[:space:]])terraform[[:space:]]+(-[^[:space:]]+[[:space:]]+)*(apply|destroy)([[:space:]]|$) ]]; then
+		echo "drydock guardrail: terraform apply/destroy is blocked (A4)." >&2
+		echo "Use 'terraform plan' to preview changes; apply through your infrastructure pipeline." >&2
+		exit 2
+	fi
+done
+
+# ── Rule C7-residue: sudo chmod with a world-writable mode ───────────────────
+# Block: sudo chmod whose mode is world-writable —
+#   - numeric: the final octal digit (others) carries the write bit, i.e. the
+#     last digit of a 3- or 4-digit octal mode is one of 2/3/6/7;
+#   - symbolic: a clause granting write to 'others' or 'all' (o+w, a+w, ugo+w,
+#     o=rw, …). A 'u'/'g'-only clause (u+w, g+w) is NOT world-writable.
+# Allow: sudo chmod 755 / 644 / 775 (no others-write bit); sudo chmod o-w
+# (removes write); chmod WITHOUT sudo (out of scope per #76).
+#
+# A Bash(...) deny glob cannot inspect the others write bit — this is the hook
+# residue for the otherwise glob-expressible C7 sudo set in 30-os-safety.json.
+#
+# A 'chmod --reference=FILE' invocation carries no literal mode (the mode is
+# copied from FILE), so there is nothing for this rule to evaluate — it is
+# skipped, which also avoids reading a clause-shaped target filename as a mode.
+#
+# Per-segment: the sudo token, the chmod token, and the mode share a segment.
+for _seg in "${_segments[@]}"; do
+	if [[ "$_seg" =~ (^|[[:space:]])sudo[[:space:]] ]] &&
+		[[ "$_seg" =~ [[:space:]]chmod[[:space:]] ]] &&
+		! [[ "$_seg" =~ [[:space:]]--reference ]]; then
+		# Numeric: 3- or 4-digit octal mode whose final digit has the write bit.
+		# Anchored to the mode argument — 'chmod', then zero or more flag tokens
+		# (-R, -v, --reference=…), then the mode. Anchoring is what keeps a
+		# numerically-named file argument (sudo chmod 755 222) out of the match:
+		# the mode in that command is 755 (no others-write bit), and 222 is not
+		# at the mode position.
+		if [[ "$_seg" =~ (^|[[:space:]])chmod[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-7][0-7][0-7]?[2367]([[:space:]]|$) ]]; then
+			echo "drydock guardrail: sudo chmod with a world-writable mode is blocked (C7-residue)." >&2
+			echo "Grant the narrowest permissions needed — a world-writable mode lets any user modify the target." >&2
+			exit 2
+		fi
+		# Symbolic: a clause whose who-list includes 'o' or 'a' and grants 'w'.
+		# Anchored to the mode argument the same way the numeric branch is —
+		# 'chmod', zero or more flag tokens, then the mode token. The leading
+		# [^[:space:]]* lets the clause sit anywhere INSIDE the mode token, so a
+		# comma-joined form (u=rw,o+w) still matches, while a filename argument
+		# that resembles a clause (sudo chmod 644 a+w) does not.
+		if [[ "$_seg" =~ (^|[[:space:]])chmod[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[^[:space:]]*[ugoa]*[oa][ugoa]*[+=][rwxXst]*w ]]; then
+			echo "drydock guardrail: sudo chmod with a world-writable mode is blocked (C7-residue)." >&2
+			echo "Grant the narrowest permissions needed — a world-writable mode lets any user modify the target." >&2
 			exit 2
 		fi
 	fi

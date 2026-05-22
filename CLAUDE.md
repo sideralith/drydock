@@ -148,7 +148,7 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Where this lives in code**: the `${HOME}/.claude/hooks` `:ro` bind-mount line in `docker-compose.yml`;
   `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/` into the image);
   `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`, `10-git-safety.json`,
-  `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`);
+  `20-hooks.json`, `30-os-safety.json`, `40-guardrails-hook.json`, `50-prod-ops.json`);
   `templates/hooks/drydock-block-destructive.sh` (PreToolUse guardrail hook, RO bind-mount).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
