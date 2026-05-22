@@ -62,6 +62,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-session config (INV-2).
 
 ### Fixed
+- **Conversation history destroyed on the next `drydock run` (data loss).**
+  `gc_orphan_session_dirs` (`lib/compose.sh`) prunes per-session
+  `~/.claude-container-<disc>/` dirs whose container is no longer in
+  `docker ps -a`. Because `drydock run` uses `docker compose run --rm`, an
+  `/exit`'d container leaves `docker ps -a` immediately — so the next
+  `drydock run` saw the exited session's dir as orphaned and `rm -rf`'d it.
+  That dir holds `projects/<slug>/<uuid>.jsonl`, the durable conversation
+  history, so every conversation was destroyed on the next run and
+  `claude --resume` had been broken across sessions since v0.2.0. Before
+  pruning, the GC now harvests each orphan dir's `projects/` tree into the
+  prototype `~/.claude-container/projects/`, copying each append-only
+  `.jsonl` only when the prototype has no copy or the harvested one is
+  larger — so a stale shorter copy can never clobber a more complete one.
+  New sessions, seeded from the prototype, inherit it and `--resume` works
+  again. Hotfix for #68 (root fix tracked separately).
 - **Root-owned `~/.cache` and `~/.config` inside the container.** Docker
   creates any missing parent directory of a bind-mount target as `root:root`.
   The base compose mounts `~/.config/gh` and the ccstatusline overlay mounts
