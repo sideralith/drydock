@@ -102,12 +102,29 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   unreliable-lock filesystem). Two concurrent containers write DIFFERENT `<uuid>.jsonl` files;
   there is no shared writer of any single file. The carve-out is scoped to `projects/` only;
   all other INV-2 protections remain absolute.
+- **Carve-out — host-authored container-config overlay**: `~/.config/drydock/claude-overlay/` is
+  an OPTIONAL host-side directory that mirrors the `~/.claude/` tree. When present, drydock copies
+  it whole-file and recursively on top of the freshly re-seeded per-session
+  `~/.claude-container-<disc>/` dir — host-authored, container-consumed, unidirectional. It is an
+  intentional, scoped exception to per-session prototype-only seeding. It is safe because none of
+  INV-2's four hazards apply: (1) the `~/.claude.json` last-writer-wins clobber requires
+  read-modify-write on one shared file — the overlay is a one-way host→session-dir copy with a
+  single writer per session, and `~/.claude.json` is in the overlay's forbidden set (rejected
+  fail-loud); (2) the `.credentials.json` OAuth refresh race requires the OAuth token file —
+  `.credentials.json` is likewise in the forbidden set; (3) the divergent MCP-filter mutation is a
+  RMW on the host's live `~/.claude.json` — the overlay never writes the host's `~/.claude/` at
+  all (unidirectional) and cannot deliver `~/.claude.json`; (4) the `engram.db` WAL corruption
+  requires a SQLite database on an unreliable-lock filesystem — the overlay carries plain config
+  files only. The scope limit is structural: the overlay mechanism rejects `~/.claude.json`,
+  `.credentials.json`, and any symlink fail-loud, aborting `drydock run` before container start.
+  All other INV-2 protections remain absolute.
 - **Where this lives in code**: the `HOST_CLAUDE` / `CONTAINER_CLAUDE` / `*_JSON` / `*_ENGRAM` path-constants block in `lib/paths.sh`;
   the `${DRYDOCK_SESSION_CLAUDE_DIR}` / `${DRYDOCK_SESSION_CLAUDE_JSON}` mount lines in `docker-compose.yml`;
   the `${HOME}/.claude-container/projects:${HOME}/.claude/projects:rw` sub-mount line in
   `docker-compose.yml`; `export_compose_env()` in `lib/compose.sh` (generates and exports the
   per-session discriminator paths); `migrate_projects_to_shared_store()` in `lib/compose.sh`
-  (one-time sentinel-gated upgrade sweep).
+  (one-time sentinel-gated upgrade sweep); `apply_claude_overlay()` in `lib/compose.sh` (the
+  overlay step in `seed_session_config_dir`); the `HOST_CLAUDE_OVERLAY` constant in `lib/paths.sh`.
 - **Deep dive**: [docs/architecture.md](docs/architecture.md)
 
 ### INV-3: Hooks Read-Only Overlay

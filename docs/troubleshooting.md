@@ -44,6 +44,39 @@ environment variable; no bind-mount of the token file is ever created.
 
 See also: [docs/security.md](security.md#claude-oauth-token-docker-composeoauthyml).
 
+## Container config edits revert every run (plugin config, MCP entries, settings)
+
+Config changes made inside the container — installing a plugin, editing
+`settings.json`, adding an MCP server entry — do not persist across sessions by
+default. Each `drydock run` seeds a fresh per-session `~/.claude-container-<disc>/`
+directory from the prototype. Changes written inside the container stay in the
+ephemeral session dir and are discarded when the session ends.
+
+**Fix — use the persistent overlay:**
+
+Place the files you want preserved into `~/.config/drydock/claude-overlay/`,
+mirroring the layout of `~/.claude/`. drydock copies them on top of the freshly-seeded
+session dir on every `drydock run` — before Claude Code starts.
+
+```bash
+mkdir -p ~/.config/drydock/claude-overlay/
+# Example: persist a plugin's config
+cp ~/.claude/plugins/my-plugin/config.json \
+   ~/.config/drydock/claude-overlay/plugins/my-plugin/config.json
+```
+
+The overlay is **host → container only**. Changes made inside the container are not
+written back. To update a persisted file, edit the copy under
+`~/.config/drydock/claude-overlay/` on the host.
+
+**Restrictions** — the overlay rejects and aborts with an error if:
+
+- `~/.claude.json` or `.credentials.json` appear at the overlay root (INV-2 hazard).
+- Any entry is a symlink (at any depth) — copy the real file instead.
+- Any entry is not a regular file or directory (FIFOs, device nodes, etc.).
+
+See also the [architecture.md INV-2 deep-dive](architecture.md) for the full rationale.
+
 ## "Claude configuration file not found at: ~/.claude.json" / settings don't persist
 
 Claude Code reads config from TWO locations: the `~/.claude/` **directory**

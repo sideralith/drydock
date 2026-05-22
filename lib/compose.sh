@@ -811,6 +811,116 @@ seed_session_config_dir() {
 
 	# Remove the staleness marker — it belongs to the prototype, not sessions.
 	rm -f "$session_dir/.drydock-last-sync"
+
+	# Apply the persistent host-authored container-config overlay (issue #77).
+	# Whole-file recursive copy on top of the freshly re-seeded dir; scope-
+	# enforced (no .claude.json / .credentials.json, no symlinks) — see INV-2
+	# carve-out. No-op when ~/.config/drydock/claude-overlay/ is absent.
+	apply_claude_overlay "$session_dir"
+}
+
+# apply_claude_overlay — apply the persistent host-authored container-config
+# overlay (~/.config/drydock/claude-overlay/) on top of a freshly-seeded
+# per-session Claude config dir. Issue #77. Format A: whole-file recursive copy.
+#
+# Arguments:
+#   $1 — session_dir: the per-session ~/.claude-container-<disc>/ dir
+#
+# Behaviour:
+#   - Absent/empty overlay → silent return 0 (default for every non-user).
+#   - Two-pass validate-then-copy: pass 1 checks every entry (symlinks, INV-2
+#     forbidden basenames, type-collisions, symlinked destinations, unsupported
+#     entries) and aborts via err on the FIRST violation — before anything is
+#     copied.  Pass 2 runs only after every entry passes, and does mkdir -p /
+#     cp -p.  Validation errors (Pass 1) are caught before any write; an I/O
+#     failure mid-Pass-2 still aborts fail-loud, and the next
+#     seed_session_config_dir re-seed's rm -rf clears any partial state.
+#   - projects/ subtree is pruned by find (-type d -prune); it is never
+#     traversed or copied (shadowed by the :rw sub-mount, INV-2 carve-out).
+#   - Any scope violation is fail-loud: err names the offending path and
+#     aborts drydock run before container start. Never silent-skip.
+apply_claude_overlay() {
+	local session_dir="$1"
+	[ -n "$session_dir" ] || return 0
+	# Normalise trailing slash FIRST so _root is canonical before any test.
+	local _root="${HOST_CLAUDE_OVERLAY%/}"
+	# Fix #3 (symlinked overlay root): reject before the -d check, which follows
+	# symlinks.  find does not traverse into a symlinked start-point, so a
+	# symlinked root silently produces zero traversal — fail-loud instead.
+	# Test against _root (not the raw constant) so a trailing slash cannot make
+	# [ -L ] dereference and return false.
+	[ -L "$_root" ] && err "drydock: overlay root must not be a symlink: $_root"
+	[ -d "$_root" ] || return 0
+	local _entry _rel _dest _tmp _check
+	local -a _entries
+	# Capture find output to a temp file so we can check find's exit status
+	# (process-substitution silently eats it).  Prune the projects/ subtree so
+	# we never descend it only to skip every entry (perf hardening).
+	_tmp=$(mktemp) || err "drydock: cannot create temp file for overlay traversal (is \$TMPDIR writable?)"
+	if ! find "$_root" -mindepth 1 \( -path "$_root/projects" -type d -prune \) -o -print0 >"$_tmp"; then
+		rm -f "$_tmp"
+		err "drydock: overlay traversal failed under '$_root' — unreadable subtree? (check permissions)"
+	fi
+	# Fix #1 (temp file leaks): read ALL entries into an array now, then delete
+	# the temp file immediately — before any validation or copy loop can err+exit.
+	# This guarantees the temp file is gone regardless of which err path fires.
+	mapfile -d '' _entries <"$_tmp"
+	rm -f "$_tmp"
+	# Pass 1 — validate every entry BEFORE copying anything.
+	# Any violation aborts immediately via err, leaving the session dir untouched.
+	for _entry in "${_entries[@]}"; do
+		# Symlink check FIRST — -f/-d follow links; -L does not.
+		if [ -L "$_entry" ]; then
+			err "drydock: overlay rejects symlink '$_entry' — symlinks are not allowed in ~/.config/drydock/claude-overlay/ (copy the real file instead)"
+		fi
+		_rel="${_entry#"$_root"/}"
+		# Forbidden set: depth-1 .claude.json / .credentials.json (INV-2).
+		# Depth-1 means _rel contains no slash — it is a direct overlay child.
+		case "$_rel" in
+		.claude.json | .credentials.json)
+			err "drydock: overlay cannot deliver '$_rel' — .claude.json and .credentials.json are forbidden by INV-2; remove it from ~/.config/drydock/claude-overlay/"
+			;;
+		esac
+		_dest="$session_dir/$_rel"
+		# Write-escape guard: reject when any path component of _dest within
+		# $session_dir is a symlink.  mkdir -p and cp -p follow every component,
+		# so a symlinked ancestor (e.g. a cp -a-preserved prototype symlink at
+		# $session_dir/foo -> /outside) writes through to the host filesystem.
+		# Walk from leaf up to (but not including) $session_dir, testing [ -L ]
+		# at each step — one loop covers both leaf and ancestor-symlink vectors.
+		_check="$_dest"
+		while [ "$_check" != "$session_dir" ] && [ ${#_check} -gt ${#session_dir} ]; do
+			if [ -L "$_check" ]; then
+				err "drydock: overlay target '$_rel' resolves through a symlink at the session dir — refusing to write outside the session dir"
+			fi
+			_check="$(dirname "$_check")"
+		done
+		# Detect type collision between overlay entry and seeded target.
+		# Fail-loud rather than silently producing the wrong result.
+		if [ -d "$_entry" ] && [ -f "$_dest" ]; then
+			err "drydock: overlay directory '$_rel' collides with seeded file at '$_dest' — type mismatch; remove the conflicting overlay entry"
+		fi
+		if [ -f "$_entry" ] && [ -d "$_dest" ]; then
+			err "drydock: overlay file '$_rel' collides with seeded directory at '$_dest' — type mismatch; remove the conflicting overlay entry"
+		fi
+		# Reject anything that is neither a directory nor a regular file (e.g.
+		# FIFOs, device nodes, sockets).  Must be in pass 1 so unsupported
+		# entries abort before any copy runs — not mid-copy.
+		if [ ! -d "$_entry" ] && [ ! -f "$_entry" ]; then
+			err "drydock: overlay contains unsupported entry '$_entry' — only directories and regular files are allowed"
+		fi
+	done
+	# Pass 2 — copy.  Runs only after the entire array passed validation.
+	for _entry in "${_entries[@]}"; do
+		_rel="${_entry#"$_root"/}"
+		_dest="$session_dir/$_rel"
+		if [ -d "$_entry" ]; then
+			mkdir -p "$_dest" || err "drydock: overlay failed to create directory '$_dest'"
+		else
+			mkdir -p "$(dirname "$_dest")" || err "drydock: overlay failed to create directory '$(dirname "$_dest")'"
+			cp -p "$_entry" "$_dest" || err "drydock: overlay failed to copy '$_rel' into session dir"
+		fi
+	done
 }
 
 # migrate_projects_to_shared_store — one-time sentinel-gated sweep that

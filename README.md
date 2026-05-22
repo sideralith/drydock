@@ -285,6 +285,43 @@ revoke it there. drydock has no API surface to do this server-side.
 
 See [docs/troubleshooting.md](docs/troubleshooting.md#claude-prompts-for-login-every-session) for the full setup walkthrough.
 
+## Persistent container config
+
+Config files placed inside the container under `~/.claude/` (MCP server entries,
+plugin configs, custom settings files) revert on every `drydock run` — the
+per-session config dir is re-seeded from the prototype each time. To persist a
+config file across all future runs, place it in the **container-config overlay**:
+
+```
+~/.config/drydock/claude-overlay/
+```
+
+This directory mirrors `~/.claude/` inside the container. Any file you place here
+is copied on top of the freshly-seeded config dir before the container starts, on
+every run — surviving re-seeds and garbage collection.
+
+**Example**: to pre-configure a Playwright MCP server for every container session:
+
+```bash
+mkdir -p ~/.config/drydock/claude-overlay/mcp-servers
+cp ~/.claude/mcp-servers/playwright.json ~/.config/drydock/claude-overlay/mcp-servers/
+```
+
+**Forbidden set** — these are rejected fail-loud (drydock aborts before container start,
+naming the offending path):
+
+| Forbidden | Reason |
+|-----------|--------|
+| `.claude.json` at overlay root | INV-2: last-writer-wins clobber hazard |
+| `.credentials.json` at overlay root | INV-2: OAuth refresh race hazard |
+| Symlinks (any depth) | Eliminates path-resolution bypass class |
+| Non-regular files (FIFOs, devices) | Only plain dirs and files are allowed |
+
+The overlay is **unidirectional**: host → container only. Files written inside the
+container to paths that came from the overlay are not written back to the overlay or
+to `~/.claude/` on the host. To stop applying a config, remove it from
+`~/.config/drydock/claude-overlay/`.
+
 ## Two rules to know
 
 1. **Skills/plugins/hooks installed on host need an explicit `drydock sync`.**
