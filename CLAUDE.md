@@ -154,7 +154,9 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Where this lives in code**: the `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks` `:ro` bind-mount line
   in `docker-compose.yml`; the `hooks` entry in `cmd_setup`'s `mkdir -p` list in
   `lib/commands.sh` (guarantees the prototype always has the subdir so Docker never has to
-  auto-create the bind-mount source as root); the prototype-copy loop in
+  auto-create the bind-mount source as root on fresh-init); `ensure_runtime_dirs` in
+  `lib/compose.sh` (unconditional `mkdir -p "$CONTAINER_CLAUDE/hooks"` — upgrade-path defense
+  for pre-existing prototypes that predate the hooks subdir); the prototype-copy loop in
   `seed_session_config_dir` in `lib/compose.sh` (propagates `hooks/` from the prototype into
   each per-session dir); `Dockerfile` (COPY+RUN block that bakes `templates/managed-settings.d/`
   into the image); `templates/managed-settings.d/` (policy drop-ins: `00-secrets.json`,

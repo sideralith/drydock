@@ -2153,15 +2153,17 @@ _setup_wiring_home() {
 @test "#71: docker-compose.yml hooks :ro overlay sources from the per-session dir" {
 	# The RO overlay must source from ${DRYDOCK_SESSION_CLAUDE_DIR}/hooks (the
 	# per-session seeded dir), NOT from ${HOME}/.claude/hooks (host-direct).
-	grep -qF '${DRYDOCK_SESSION_CLAUDE_DIR}/hooks:${HOME}/.claude/hooks:ro' \
+	# Accepts both the bare form and the :? guard form (consistent with line 66).
+	grep -qE '\$\{DRYDOCK_SESSION_CLAUDE_DIR(:\?[^}]*)?\}/hooks:\$\{HOME\}/\.claude/hooks:ro' \
 		"$DRYDOCK_HOME/docker-compose.yml"
 }
 
 @test "#71: no compose file uses host ~/.claude/hooks as a mount SOURCE" {
 	# The left-hand side of the hooks mount must be the per-session dir, NEVER
 	# the host ~/.claude/hooks. This eliminates the last container-reads-host
-	# exception in INV-2.
-	! grep -E '"\$\{HOME\}/\.claude/hooks:' "$DRYDOCK_HOME/docker-compose.yml"
+	# exception in INV-2. Glob covers docker-compose.yml and all overlays so a
+	# future docker-compose.hooks.yml is automatically checked.
+	! grep -E '"\$\{HOME\}/\.claude/hooks:' "$DRYDOCK_HOME"/docker-compose*.yml
 }
 
 @test "#71: hooks mount overlay preserves the :ro flag (INV-3)" {
@@ -2170,6 +2172,28 @@ _setup_wiring_home() {
 	# hooks and disable its own guardrails — the INV-3 core guarantee.
 	grep -qE '/hooks:\$\{HOME\}/\.claude/hooks:ro' \
 		"$DRYDOCK_HOME/docker-compose.yml"
+}
+
+@test "#71: seed_session_config_dir copies hooks/ content from prototype into per-session dir" {
+	# Guards against a future regression where someone excludes hooks/ from the
+	# seed loop (the way projects/ is already excluded). The hooks RO overlay
+	# sources from the per-session dir — if seed_session_config_dir doesn't copy
+	# hooks/ content there, the overlay mounts an empty dir and guardrails are
+	# silently dropped.
+	local fake_home="$BATS_TEST_TMPDIR/seed-hooks-$$"
+	mkdir -p "$fake_home"
+	_make_prototype_with_projects "$fake_home"
+	# Add a hook file to the prototype
+	mkdir -p "$fake_home/.claude-container/hooks"
+	printf 'hook-content' >"$fake_home/.claude-container/hooks/myhook.sh"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "ee55"
+	[ -f "$fake_home/.claude-container-ee55/hooks/myhook.sh" ]
+	[ "$(cat "$fake_home/.claude-container-ee55/hooks/myhook.sh")" = "hook-content" ]
 }
 
 # ── Phase 2: seed_session_config_dir — Bats Tests (SR-6, SR-11, SR-7, design-risk-6) ──

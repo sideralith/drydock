@@ -87,7 +87,7 @@ services:
       # seed_session_config_dir copies them into the per-session dir → mount
       # picks them up. Existing sessions are sealed at startup; mid-session host
       # edits do not leak in (bounded blast radius under threat model A).
-      - "${DRYDOCK_SESSION_CLAUDE_DIR}/hooks:${HOME}/.claude/hooks:ro"
+      - "${DRYDOCK_SESSION_CLAUDE_DIR:?DRYDOCK_SESSION_CLAUDE_DIR not set — invoke via the drydock CLI}/hooks:${HOME}/.claude/hooks:ro"
 
       # ── Binaries shared from host (claude, engram, gentle-ai, gga, uv) ─────
       - "${HOME}/.local:${HOME}/.local:rw"

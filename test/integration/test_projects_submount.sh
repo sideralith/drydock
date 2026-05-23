@@ -112,10 +112,10 @@ rm -rf "$INTTEST_ROOT"
 #   66  (DRYDOCK_SESSION_CLAUDE_DIR)  → .claude-container-<disc>/   (per-session)
 #   67  (DRYDOCK_SESSION_CLAUDE_JSON) → .claude-container-<disc>.json
 #   77                               → .claude-container/projects/
-#   80  (DRYDOCK_SESSION_CLAUDE_DIR/hooks) → .claude-container-<disc>/hooks/
-#   83                               → .local/
-#   86                               → .gitconfig
-#   87                               → .config/gh/
+#   90  (DRYDOCK_SESSION_CLAUDE_DIR/hooks) → .claude-container-<disc>/hooks/
+#   93                               → .local/
+#   96                               → .gitconfig
+#   97                               → .config/gh/
 # (.claude-container/ + .claude-container.json are the seed prototype copied
 #  into each per-session pair by seed_session. seed_session creates the
 #  per-session hooks/ subdir below as part of that seed.)
