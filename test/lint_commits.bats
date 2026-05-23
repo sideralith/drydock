@@ -231,10 +231,12 @@ _lc_commit() {
 	_lc_setup
 	# Commit a single-parent commit with a "Merge branch..." subject (rebase artifact).
 	# --no-merges won't catch it (single parent), but ^Merge regex should skip it.
+	# S-4: all commits skipped → count must be 0, not 1.
 	_lc_commit "Merge branch 'dev' into feat/x"
 	cd "$REPO"
 	run "$DRYDOCK_HOME/scripts/lint-commits.sh" --base "$BASE"
 	[ "$status" -eq 0 ]
+	[[ "$output" =~ "0 commit(s) checked, all OK" ]]
 }
 
 # ── T-15 RED / T-16 GREEN: REQ-13 empty commit range (S-10) ──────────────────

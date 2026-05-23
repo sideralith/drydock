@@ -70,7 +70,7 @@ done
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 main() {
-	local base failures=()
+	local base failures=() checked=0
 
 	# Base resolution (T-25 adds auto-detect).
 	if [[ -n ${base_arg:-} ]]; then
@@ -101,6 +101,9 @@ main() {
 		# (Real two-parent merges are excluded via --no-merges in git log.)
 		[[ $subject =~ ^Merge[[:space:]] ]] && continue
 
+		# Count only commits that pass the skip filter (rebase artifacts excluded).
+		((checked++)) || true
+
 		# Strip trailing whitespace from subject before matching (Decision E).
 		subject="${subject%"${subject##*[![:space:]]}"}"
 
@@ -125,8 +128,6 @@ main() {
 		exit 1
 	fi
 
-	local checked
-	checked=$(git log "$base..HEAD" --no-merges --format='%H' | wc -l | tr -d ' ')
 	printf 'lint-commits: %d commit(s) checked, all OK\n' "$checked"
 }
 
