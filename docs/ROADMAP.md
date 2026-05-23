@@ -538,8 +538,8 @@ prefix, structurally separating CI-safe from local-only tiers:
   in `test/managed_settings.bats`). The smoke job sets this flag after
   `drydock build`, so every PR that touches the image, the compose stack,
   the CLI, the baked managed-settings drop-ins, or the per-session-sealed
-  hook scripts under `templates/hooks/` gets the bake-and-seed pipeline
-  verified end-to-end.
+  hook scripts under `templates/hooks/` gets the managed-settings bake
+  verified end-to-end by smoke (seed behavior verified by the unit suite in CI).
 - `DRYDOCK_INTEGRATION_HOSTNET=1` — local-only host-network tier (SR-9, the
   shared `projects/` sub-mount resolution test). Renamed from
   `RUN_INTEGRATION` for the unified namespace. Stays out of CI because
