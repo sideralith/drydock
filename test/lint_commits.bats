@@ -14,6 +14,7 @@ _lc_setup() {
 	REPO="$BATS_TEST_TMPDIR/repo"
 	git -c init.defaultBranch=main init "$REPO" >/dev/null 2>&1
 	git -C "$REPO" -c user.email=t@t.com -c user.name=T \
+		-c commit.gpgsign=false -c gpg.format=openpgp \
 		commit --allow-empty -m "feat: seed" >/dev/null 2>&1
 	BASE=$(git -C "$REPO" rev-parse HEAD)
 	# Note: the script reads git state from CWD; tests run with `run env -C "$REPO" ...`
@@ -25,6 +26,7 @@ _lc_setup() {
 _lc_commit() {
 	local subject=$1
 	git -C "$REPO" -c user.email=t@t.com -c user.name=T \
+		-c commit.gpgsign=false -c gpg.format=openpgp \
 		commit --allow-empty -m "$subject" >/dev/null 2>&1
 }
 
