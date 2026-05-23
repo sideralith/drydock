@@ -77,7 +77,17 @@ services:
       - "${HOME}/.claude-container/projects:${HOME}/.claude/projects:rw"
 
       # ── Hooks: RO override (agent can't self-edit guardrails) ──────────────
-      - "${HOME}/.claude/hooks:${HOME}/.claude/hooks:ro"
+      # Sources from the per-session seeded dir (DRYDOCK_SESSION_CLAUDE_DIR/hooks)
+      # — NOT from host ${HOME}/.claude/hooks/. The per-session dir was just
+      # mounted :rw above; this second mount overlays its hooks/ subpath with
+      # itself plus :ro, making the agent unable to write its own hook scripts
+      # (INV-3) while keeping the container blind to host ~/.claude/ entirely
+      # (INV-2 — no host-direct exception). Sync flow: edit hooks on host →
+      # 'drydock sync' rsync's them into the prototype → next session's
+      # seed_session_config_dir copies them into the per-session dir → mount
+      # picks them up. Existing sessions are sealed at startup; mid-session host
+      # edits do not leak in (bounded blast radius under threat model A).
+      - "${DRYDOCK_SESSION_CLAUDE_DIR:?DRYDOCK_SESSION_CLAUDE_DIR not set — invoke via the drydock CLI}/hooks:${HOME}/.claude/hooks:ro"
 
       # ── Binaries shared from host (claude, engram, gentle-ai, gga, uv) ─────
       - "${HOME}/.local:${HOME}/.local:rw"

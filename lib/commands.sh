@@ -130,7 +130,17 @@ cmd_setup() {
 			rm -rf "${CONTAINER_CLAUDE:?}/$excluded"
 		done
 		rm -f "$CONTAINER_CLAUDE/.last-cleanup" "$CONTAINER_CLAUDE/scheduled_tasks.lock"
-		mkdir -p "$CONTAINER_CLAUDE"/{sessions,projects,file-history,shell-snapshots,cache,backups,telemetry,plans,tasks,paste-cache}
+		# `hooks/` is included so the prototype always has the dir at the end of
+		# fresh-init even when the host has no ~/.claude/hooks/ (e.g. fresh
+		# Claude Code install with no personal hooks). Without it, Docker would
+		# auto-create the bind-mount source as a root-owned dir on first
+		# `drydock run`, breaking perms. (Issue #71: hooks RO overlay sources
+		# from the per-session dir, which is seeded from this prototype — so
+		# the prototype must always have it.) This covers the fresh-init path
+		# only; ensure_runtime_dirs in lib/compose.sh carries the same mkdir
+		# as defense-in-depth for the upgrade path (pre-existing prototype that
+		# predates the hooks subdir).
+		mkdir -p "$CONTAINER_CLAUDE"/{sessions,projects,file-history,shell-snapshots,cache,backups,telemetry,plans,tasks,paste-cache,hooks}
 		ok "$CONTAINER_CLAUDE initialized ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"
 	else
 		ok "$CONTAINER_CLAUDE already exists ($(du -sh "$CONTAINER_CLAUDE" | cut -f1))"

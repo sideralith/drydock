@@ -992,6 +992,15 @@ ensure_runtime_dirs() {
 		note "runtime state missing — running 'drydock setup' automatically"
 		cmd_setup
 	fi
+	# Upgrade-path defense for the #71 hooks RO overlay source. cmd_setup's
+	# mkdir covers fresh-init; this covers pre-existing prototypes that predate
+	# the hooks subdir (cmd_sync's rsync only copies it if the host has
+	# ~/.claude/hooks/). Without this, the narrow upgrade case — existing
+	# prototype + no host hooks dir — leaves the bind-mount source missing;
+	# Docker would auto-create it as a root-owned directory at run time,
+	# breaking perms. Idempotent mkdir -p closes that gap cheaply on every
+	# invocation.
+	mkdir -p "$CONTAINER_CLAUDE/hooks"
 	# One-time consolidation of pre-upgrade scattered per-session projects/ trees
 	# into the shared store (issue #68). Sentinel-gated; no-op after first run.
 	migrate_projects_to_shared_store

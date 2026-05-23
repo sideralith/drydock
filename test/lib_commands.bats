@@ -119,6 +119,38 @@ setup() {
 # Positive regression guard: engram usable + isolated + $CONTAINER_ENGRAM missing
 # DOES trigger cmd_setup.
 
+@test "#71 ensure_runtime_dirs: creates CONTAINER_CLAUDE/hooks/ as defense-in-depth (upgrade path)" {
+	# Simulates the upgrade-from-v0.2.1 case: prototype dir exists from a prior
+	# install but predates the #71 mkdir line — the hooks/ subdir is absent and
+	# cmd_setup will not trigger (no _needs_setup conditions met). Without the
+	# unconditional mkdir in ensure_runtime_dirs the docker-compose bind-mount
+	# source would be missing and Docker would auto-create it as a root-owned
+	# directory at container start, breaking perms.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Pre-existing prototype (no hooks/ subdir) — mirrors the upgrade scenario.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	[ ! -d "$CONTAINER_CLAUDE/hooks" ]
+
+	# Stub cmd_setup so the test isolates ensure_runtime_dirs' own behavior.
+	cmd_setup() { :; }
+
+	ensure_runtime_dirs
+
+	[ -d "$CONTAINER_CLAUDE/hooks" ]
+}
+
 @test "ensure_runtime_dirs: engram usable + isolated + missing CONTAINER_ENGRAM — DOES trigger cmd_setup" {
 	setup_engram_on_path
 	setup_plain_linux_seams

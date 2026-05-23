@@ -27,8 +27,10 @@ HOST                                CONTAINER (debian:12-slim)
                                         creates a fresh ephemeral one, and
                                         "settings don't persist". MUST mount.
 
-~/.claude/hooks/  ─────────────────→ ~/.claude/hooks/ :ro
-  (authoritative)                     (RO overlay — agent can't self-edit)
+~/.claude-container-<disc>/hooks/ ─→ ~/.claude/hooks/ :ro
+  (per-session, seeded from           (RO overlay — agent can't self-edit;
+   the prototype's hooks/;             sourced from the per-session dir
+   itself synced from host)            so INV-2 has no host-direct exception)
 
 ~/.local/  ───────────────────────→ ~/.local/  :rw
   (binaries: claude, engram, etc.)    (shared — host upgrades propagate)
@@ -312,15 +314,38 @@ never written by the overlay mechanism. Rollback is as simple as `rm -rf
 
 ## The hooks RO overlay
 
-`~/.claude/hooks/` is bind-mounted **`:ro`** on top of the `.claude-container-<disc>`
-mount (the second mount masks that subpath of the first). Effect: the agent
-inside the container can read its hooks (e.g. `block-destructive.sh`, which
-is a PreToolUse guardrail) but **cannot edit them**. Without this, the agent
-could in principle disable its own guardrails — the protection would be
-illusory under both adversarial behavior and ordinary bugs.
+The per-session `~/.claude-container-<disc>/hooks/` subpath is bind-mounted
+**`:ro`** on top of the `.claude-container-<disc>` mount (the second mount
+masks the `hooks/` subpath of the first with itself plus `:ro`). Effect: the
+agent inside the container can read its hooks (e.g. a personal
+`block-destructive.sh` PreToolUse guardrail, if the user has one) but **cannot
+edit them**. Without this, the agent could in principle disable its own
+guardrails — the protection would be illusory under both adversarial behavior
+and ordinary bugs.
 
-This means hook updates must happen on host. The container always sees the
-host's authoritative hooks.
+**Why the per-session dir, not host `~/.claude/hooks/` directly.** Sourcing
+from the per-session dir keeps INV-2's "the container never reads host
+`~/.claude/` directly" rule unconditional — there is no exception for hooks
+to carve out. It also bounds the blast radius of accidental host hook edits
+under threat model A (INV-7): a fat-fingered host edit does not propagate
+live to running sessions; only future sessions pick it up (after the next
+`drydock sync` re-rsyncs the prototype, and `seed_session_config_dir` copies
+it into a new per-session dir).
+
+**The sync flow.** The user edits hooks on the host under `~/.claude/hooks/`.
+`drydock sync` (or `ensure_synced`'s auto-trigger on each `drydock run` /
+`drydock shell`) rsyncs the whole `~/.claude/` tree into the
+`~/.claude-container/` prototype, including `hooks/` (no rsync exclusion).
+The next session's `seed_session_config_dir` copies the prototype's `hooks/`
+into `~/.claude-container-<disc>/hooks/`. The compose mount picks that up at
+container start. Existing sessions are sealed at startup — they see the
+snapshot of hooks taken when their per-session dir was seeded.
+
+**Prototype `hooks/` bootstrap.** `cmd_setup` includes `hooks` in its
+`mkdir -p` list (`lib/commands.sh`) so the prototype always has the subdir,
+even on a fresh host with no `~/.claude/hooks/`. Without this, Docker would
+auto-create the bind-mount source as a root-owned directory on first
+`drydock run`, breaking perms.
 
 ## The managed-settings layer (v0.2.0+)
 
@@ -504,20 +529,21 @@ under `$HOME` (e.g. `/home/<user>/git/foo`) are valid; only `$HOME` itself and
 its ancestors are rejected. See [docs/links.md](links.md#the-host-path-mirror-pattern)
 for the full pattern guide.
 
-**INV-3 and the link guard.** The hooks RO overlay covers two paths:
-`${HOME}/.claude/hooks:ro` at `docker-compose.yml:70` and
-`/opt/drydock/hooks:ro` at `docker-compose.yml:84`. A linked sibling mounted
-over either path would silently remove the `:ro` protection. `drydock link`
-defends against both:
+**INV-3 and the link guard.** The hooks RO overlay covers two paths: the
+container's `~/.claude/hooks` (sourced from `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks`)
+and `/opt/drydock/hooks:ro` (sourced from `templates/hooks/`). A linked sibling
+mounted over either target path would silently remove the `:ro` protection.
+`drydock link` defends against both:
 
-- **`/opt/drydock/hooks`** is explicitly rejected by guard (d) at
-  `lib/commands.sh:745-751` — this path gets a named guard because it is a
-  specific drydock-internal path that does not fall under the broader
-  system-directory class (which covers `opt` generally but not the hooks
-  subpath specifically).
-- **`~/.claude/hooks`** shadowing is prevented by guard (e)'s
-  `$HOME/.claude*` pattern, which rejects any target that would shadow the
-  home-relative Claude state directories.
+- **`/opt/drydock/hooks`** is explicitly rejected by guard (d) in
+  `lib/commands.sh` — this path gets a named guard because it is a specific
+  drydock-internal path that does not fall under the broader system-directory
+  class (which covers `opt` generally but not the hooks subpath specifically).
+- **`~/.claude/hooks`** shadowing is prevented by guard (e)'s `$HOME/.claude*`
+  pattern, which rejects any target that would shadow the home-relative Claude
+  state directories. This guard is unaffected by the #71 source change — it
+  matches on the TARGET path (`$HOME/.claude/hooks` inside the container),
+  which is unchanged.
 
 See [security.md](security.md).
 
