@@ -278,7 +278,8 @@ GIT_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/10-git-safety.json"
 
 # ── T5: Dockerfile bakes managed-settings.d (integration, skipped in unit mode)
 @test "managed-settings: Dockerfile bakes managed-settings.d with USER_NAME substituted" {
-    skip "requires built drydock image (integration test — set DRYDOCK_INTEGRATION=1 and rebuild to enable)"
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
     # Confirm __HOME__ is fully resolved and paths use /home/<user>/.ssh, not placeholder.
     run docker run --rm drydock:latest cat /etc/claude-code/managed-settings.d/00-secrets.json
     [ "$status" -eq 0 ]
