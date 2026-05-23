@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-CI hygiene & infrastructure polish for the v0.2.2 cycle.
+## [0.2.2] - 2026-05-23
+
+CI hygiene & infrastructure polish, plus a host-contamination fix for the
+RW-sibling SSH flow.
 
 ### Added
-- Add `scripts/lint-commits.sh` and CI job `Lint (commit-message)` that
-  enforces Conventional Commits format on PR commits targeting `dev` (#10).
+- `scripts/lint-commits.sh` + CI job `Lint (commit-message)` enforce
+  Conventional Commits on PR commits targeting `dev` (#10).
+- Managed-settings integration tests now run in the smoke CI job; the
+  `--integration` and `--smoke` bats flags are unified into a single
+  selector (#74, #87).
+- T19 ("INV-3 bake contract") in `test/managed_settings.bats` now covers the
+  full drop-in set (all five `templates/managed-settings.d/*.json` files),
+  asserts root ownership of baked drop-ins, and verifies the hook-stance
+  contract end-to-end (#88, #90).
 
 ### Fixed
 - **`drydock link --rw` no longer contaminates the host's git configuration**
@@ -418,6 +428,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.2.2]: https://github.com/sideralith/drydock/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sideralith/drydock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sideralith/drydock/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sideralith/drydock/releases/tag/v0.1.2
