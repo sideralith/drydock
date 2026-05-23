@@ -96,12 +96,16 @@ services:
       - "${HOME}/.gitconfig:${HOME}/.gitconfig:ro"
       - "${HOME}/.config/gh:${HOME}/.config/gh:rw"
 
-      # ── Drydock hook scripts: RO, outside $HOME (INV-3 preserved) ─────────
-      # Delivers templates/hooks/ into the container at the FHS-idiomatic path
-      # /opt/drydock/hooks/ — no overlap with the ~/.claude/hooks:ro mount.
-      # Agent cannot write here (RO bind + non-root). Requires DRYDOCK_HOME
-      # exported by export_compose_env() so Compose can resolve the source path.
-      - "${DRYDOCK_HOME}/templates/hooks:/opt/drydock/hooks:ro"
+      # ── Drydock hook scripts: RO, per-session sealed (INV-3 mount #2) ─────
+      # Parallel to mount #1 above (the ~/.claude/hooks:ro overlay): sources
+      # from the per-session seeded dir (DRYDOCK_SESSION_HOOKS_DIR), populated
+      # at startup by seed_session_config_dir() from ${DRYDOCK_HOME}/templates/hooks/.
+      # The baked SessionStart and PreToolUse entries in managed-settings.d/
+      # reference absolute paths under /opt/drydock/hooks/; this mount delivers
+      # the matching script contents. Existing sessions are sealed at startup;
+      # mid-session host edits to templates/hooks/ do not leak in (bounded
+      # blast radius under threat model A — same property as mount #1).
+      - "${DRYDOCK_SESSION_HOOKS_DIR:?DRYDOCK_SESSION_HOOKS_DIR not set — invoke via the drydock CLI}:/opt/drydock/hooks:ro"
 
       # Optional opt-in overlays (activated by drydock CLI when detected):
       #   docker-compose.mcp-auth.yml      — ~/.mcp-auth/      (mcp-remote OAuth)
