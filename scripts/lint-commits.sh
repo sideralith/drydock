@@ -97,9 +97,13 @@ main() {
 		sha=${line%% *}
 		subject=${line#* }
 
-		# Belt-and-suspenders: skip rebase-artifact single-parent merge subjects.
+		# Belt-and-suspenders: skip canonical single-parent merge subjects
+		# (rebase artifacts). Canonical prefixes: branch|pull request|
+		# remote-tracking branch|tag. Non-canonical "Merge …" subjects
+		# (e.g. "Merge customer feedback into copy") must still be linted.
 		# (Real two-parent merges are excluded via --no-merges in git log.)
-		[[ $subject =~ ^Merge[[:space:]] ]] && continue
+		local _merge_skip='^Merge (branch|pull request|remote-tracking branch|tag) '
+		[[ $subject =~ $_merge_skip ]] && continue
 
 		# Count only commits that pass the skip filter (rebase artifacts excluded).
 		((checked++)) || true

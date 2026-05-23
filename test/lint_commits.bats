@@ -239,6 +239,36 @@ _lc_commit() {
 	[[ "$output" =~ "0 commit(s) checked, all OK" ]]
 }
 
+# ── FIX-2 RED→GREEN: non-canonical Merge subject must fail; canonical ones skipped ──
+
+@test "FIX-2/merge-skip-non-canonical: 'Merge customer feedback into copy' fails with exit 1" {
+	# A non-canonical Merge subject must NOT be silently skipped.
+	# Before the fix, ^Merge[[:space:]] swallowed this and reported 0 commits checked.
+	_lc_setup
+	_lc_commit "Merge customer feedback into copy"
+	local sha
+	sha=$(git -C "$REPO" rev-parse HEAD)
+	cd "$REPO"
+	run "$DRYDOCK_HOME/scripts/lint-commits.sh" --base "$BASE"
+	[ "$status" -eq 1 ]
+	[[ "$output" =~ "${sha:0:7}" ]]
+	[[ "$output" =~ "Merge customer feedback into copy" ]]
+}
+
+@test "FIX-2/merge-skip-canonical-regression: canonical Merge subjects are still skipped" {
+	# Regression guard: tightening the regex must not break canonical merge-subject skipping.
+	# All four canonical prefixes (branch|pull request|remote-tracking branch|tag) must pass.
+	_lc_setup
+	_lc_commit "Merge branch 'dev' into feat/x"
+	_lc_commit "Merge pull request #99 from foo/bar"
+	_lc_commit "Merge remote-tracking branch 'upstream/main'"
+	_lc_commit "Merge tag 'v1.2.3' into main"
+	cd "$REPO"
+	run "$DRYDOCK_HOME/scripts/lint-commits.sh" --base "$BASE"
+	[ "$status" -eq 0 ]
+	[[ "$output" =~ "0 commit(s) checked, all OK" ]]
+}
+
 # ── T-15 RED / T-16 GREEN: REQ-13 empty commit range (S-10) ──────────────────
 
 @test "REQ-13/S-10/LC-pass-empty-range: empty range exits 0 with 0 commit(s) checked, all OK" {
