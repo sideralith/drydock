@@ -312,3 +312,27 @@ _lc_commit() {
 	[ "$status" -eq 3 ]
 	[[ "$output" =~ "origin/dev" ]]
 }
+
+@test "REQ-9/S-11/LC-lazy-fetch-success: absent origin/dev triggers fetch, then auto-detect succeeds" {
+	_lc_setup
+	# Set up a bare remote with a dev branch.
+	local bare="$BATS_TEST_TMPDIR/bare.git"
+	git -c init.defaultBranch=main init --bare "$bare" >/dev/null 2>&1
+	git -C "$REPO" remote add origin "$bare" >/dev/null 2>&1
+	git -C "$REPO" push origin main >/dev/null 2>&1
+	# Push current HEAD as the remote dev branch so fetch can retrieve it.
+	git -C "$REPO" push origin main:dev >/dev/null 2>&1
+	# Fetch so the local tracking ref exists, then DELETE it to simulate the
+	# "origin/dev absent locally" condition the lazy-fetch code handles (S-11).
+	git -C "$REPO" fetch origin >/dev/null 2>&1
+	git -C "$REPO" update-ref -d refs/remotes/origin/dev >/dev/null 2>&1
+	# Verify the ref is truly gone before running the script.
+	git -C "$REPO" rev-parse --verify origin/dev >/dev/null 2>&1 && return 1 || true
+	# Add a conformant commit so the checked range is non-empty.
+	_lc_commit "feat: lazy fetch test"
+	cd "$REPO"
+	# Script must fetch origin dev, then auto-detect succeeds, exit 0.
+	run "$DRYDOCK_HOME/scripts/lint-commits.sh"
+	[ "$status" -eq 0 ]
+	[[ "$output" =~ "1 commit(s) checked, all OK" ]]
+}
