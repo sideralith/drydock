@@ -21,6 +21,8 @@ on:
       - "lib/**"
       - "templates/managed-settings.d/**"
       - "templates/hooks/**"
+      - "scripts/test.sh"
+      - "test/managed_settings.bats"
       - ".github/workflows/smoke.yml"
 
 jobs:
