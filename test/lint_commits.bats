@@ -221,6 +221,7 @@ _lc_commit() {
 	_lc_commit "feat: feature work"
 	git -C "$REPO" checkout main >/dev/null 2>&1
 	git -C "$REPO" -c user.email=t@t.com -c user.name=T \
+		-c commit.gpgsign=false -c gpg.format=openpgp \
 		merge --no-ff feature -m "Merge pull request #1 from foo/bar" >/dev/null 2>&1
 	cd "$REPO"
 	# Range has: feat: feature work (conformant) + merge commit (non-conformant subject).
