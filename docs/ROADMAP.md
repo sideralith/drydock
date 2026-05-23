@@ -525,7 +525,7 @@ and the agent-cannot-write-its-own-hooks guarantee are preserved.
 **Problem.** Integration tests (`test/integration/` and the
 `DRYDOCK_INTEGRATION`-gated tests in `test/managed_settings.bats`) shipped
 with the repo but did not run in CI. The unit suite caught most regressions,
-but the INV-3 bake step (deny rules + hooks baked root-owned into
+but the INV-3 managed-settings bake step (deny rules baked root-owned into
 `drydock:latest`) and the per-file `__HOME__` substitution were verified
 only when a contributor ran the integration suite locally with the right
 flag — and one corner of that suite (T5 in `test/managed_settings.bats`)
@@ -534,11 +534,12 @@ was a permanent `skip` regardless of any flag.
 **What shipped.** Two-flag namespace under a shared `DRYDOCK_INTEGRATION_*`
 prefix, structurally separating CI-safe from local-only tiers:
 
-- `DRYDOCK_INTEGRATION=1` — DooD-safe bats integration tests (T5 + T19-A/B/C
+- `DRYDOCK_INTEGRATION=1` — DooD-safe bats integration tests (T5 + the T19 family
   in `test/managed_settings.bats`). The smoke job sets this flag after
   `drydock build`, so every PR that touches the image, the compose stack,
-  the CLI, the baked managed-settings drop-ins, or the baked hooks gets the
-  bake verified end-to-end.
+  the CLI, the baked managed-settings drop-ins, or the per-session-sealed
+  hook scripts under `templates/hooks/` gets the managed-settings bake
+  verified end-to-end by smoke (seed behavior verified by the unit suite in CI).
 - `DRYDOCK_INTEGRATION_HOSTNET=1` — local-only host-network tier (SR-9, the
   shared `projects/` sub-mount resolution test). Renamed from
   `RUN_INTEGRATION` for the unified namespace. Stays out of CI because

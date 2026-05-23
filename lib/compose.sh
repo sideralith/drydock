@@ -496,6 +496,7 @@ export_compose_env() {
 	export DRYDOCK_DISCRIMINATOR="$_disc"
 	export DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-${_disc}"
 	export DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-${_disc}.json"
+	export DRYDOCK_SESSION_HOOKS_DIR="$HOME/.claude-container-${_disc}/drydock-hooks"
 	export DRYDOCK_SESSION_NAME="$_session_name"
 	export COMPOSE_PROJECT_NAME="$_session_name"
 
@@ -811,6 +812,21 @@ seed_session_config_dir() {
 
 	# Remove the staleness marker — it belongs to the prototype, not sessions.
 	rm -f "$session_dir/.drydock-last-sync"
+
+	# ── Seed per-session drydock-side hook scripts (INV-3 mount #2) ──────────
+	# Source of truth: $DRYDOCK_HOME/templates/hooks/ (always present in repo).
+	# Target: $session_dir/drydock-hooks/ — bind-mounted :ro to /opt/drydock/hooks
+	# by docker-compose.yml. Parallel to the prototype-copy loop above (which
+	# seeds mount #1's hooks/ subpath). The enclosing rm -rf "$session_dir" /
+	# mkdir -p "$session_dir" already cleared and recreated the parent; this is
+	# the new subpath population. Explicit rm -rf + mkdir is belt-and-suspenders
+	# so a future refactor decoupling the subpath from the session dir still
+	# re-seeds correctly. cp -a preserves +x on the .sh scripts; the "/." trailing
+	# pair copies CONTENTS (drydock-hooks/<script>.sh) not the source dir itself
+	# (would yield drydock-hooks/hooks/<script>.sh).
+	rm -rf "$session_dir/drydock-hooks"
+	mkdir -p "$session_dir/drydock-hooks"
+	cp -a "$DRYDOCK_HOME/templates/hooks/." "$session_dir/drydock-hooks/"
 
 	# Apply the persistent host-authored container-config overlay (issue #77).
 	# Whole-file recursive copy on top of the freshly re-seeded dir; scope-

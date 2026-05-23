@@ -58,7 +58,7 @@ and green on a fresh checkout.
 
 | Flag | What it enables | Where it runs |
 |------|-----------------|---------------|
-| `DRYDOCK_INTEGRATION=1` | Bats tests that `docker run --rm drydock:latest …` against the built image (T5 + T19-A/B/C in `test/managed_settings.bats` — verify the INV-3 deny-rule and hooks bake). DooD-safe. | Locally **and in CI** — the smoke job sets this flag after `drydock build`. |
+| `DRYDOCK_INTEGRATION=1` | Bats tests that `docker run --rm drydock:latest …` against the built image (T5 + the T19 family in `test/managed_settings.bats` — verify the INV-3 managed-settings bake: presence + JSON-validity of all six drop-ins, root ownership of the bake target, and the `00-secrets.json` deny-rule contract). DooD-safe. | Locally **and in CI** — the smoke job sets this flag after `drydock build`. |
 | `DRYDOCK_INTEGRATION_HOSTNET=1` | Tests that launch real containers via `docker compose run` and require `network_mode: host` (`test/integration/test_projects_submount.sh` — SR-9, the shared `projects/` sub-mount resolution proof). | **Local only.** GitHub Actions runners use DinD where `network_mode: host` maps to the runner's container namespace, not a bare Linux host, and produces unreliable results. |
 
 Local invocation:

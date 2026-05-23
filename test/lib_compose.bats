@@ -2519,3 +2519,52 @@ _make_prototype_with_projects() {
 	echo "$inv2_section" | grep -q "append-only"
 	echo "$inv2_section" | grep -q "projects/"
 }
+
+# ── INV-3 mount #2 — per-session drydock-hooks seeding (T19 structural) ──────
+
+@test "export_compose_env: exports DRYDOCK_SESSION_HOOKS_DIR pointing at drydock-hooks subpath" {
+	# T-1 (RED): verify that export_compose_env sets DRYDOCK_SESSION_HOOKS_DIR
+	# to $HOME/.claude-container-<disc>/drydock-hooks. Will fail until the
+	# export line is added to lib/compose.sh:export_compose_env().
+	export_compose_env "$TEST_PROJECT_DIR"
+	[ -n "${DRYDOCK_SESSION_HOOKS_DIR:-}" ]
+	[ "$DRYDOCK_SESSION_HOOKS_DIR" = "$HOME/.claude-container-dflt/drydock-hooks" ]
+}
+
+@test "seed_session_config_dir: populates drydock-hooks/ from templates/hooks/ and live-container guard short-circuits it" {
+	# T-2 (RED): verify that seed_session_config_dir seeds the drydock-hooks/
+	# subpath from $DRYDOCK_HOME/templates/hooks/. Will fail until the seed
+	# block is added to lib/compose.sh:seed_session_config_dir().
+
+	local disc="t2seed"
+	local session_dir="$HOME/.claude-container-${disc}"
+
+	# Seed runs only when prototype exists (checked by seed_session_config_dir).
+	mkdir -p "$HOME/.claude-container"
+	touch "$HOME/.claude-container.json"
+
+	# Default DOCKER stub returns empty for ps — live-container guard passes.
+	seed_session_config_dir "$disc"
+
+	# The drydock-hooks/ subpath must exist and contain the scripts.
+	[ -d "$session_dir/drydock-hooks" ]
+	[ -f "$session_dir/drydock-hooks/drydock-block-destructive.sh" ]
+	[ -f "$session_dir/drydock-hooks/drydock-session-start.sh" ]
+
+	# Live-container guard: when Docker ps reports a running container for this
+	# disc, re-seeding is skipped (the subpath already populated above is untouched).
+	# We verify skip by removing the dir and checking it is NOT re-created.
+	rm -rf "$session_dir/drydock-hooks"
+	local live_stub="$BATS_TEST_TMPDIR/docker-live-$$"
+	cat >"$live_stub" <<STUB
+#!/usr/bin/env bash
+if [ "\${1:-}" = "ps" ]; then
+    printf 'drydock-myproject-t2seed\n'
+fi
+exit 0
+STUB
+	chmod +x "$live_stub"
+	export DOCKER="$live_stub"
+	seed_session_config_dir "$disc"
+	[ ! -d "$session_dir/drydock-hooks" ]
+}
