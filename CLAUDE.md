@@ -53,9 +53,11 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   container-specific append-only conversation store at `~/.claude-container/projects/`** — never at
   the host's `~/.claude/`, `~/.claude.json`, or `~/.engram/`. The host's `~/.claude/`,
   `~/.claude.json`, and `~/.engram/` MUST NEVER be the source of any container mount —
-  writable or read-only. (INV-3's `:ro` hooks overlay sources from the per-session
-  `~/.claude-container-<disc>/hooks/` subpath, not from host `~/.claude/hooks/`, so it
-  is consistent with this rule — no carve-out required.)
+  writable or read-only. (INV-3's `:ro` hooks overlays — both the per-session
+  `~/.claude-container-<disc>/hooks/` subpath (mount #1) AND the per-session
+  `~/.claude-container-<disc>/drydock-hooks/` subpath (mount #3) — source from per-session
+  paths, not from host `~/.claude/hooks/` or `~/.claude/drydock-hooks/`, so they are
+  consistent with this rule — no carve-out required.)
 - **Why**: Container mounts point at container-specific Claude and engram state for four reasons.
   Reasons 1 and 2 are universal — they apply to every drydock user. Reasons 3 and 4 apply only
   when engram is in use (engram is optional per INV-4; a user without engram is unaffected by them).

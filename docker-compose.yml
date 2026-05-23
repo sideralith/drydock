@@ -96,7 +96,7 @@ services:
       - "${HOME}/.gitconfig:${HOME}/.gitconfig:ro"
       - "${HOME}/.config/gh:${HOME}/.config/gh:rw"
 
-      # ── Drydock hook scripts: RO, per-session sealed (INV-3 mount #2) ─────
+      # ── Drydock hook scripts: RO, per-session sealed (INV-3 mounts #2 and #3) ──
       # Parallel to mount #1 above (the ~/.claude/hooks:ro overlay): sources
       # from the per-session seeded dir (DRYDOCK_SESSION_HOOKS_DIR), populated
       # at startup by seed_session_config_dir() from ${DRYDOCK_HOME}/templates/hooks/.
