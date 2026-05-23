@@ -219,3 +219,17 @@ _managed_ssh_config_path() {
 	local primary="$1"
 	printf '%s' "$HOME/.config/drydock/ssh-config-${primary}"
 }
+
+# _session_gitconfig_path — return the path to the drydock-managed per-project
+# gitconfig for a given primary project name. Argument: primary (sanitized
+# project name). Output: ~/.config/drydock/gitconfig-<primary>
+#
+# Issue #89: drydock injects url.insteadOf entries into this file so the
+# container can route per-sibling SSH keys WITHOUT mutating the sibling's
+# .git/config (INV-1 — host gitconfig non-contamination). The container reads
+# it by setting GIT_CONFIG_GLOBAL to this path; an `[include] path = ~/.gitconfig`
+# at the top preserves user identity (user.name / user.email).
+_session_gitconfig_path() {
+	local primary="$1"
+	printf '%s' "$HOME/.config/drydock/gitconfig-${primary}"
+}

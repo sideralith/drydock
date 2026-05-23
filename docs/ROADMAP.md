@@ -123,16 +123,24 @@ mount prevents `git push` and all write operations.
 **What shipped.** `drydock link --rw <path>`: per-sibling ed25519 deploy keys
 generated at `~/.config/drydock/keys/<basename>_deploy{,.pub}`, a managed SSH
 config at `~/.config/drydock/ssh-config-<primary>` with `Host github.com-<sibling>`
-alias blocks, `GIT_SSH_COMMAND` rewritten to route through the managed config
-inside the container, and the sibling's `remote.origin.url` updated from the
-canonical GitHub remote to the alias (restored on `drydock unlink`). The keys
-directory mounts `:ro` as a directory — no per-key overlay enumeration, scales to
-N siblings. A cross-project basename collision check scans ALL `*.list` files at
-link time. `drydock unlink` prints a dual hint covering both the local key path
-(for `rm`) and the GitHub-side deploy key revocation URL, because drydock cannot
-revoke remote deploy keys. See `docs/links.md` for the user-facing workflow.
+alias blocks, and `GIT_SSH_COMMAND` set to route through the managed config
+inside the container. The keys directory mounts `:ro` as a directory — no
+per-key overlay enumeration, scales to N siblings. A cross-project basename
+collision check scans ALL `*.list` files at link time. `drydock unlink` prints
+a dual hint covering both the local key path (for `rm`) and the GitHub-side
+deploy key revocation URL, because drydock cannot revoke remote deploy keys.
 
-**Status.** Done — shipped in v0.2.0 (issue #47 closed by PR squash merge).
+Routing fix (#89, v0.2.2): URL aliasing happens inside the container via
+`url.insteadOf` in a per-project gitconfig at
+`~/.config/drydock/gitconfig-<primary>` (pointed at by `GIT_CONFIG_GLOBAL`).
+The sibling's `.git/config` is never mutated, so the host's `git fetch` keeps
+working with the canonical URL. v0.2.1's `remote.origin.url` rewrite (which
+broke host git) was removed; the first `drydock run` after upgrading auto-
+restores aliased URLs to canonical. See `docs/links.md` for the user-facing
+workflow.
+
+**Status.** Done — shipped in v0.2.0 (issue #47); host-contamination fix
+shipped in v0.2.2 (issue #89).
 
 **Provenance.** SDD artifacts in engram: spec #2442, design #2443, tasks #2444.
 

@@ -385,6 +385,41 @@ _maybe_export_ssh_config() {
 	export DRYDOCK_SSH_CONFIG="$config_path"
 }
 
+# _maybe_export_session_gitconfig(primary_project)
+#
+# Issue #89: when the SSH overlay activates (DRYDOCK_SSH_CONFIG set), also
+# regenerate the per-project gitconfig and export DRYDOCK_GITCONFIG so the SSH
+# overlay's environment block can set GIT_CONFIG_GLOBAL inside the container.
+# Also restores any aliased remote.origin.url left by v0.2.1 back to canonical —
+# idempotent (no-op if already canonical) and per-sibling (a single broken
+# sibling cannot block the whole run).
+#
+# Activation gate parity with the SSH overlay: same single gate
+# (DRYDOCK_SSH_CONFIG set), so a primary-only setup gets a minimal
+# `[include]`-only gitconfig as a harmless pass-through.
+_maybe_export_session_gitconfig() {
+	local primary="$1"
+	[ -n "${DRYDOCK_SSH_CONFIG:-}" ] || return 0
+	local list_file="$HOME/.config/drydock/links/${primary}.list"
+
+	# Startup migration (issue #89): restore aliased URLs left over from
+	# v0.2.1 to canonical. Idempotent — early-returns when URL is already
+	# canonical. Per-sibling failure is non-fatal (warn from helper).
+	if [ -f "$list_file" ]; then
+		local _h _t _f _sanitized
+		while IFS='|' read -r _h _t _f; do
+			[ -z "$_h" ] && continue
+			[ "${_f:-}" = "rw" ] || continue
+			_sanitized="$(sanitize_project_name "$(basename "$_h")")"
+			_restore_canonical_remote_url "$_h" "$_sanitized" || true
+		done <"$list_file"
+	fi
+
+	local gitconfig_path
+	gitconfig_path="$(_regenerate_session_gitconfig "$primary" "$list_file")"
+	export DRYDOCK_GITCONFIG="$gitconfig_path"
+}
+
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
 	local project_dir="$1"
@@ -537,6 +572,11 @@ export_compose_env() {
 	# Exports DRYDOCK_SSH_CONFIG (used by compose_files to activate the SSH overlay
 	# and by docker-compose.ssh.yml for the GIT_SSH_COMMAND -F flag).
 	_maybe_export_ssh_config "$PROJECT_NAME"
+	# Per-project gitconfig (issue #89): paired with the SSH overlay — generates
+	# ~/.config/drydock/gitconfig-<primary> with url.insteadOf entries per RW
+	# sibling and exports DRYDOCK_GITCONFIG. Also restores any aliased
+	# remote.origin.url left by v0.2.1 (one-shot, idempotent migration).
+	_maybe_export_session_gitconfig "$PROJECT_NAME"
 	# Sandbox GPG signing key: ~/.config/drydock/signing/ → GitHub-Verified commits
 	# (consumed by docker-compose.gpg.yml: bind-mount rw + GNUPGHOME + GIT_CONFIG_*).
 	local _signing_home="$HOME/.config/drydock/signing"

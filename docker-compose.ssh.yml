@@ -34,5 +34,18 @@ services:
     volumes:
       - "${HOME}/.config/drydock/keys:${HOME}/.config/drydock/keys:ro"
       - "${DRYDOCK_SSH_CONFIG}:${DRYDOCK_SSH_CONFIG}:ro"
+      # Per-project gitconfig (issue #89): contains `[include] path = ~/.gitconfig`
+      # for identity passthrough plus one `[url "git@github.com-<alias>:owner/repo"]
+      # insteadOf = git@github.com:owner/repo` block per RW sibling. Combined with
+      # GIT_CONFIG_GLOBAL below, this lets git inside the container route per-
+      # sibling SSH aliases WITHOUT mutating the sibling's .git/config — the host's
+      # `git fetch` keeps working because the canonical URL stays in place
+      # (INV-1 extended: host gitconfig non-contamination).
+      - "${DRYDOCK_GITCONFIG}:${DRYDOCK_GITCONFIG}:ro"
     environment:
       GIT_SSH_COMMAND: "ssh -F ${DRYDOCK_SSH_CONFIG} -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts"
+      # When GIT_CONFIG_GLOBAL is set, git uses ONLY that file as its global
+      # config — the [include] directive at the top of the managed file pulls in
+      # the host's ~/.gitconfig (mounted :ro in docker-compose.yml) for user
+      # identity (user.name, user.email, aliases, signingkey, etc.).
+      GIT_CONFIG_GLOBAL: "${DRYDOCK_GITCONFIG}"
