@@ -113,12 +113,14 @@ rm -rf "$INTTEST_ROOT"
 #   67  (DRYDOCK_SESSION_CLAUDE_JSON) → .claude-container-<disc>.json
 #   77                               → .claude-container/projects/
 #   90  (DRYDOCK_SESSION_CLAUDE_DIR/hooks) → .claude-container-<disc>/hooks/
+#   108 (DRYDOCK_SESSION_HOOKS_DIR)   → .claude-container-<disc>/drydock-hooks/
+#   113 (DRYDOCK_SESSION_HOOKS_DIR inode alias) → same source, .claude/drydock-hooks:ro
 #   93                               → .local/
 #   96                               → .gitconfig
 #   97                               → .config/gh/
 # (.claude-container/ + .claude-container.json are the seed prototype copied
 #  into each per-session pair by seed_session. seed_session creates the
-#  per-session hooks/ subdir below as part of that seed.)
+#  per-session hooks/ and drydock-hooks/ subdirs below as part of that seed.)
 precreate_mount_sources() {
 	mkdir -p \
 		"$FAKE_HOME/.claude-container/hooks" \
@@ -134,7 +136,7 @@ seed_session() {
 	local disc="$1"
 	local session_dir="$FAKE_HOME/.claude-container-${disc}"
 	local session_json="$FAKE_HOME/.claude-container-${disc}.json"
-	mkdir -p "$session_dir"
+	mkdir -p "$session_dir" "$session_dir/drydock-hooks"
 	# Copy prototype entries except projects/ (projects/ is the shared sub-mount).
 	while IFS= read -r -d '' _entry; do
 		[ "${_entry##*/}" = projects ] && continue
@@ -174,6 +176,7 @@ run_container() {
 		DRYDOCK_DISCRIMINATOR="$disc" \
 		DRYDOCK_SESSION_CLAUDE_DIR="$session_dir" \
 		DRYDOCK_SESSION_CLAUDE_JSON="$session_json" \
+		DRYDOCK_SESSION_HOOKS_DIR="$session_dir/drydock-hooks" \
 		DRYDOCK_SESSION_NAME="drydock-inttest-sr9-${disc}" \
 		docker compose \
 		-f "$DRYDOCK_HOME/docker-compose.yml" \
