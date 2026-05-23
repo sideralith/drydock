@@ -327,9 +327,9 @@ discoverability matters for contributors finding bugs. No separate mailing list 
 | `--force` on shared branches | Never |
 
 CI enforcement gap (v0.1.0): shellcheck enforces Bash conventions; the hook-based deny-list
-enforces `--no-verify`/`--force` inside sandboxed sessions. Conventional-commit format and
-trailer rules are soft norms — not CI-enforced yet. They live here because the agent is the
-primary commit author.
+enforces `--no-verify`/`--force` inside sandboxed sessions. The conventional-commit format
+is CI-enforced (v0.2.2+). The `Co-Authored-By` trailer rule remains a §5 soft norm.
+They live here because the agent is the primary commit author.
 
 See `→ CONTRIBUTING.md` for the full testing/lint contract.
 

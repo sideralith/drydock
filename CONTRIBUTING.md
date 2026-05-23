@@ -193,6 +193,17 @@ shfmt -d bin/drydock lib/ scripts/ install.sh             # must produce no diff
 scripts/test.sh                                           # all tests must pass
 ```
 
+Si tu PR apunta a `dev`, el subject de cada commit debe seguir el formato
+Conventional Commits. Verifícalo localmente antes de pushear:
+
+```bash
+scripts/lint-commits.sh   # auto-detecta el rango con git merge-base origin/dev HEAD
+```
+
+El mismo script corre en CI vía el job `Lint (commit-message)`. Para el set
+exacto de tipos válidos y la prohibición del trailer `Co-Authored-By`, ver
+[CLAUDE.md §5: Tracking & Contribution](CLAUDE.md#5-tracking--contribution).
+
 Every script MUST start with `set -euo pipefail` — see [CLAUDE.md §3: Code / Tooling Conventions](CLAUDE.md#3-code--tooling-conventions) for the full Bash conventions.
 
 ## Where to discuss
