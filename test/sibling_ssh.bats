@@ -23,93 +23,46 @@ _ssh_setup() {
 	source "$DRYDOCK_HOME/lib/sibling_ssh.sh"
 }
 
-# ── T2-RED: SR-rw-url-https — HTTPS URL rejected ──────────────────────────────
+# ── #89: _restore_canonical_remote_url — migration / unlink safety net ───────
+#
+# History: pre-#89, drydock had a symmetric pair (_rewrite_sibling_remote_url /
+# _restore_canonical_remote_url) that mutated remote.origin.url on link and
+# undid it on unlink. That contaminated the host (`git fetch` broke). The
+# rewrite was deleted; restore stays as the startup-migration entry point AND
+# the unlink-time safety net for repos still carrying a v0.2.1 aliased URL.
 
-@test "SR-rw-url-https: _rewrite_sibling_remote_url rejects HTTPS URL with non-zero exit" {
+@test "SR-restore: restores an aliased URL with .git suffix to canonical" {
 	_ssh_setup
 
-	# Set up a fake git repo
-	local sibling_dir="$BATS_TEST_TMPDIR/sibling-https"
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-restore-dotgit"
 	mkdir -p "$sibling_dir"
-	git -C "$sibling_dir" init -b main >/dev/null 2>&1
-	git -C "$sibling_dir" remote add origin "https://github.com/owner/repo.git"
-
-	run _rewrite_sibling_remote_url "$sibling_dir" "sibling-https"
-	[ "$status" -ne 0 ]
-	[[ "$output" =~ "only canonical" ]] || [[ "$output" =~ "SSH URLs supported" ]]
-}
-
-@test "SR-rw-url-https: _rewrite_sibling_remote_url rejects non-GitHub SSH URL" {
-	_ssh_setup
-
-	local sibling_dir="$BATS_TEST_TMPDIR/sibling-gitlab"
-	mkdir -p "$sibling_dir"
-	git -C "$sibling_dir" init -b main >/dev/null 2>&1
-	git -C "$sibling_dir" remote add origin "git@gitlab.com:owner/repo.git"
-
-	run _rewrite_sibling_remote_url "$sibling_dir" "sibling-gitlab"
-	[ "$status" -ne 0 ]
-	[[ "$output" =~ "only canonical" ]] || [[ "$output" =~ "SSH URLs supported" ]]
-}
-
-# ── T3-RED: SR-rw-url-roundtrip — rewrite + restore round-trip ───────────────
-
-@test "SR-rw-url-roundtrip: rewrite + restore preserves canonical URL with .git suffix" {
-	_ssh_setup
-
-	local sibling_dir="$BATS_TEST_TMPDIR/sibling-rt1"
-	mkdir -p "$sibling_dir"
-	git -C "$sibling_dir" init -b main >/dev/null 2>&1
-	git -C "$sibling_dir" remote add origin "git@github.com:owner/repo.git"
-
-	_rewrite_sibling_remote_url "$sibling_dir" "my-alias"
-	local rewritten
-	rewritten="$(git -C "$sibling_dir" remote get-url origin)"
-	[ "$rewritten" = "git@github.com-my-alias:owner/repo.git" ]
+	git -C "$sibling_dir" init -q -b main >/dev/null 2>&1
+	# Pre-seed with the v0.2.1-era aliased URL.
+	git -C "$sibling_dir" remote add origin "git@github.com-my-alias:owner/repo.git"
 
 	_restore_canonical_remote_url "$sibling_dir" "my-alias"
+
 	local restored
 	restored="$(git -C "$sibling_dir" remote get-url origin)"
 	[ "$restored" = "git@github.com:owner/repo.git" ]
 }
 
-@test "SR-rw-url-roundtrip: rewrite + restore preserves canonical URL without .git suffix" {
+@test "SR-restore: restores an aliased URL without .git suffix to canonical" {
 	_ssh_setup
 
-	local sibling_dir="$BATS_TEST_TMPDIR/sibling-rt2"
+	local sibling_dir="$BATS_TEST_TMPDIR/sibling-restore-nodotgit"
 	mkdir -p "$sibling_dir"
-	git -C "$sibling_dir" init -b main >/dev/null 2>&1
-	git -C "$sibling_dir" remote add origin "git@github.com:owner/repo"
-
-	_rewrite_sibling_remote_url "$sibling_dir" "my-alias"
-	local rewritten
-	rewritten="$(git -C "$sibling_dir" remote get-url origin)"
-	[ "$rewritten" = "git@github.com-my-alias:owner/repo" ]
+	git -C "$sibling_dir" init -q -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "git@github.com-my-alias:owner/repo"
 
 	_restore_canonical_remote_url "$sibling_dir" "my-alias"
+
 	local restored
 	restored="$(git -C "$sibling_dir" remote get-url origin)"
 	[ "$restored" = "git@github.com:owner/repo" ]
 }
 
-@test "SR-rw-url-roundtrip: rewrite is idempotent (already aliased — no-op, exit 0)" {
-	_ssh_setup
-
-	local sibling_dir="$BATS_TEST_TMPDIR/sibling-idempotent"
-	mkdir -p "$sibling_dir"
-	git -C "$sibling_dir" init -b main >/dev/null 2>&1
-	git -C "$sibling_dir" remote add origin "git@github.com:owner/repo.git"
-
-	_rewrite_sibling_remote_url "$sibling_dir" "my-alias"
-	run _rewrite_sibling_remote_url "$sibling_dir" "my-alias"
-	[ "$status" -eq 0 ]
-
-	local url
-	url="$(git -C "$sibling_dir" remote get-url origin)"
-	[ "$url" = "git@github.com-my-alias:owner/repo.git" ]
-}
-
-@test "SR-rw-url-roundtrip: restore is no-op when URL is already canonical" {
+@test "SR-restore: restore is no-op when URL is already canonical" {
 	_ssh_setup
 
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-noop"
@@ -247,13 +200,13 @@ _ssh_setup() {
 	[ "$status" -eq 0 ]
 }
 
-# ── FIX-1-RED: _validate_sibling_remote_url is read-only (partial-link guard) ─
+# ── FIX-1 / #89: _validate_sibling_remote_url is read-only ────────────────────
 #
-# The original cmd_link --rw flow called _rewrite_sibling_remote_url before
-# key-gen and SSH config regen — leaving the sibling .git/config pointing at
-# an alias whose key/SSH block did not yet exist if any later step failed.
-# Fix: extract a read-only validator so cmd_link can validate FIRST and rewrite
-# LAST. The validator MUST NOT mutate the sibling .git/config.
+# Originally extracted as the partial-link guard in front of the now-deleted
+# _rewrite_sibling_remote_url. Post-#89 the validator is the up-front URL
+# acceptance gate in cmd_link --rw: any malformed remote rejects the link
+# before key-gen and .list write run. The validator MUST NOT mutate the
+# sibling .git/config.
 
 @test "FIX-1: _validate_sibling_remote_url exists and is callable" {
 	_ssh_setup

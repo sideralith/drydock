@@ -39,12 +39,16 @@ credentials so the agent can `git push` to the sibling's GitHub repo:
 2. Regenerates the managed SSH config at
    `~/.config/drydock/ssh-config-<primary>` with a `Host github.com-<sibling>`
    alias block and a fallback `Host github.com` block for the primary.
-3. Rewrites the sibling's `remote.origin.url` from
-   `git@github.com:owner/repo.git` to `git@github.com-<sibling>:owner/repo.git`
-   so OpenSSH routes to the correct deploy key.
-4. Prints the public key and the `gh repo deploy-key add` command to register
+3. Prints the public key and the `gh repo deploy-key add` command to register
    it on GitHub (drydock does not register it automatically — you decide when).
-5. Appends a `flags="rw"` entry to the project link list.
+4. Appends a `flags="rw"` entry to the project link list.
+
+The next `drydock run` then regenerates a per-project gitconfig at
+`~/.config/drydock/gitconfig-<primary>` with one `url.insteadOf` block per RW
+sibling and points the container's `GIT_CONFIG_GLOBAL` at it. URL routing
+happens entirely inside the container — **the sibling's `.git/config` is never
+mutated**, so `git fetch` / `git push` on the host keeps working with the
+sibling's original SSH URL (INV-1: host gitconfig non-contamination, issue #89).
 
 **Only `git@github.com:owner/repo[.git]` SSH URLs are supported.** HTTPS
 remotes (`https://github.com/...`) are rejected with an actionable error.
@@ -52,16 +56,25 @@ remotes (`https://github.com/...`) are rejected with an actionable error.
 ### Non-git directory (`--rw` with no `.git/`)
 
 If the sibling has no `.git/` subdirectory at link time, `drydock link --rw`
-still mounts it `:rw` but skips the deploy-key, SSH config, and URL rewrite
-steps. An informational note is printed. Re-run `drydock link --rw <path>`
-after `git init` to wire up the SSH flow (D10).
+still mounts it `:rw` but skips the deploy-key and SSH config steps. An
+informational note is printed. Re-run `drydock link --rw <path>` after
+`git init` to wire up the SSH flow (D10).
 
 ### Idempotency (re-link on same path)
 
 Re-running `drydock link --rw` on an already-linked path is safe: the
 existing key is reused unchanged, the managed SSH config is regenerated
-(byte-identical when the link set hasn't changed), the URL rewrite is a
-no-op, and the pubkey is printed again (D11).
+(byte-identical when the link set hasn't changed), and the pubkey is printed
+again (D11).
+
+### Upgrading from v0.2.1 (auto-heal)
+
+v0.2.1 mutated `remote.origin.url` to the aliased form. After upgrading,
+the first `drydock run` for the project automatically restores any aliased
+URL on a linked RW sibling back to canonical form — host `git fetch` works
+again without manual intervention. Running `drydock link --rw <path>` again
+also restores the URL up-front, so you do not need to remember the upgrade
+step.
 
 ## `drydock unlink` with RW siblings
 
@@ -70,14 +83,18 @@ drydock unlink ~/git/mylib
 ```
 
 Regardless of whether `--rw` was used at link time, `unlink` detects the
-`flags="rw"` entry and performs full cleanup (SR-6):
+`flags="rw"` entry and performs cleanup (SR-6):
 
 1. Removes the `.list` entry.
 2. Regenerates the managed SSH config (removing the sibling's `Host` alias block).
-3. Restores the sibling's `remote.origin.url` to canonical form
-   (`git@github.com:owner/repo[.git]`).
-4. Leaves deploy key files on disk (you own them — drydock never deletes credentials).
-5. Prints a **dual-sided hint** (D6):
+3. The next `drydock run` regenerates the per-project gitconfig without the
+   removed sibling's `url.insteadOf` block.
+4. Defensive sweep: runs `_restore_canonical_remote_url` once in case a stale
+   aliased URL from v0.2.1 slipped past the startup migration. The post-#89
+   link flow never aliases the URL in the first place, so this is normally a
+   no-op.
+5. Leaves deploy key files on disk (you own them — drydock never deletes credentials).
+6. Prints a **dual-sided hint** (D6):
    - Local: path to the key files + the `rm` command.
    - GitHub: URL and `gh repo deploy-key` command to revoke the GitHub-side key
      (drydock cannot do this — it has no GitHub API access at unlink time).
@@ -88,26 +105,36 @@ need to remember whether a sibling was linked with `--rw`.
 
 ## How per-sibling SSH routing works
 
-The managed SSH config (`~/.config/drydock/ssh-config-<primary>`) is
-bind-mounted `:ro` into the container. `GIT_SSH_COMMAND` is set to
-`ssh -F <config>` so all git SSH operations go through it.
+Two managed files, both bind-mounted `:ro` into the container, work in concert:
+
+1. **`~/.config/drydock/ssh-config-<primary>`** — the OpenSSH config that
+   defines a `Host github.com-<sibling>` alias block per RW sibling, each
+   pinned to its own deploy key. `GIT_SSH_COMMAND` points git at this file
+   via `ssh -F <config>`.
+2. **`~/.config/drydock/gitconfig-<primary>`** — the container's
+   `GIT_CONFIG_GLOBAL` target. Contains `[include] path = ~/.gitconfig` for
+   user identity passthrough plus one `[url "git@github.com-<sibling>:owner/repo[.git]"]
+   insteadOf = git@github.com:owner/repo[.git]` block per RW sibling.
 
 Inside the container, when the agent runs `git push` from an RW sibling:
 
-1. The rewritten URL `git@github.com-<sibling>:owner/repo.git` has
-   host part `github.com-<sibling>`.
-2. OpenSSH matches the literal `Host github.com-<sibling>` block (first-match
+1. `git remote get-url origin` returns the canonical URL
+   `git@github.com:owner/repo.git` (read from the sibling's intact `.git/config`).
+2. `url.insteadOf` rewrites it in-memory to
+   `git@github.com-<sibling>:owner/repo.git` — no on-disk mutation.
+3. OpenSSH matches the literal `Host github.com-<sibling>` block (first-match
    wins per option; literal patterns, no wildcards).
-3. The block resolves `HostName github.com`, `User git`,
+4. The block resolves `HostName github.com`, `User git`,
    `IdentityFile ~/.config/drydock/keys/<sibling>_deploy`,
    `IdentitiesOnly yes`.
-4. ssh connects to `github.com` using only the sibling's deploy key.
-5. GitHub's known-hosts check uses `github.com` (from `HostName`) — matched
+5. ssh connects to `github.com` using only the sibling's deploy key.
+6. GitHub's known-hosts check uses `github.com` (from `HostName`) — matched
    by the pinned key in `/etc/ssh/ssh_known_hosts` baked into the image.
 
 For the primary project (canonical URL `git@github.com:owner/repo.git`):
-1. Host part is `github.com` — matches the fallback `Host github.com` block.
-2. Resolves to the primary deploy key.
+1. No `insteadOf` block applies → URL is untouched.
+2. Host part is `github.com` — matches the fallback `Host github.com` block.
+3. Resolves to the primary deploy key.
 
 **Note on alias naming**: the sibling alias is a local SSH label only (e.g.
 `github.com-my_lib`). DNS resolution uses `HostName github.com`, so

@@ -54,63 +54,21 @@ _validate_sibling_remote_url() {
 	return 0
 }
 
-# _rewrite_sibling_remote_url(sibling_path, host_alias[, remote_name])
-#
-# Rewrite sibling's remote.<name>.url from canonical github SSH form to the
-# aliased form: git@github.com-<alias>:owner/repo[.git]
-#
-# Canonical form: git@github.com:owner/repo[.git]
-# Aliased form:   git@github.com-<alias>:owner/repo[.git]
-#
-# Rejects: HTTPS URLs, non-GitHub hosts, malformed URLs (SR-10).
-# Idempotent: if already aliased to the same alias, returns 0.
-# Errors: if aliased to a DIFFERENT alias (unexpected conflict).
-#
-# Validation is shared with _validate_sibling_remote_url — kept here too so
-# direct callers (tests, future code paths) still get the same guarantees.
-#
-# host_alias is named to avoid shadowing the Bash builtin `alias` — see
-# judgment-day Round 1 (Judge B SUGGESTION).
-_rewrite_sibling_remote_url() {
-	local sibling="$1"
-	local host_alias="$2"
-	local remote_name="${3:-origin}"
-
-	local current
-	current="$(git -C "$sibling" remote get-url "$remote_name" 2>/dev/null)" ||
-		err "sibling has no '$remote_name' remote — cannot rewrite URL"
-
-	# Canonical form: git@github.com:owner/repo[.git]
-	local canonical_re='^git@github\.com:([^/]+)/([^/]+?)(\.git)?$'
-	# Aliased form:   git@github.com-<alias>:owner/repo[.git]
-	local aliased_re='^git@github\.com-([^:]+):([^/]+)/([^/]+?)(\.git)?$'
-
-	if [[ "$current" =~ $aliased_re ]]; then
-		local cur_alias="${BASH_REMATCH[1]}"
-		if [ "$cur_alias" = "$host_alias" ]; then
-			# Already aliased to the same alias — idempotent (D11).
-			return 0
-		fi
-		err "sibling URL is aliased to '$cur_alias' but expected '$host_alias' — manual cleanup required: git -C '$sibling' remote set-url $remote_name git@github.com:<owner>/<repo>.git"
-	fi
-
-	if [[ ! "$current" =~ $canonical_re ]]; then
-		err "sibling remote.$remote_name.url='$current' — only canonical 'git@github.com:owner/repo[.git]' SSH URLs supported (HTTPS / non-GitHub remotes are out of scope)"
-	fi
-
-	local owner="${BASH_REMATCH[1]}"
-	local repo="${BASH_REMATCH[2]}"
-	local dotgit="${BASH_REMATCH[3]:-}"
-	local new_url="git@github.com-${host_alias}:${owner}/${repo}${dotgit}"
-
-	git -C "$sibling" remote set-url "$remote_name" "$new_url" ||
-		err "git remote set-url failed in $sibling"
-}
-
 # _restore_canonical_remote_url(sibling_path, expected_alias[, remote_name])
 #
-# Symmetric to _rewrite_sibling_remote_url. Restores remote.<name>.url from
-# the aliased form back to canonical git@github.com:owner/repo[.git].
+# Restores remote.<name>.url from the legacy v0.2.1 aliased form back to the
+# canonical form git@github.com:owner/repo[.git].
+#
+# History: v0.2.1 mutated the sibling's .git/config to inject an SSH alias
+# (e.g. git@github.com-<sibling>:owner/repo.git) so the container's managed
+# SSH config could route per-sibling deploy keys. That broke the host's
+# `git fetch` because the alias only resolved inside the container.
+#
+# #89 fix: routing moved to url.insteadOf in a container-only gitconfig so
+# the sibling .git/config never has to be touched (INV-1 extended — host
+# gitconfig non-contamination). This helper survives as the startup-migration
+# entry point (invoked from export_compose_env) AND as the unlink-time safety
+# net for any aliased URL that slipped past migration.
 #
 # No-op when:
 #   - sibling .git/ is absent
@@ -147,6 +105,109 @@ _restore_canonical_remote_url() {
 
 	git -C "$sibling" remote set-url "$remote_name" "$new_url" ||
 		warn "git remote set-url failed in $sibling — leaving URL aliased"
+}
+
+# ── Per-project gitconfig generation (issue #89) ──────────────────────────────
+
+# _regenerate_session_gitconfig(primary_project, list_file) → config_path
+#
+# Issue #89: write a per-project gitconfig at ~/.config/drydock/gitconfig-<primary>
+# containing:
+#   [include]
+#     path = ~/.gitconfig                  ← user identity passthrough
+#   [url "git@github.com-<alias>:owner/repo[.git]"]
+#     insteadOf = git@github.com:owner/repo[.git]   ← one block per RW sibling
+#
+# The container points GIT_CONFIG_GLOBAL at this file, so git inside the
+# container rewrites canonical GitHub URLs to the aliased form on the fly —
+# without ever mutating the sibling's .git/config (INV-1).
+#
+# Behaviour:
+#   - Atomic mv + chmod 600 (same pattern as _regenerate_managed_ssh_config).
+#   - Insertion order from .list preserved (NO sort).
+#   - Sibling with non-canonical URL (HTTPS, non-GitHub, malformed) is SKIPPED
+#     with a warn — does NOT abort drydock run. Per-sibling failure must not
+#     block the whole startup flow.
+#   - Sibling whose .git/ is missing is skipped silently (D10 — link is just a
+#     mount in that case, no SSH routing involved).
+#   - Always writes the [include] block, even when there are zero RW siblings,
+#     so a minimal pass-through gitconfig works as the activation default.
+#   - Returns the config path on stdout.
+_regenerate_session_gitconfig() {
+	local primary="$1"
+	local list_file="$2"
+	local config_path
+	config_path="$(_session_gitconfig_path "$primary")"
+	mkdir -p "$(dirname "$config_path")"
+
+	local tmp
+	tmp="$(mktemp "${config_path}.XXXXXX")" || err "mktemp failed for managed gitconfig"
+
+	{
+		printf '# drydock-managed — regenerated on every drydock run. Do not edit.\n'
+		printf '# Source of truth: %s\n' "$list_file"
+		printf '# Issue #89: routes per-sibling SSH aliases via url.insteadOf so the\n'
+		printf '#           container can use deploy keys without mutating the host\n'
+		printf '#           sibling .git/config (INV-1).\n\n'
+		# Identity passthrough — user.name, user.email, aliases, signingkey, etc.
+		printf '[include]\n'
+		printf '\tpath = ~/.gitconfig\n\n'
+
+		if [ -f "$list_file" ]; then
+			local _host _target _flags _name _current _owner _repo _dotgit
+			local _canonical_re='^git@github\.com:([^/]+)/([^/]+?)(\.git)?$'
+			local _aliased_re='^git@github\.com-([^:]+):([^/]+)/([^/]+?)(\.git)?$'
+			while IFS='|' read -r _host _target _flags; do
+				[ -z "$_host" ] && continue
+				[ "${_flags:-}" = "rw" ] || continue
+				# Sibling without .git/ — no SSH routing needed (D10).
+				[ -d "${_host}/.git" ] || continue
+				_name="$(sanitize_project_name "$(basename "$_host")")"
+				_current="$(git -C "$_host" remote get-url origin 2>/dev/null)" || continue
+				# Accept canonical OR aliased-to-same-alias (legacy v0.2.1 state).
+				# In the aliased case, parse owner/repo and emit the insteadOf
+				# block as if the URL were canonical — the startup migration
+				# (export_compose_env) restores the sibling to canonical separately.
+				if [[ "$_current" =~ $_canonical_re ]]; then
+					_owner="${BASH_REMATCH[1]}"
+					_repo="${BASH_REMATCH[2]}"
+					_dotgit="${BASH_REMATCH[3]:-}"
+				elif [[ "$_current" =~ $_aliased_re ]]; then
+					# Only same-alias counts — foreign aliases mean the user
+					# wired this manually; do not second-guess.
+					[ "${BASH_REMATCH[1]}" = "$_name" ] || {
+						warn "sibling $_host has URL aliased to '${BASH_REMATCH[1]}' (expected '$_name') — skipping url.insteadOf entry"
+						continue
+					}
+					_owner="${BASH_REMATCH[2]}"
+					_repo="${BASH_REMATCH[3]}"
+					_dotgit="${BASH_REMATCH[4]:-}"
+				else
+					warn "sibling $_host remote.origin.url='$_current' — only canonical 'git@github.com:owner/repo[.git]' SSH URLs are routable; skipping url.insteadOf entry"
+					continue
+				fi
+				printf '[url "git@github.com-%s:%s/%s%s"]\n' "$_name" "$_owner" "$_repo" "$_dotgit"
+				printf '\tinsteadOf = git@github.com:%s/%s%s\n\n' "$_owner" "$_repo" "$_dotgit"
+			done <"$list_file"
+		fi
+	} >"$tmp" || {
+		rm -f "$tmp"
+		err "failed to write managed gitconfig"
+	}
+
+	# 600: gitconfig may carry signingkey hints; keep it owner-only just like
+	# the managed SSH config (and the host's ~/.gitconfig is typically 644 but
+	# the managed copy is drydock-internal and not shared).
+	if ! chmod 600 "$tmp"; then
+		rm -f "$tmp"
+		err "chmod 600 failed on managed gitconfig"
+	fi
+	if ! mv -f "$tmp" "$config_path"; then
+		rm -f "$tmp"
+		err "atomic mv failed for managed gitconfig"
+	fi
+
+	printf '%s' "$config_path"
 }
 
 # ── Key generation ────────────────────────────────────────────────────────────

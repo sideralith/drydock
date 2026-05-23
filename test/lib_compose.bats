@@ -2568,3 +2568,208 @@ STUB
 	seed_session_config_dir "$disc"
 	[ ! -d "$session_dir/drydock-hooks" ]
 }
+
+# ── #89 RED — host gitconfig isolation via url.insteadOf ──────────────────────
+#
+# Issue #89: `drydock link --rw` rewrote remote.origin.url in the sibling's
+# .git/config, contaminating the host with an SSH alias that only resolves
+# inside the container. Fix: never mutate the sibling; instead, generate a
+# per-project gitconfig with [include] + url.insteadOf blocks and point
+# GIT_CONFIG_GLOBAL at it inside the container.
+#
+# Helper: build a fake RW sibling with .git/ and a canonical github URL.
+_make_rw_sibling_with_url() {
+	local sibling_dir="$1"
+	local owner_repo="$2"  # e.g. "owner/repo"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -q -b main >/dev/null 2>&1
+	git -C "$sibling_dir" remote add origin "git@github.com:${owner_repo}.git"
+}
+
+@test "#89 RED: export_compose_env generates per-project gitconfig with [include] + url.insteadOf per RW sibling" {
+	local fake_home="$BATS_TEST_TMPDIR/89-gen-home"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	# One RW sibling with a canonical GitHub SSH URL
+	local sib_a="$BATS_TEST_TMPDIR/89-gen-sib-a"
+	_make_rw_sibling_with_url "$sib_a" "owner/repoA"
+	local sanitized_a
+	sanitized_a="$(sanitize_project_name "$(basename "$sib_a")")"
+
+	# Activate SSH overlay: drop sibling deploy key + list entry
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/${sanitized_a}_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/${sanitized_a}_deploy"
+	mkdir -p "$fake_home/.config/drydock/links"
+	printf '%s|/workspace-siblings/%s|rw\n' "$sib_a" "$(basename "$sib_a")" \
+		>"$fake_home/.config/drydock/links/myproject.list"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# Per-project gitconfig was written at the expected path.
+	local gconf="$fake_home/.config/drydock/gitconfig-myproject"
+	[ -f "$gconf" ]
+
+	# [include] block pulls in host ~/.gitconfig (identity passthrough).
+	grep -q '^\[include\]' "$gconf"
+	grep -qE 'path[[:space:]]*=[[:space:]]*~/.gitconfig' "$gconf"
+
+	# url.insteadOf block rewrites the canonical URL → aliased URL inside the container.
+	grep -qE "^\[url \"git@github\\.com-${sanitized_a}:owner/repoA\\.git\"\]" "$gconf"
+	grep -qE "insteadOf[[:space:]]*=[[:space:]]*git@github\\.com:owner/repoA\\.git" "$gconf"
+
+	# File mode is 600 (gitconfig under XDG_CONFIG, no group/world read).
+	local perms
+	perms="$(stat -c '%a' "$gconf")"
+	[ "$perms" = "600" ]
+}
+
+@test "#89 RED: export_compose_env exports GIT_CONFIG_GLOBAL pointing at the per-project gitconfig" {
+	local fake_home="$BATS_TEST_TMPDIR/89-env-home"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	local sib="$BATS_TEST_TMPDIR/89-env-sib"
+	_make_rw_sibling_with_url "$sib" "owner/repo"
+	local sanitized
+	sanitized="$(sanitize_project_name "$(basename "$sib")")"
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	mkdir -p "$fake_home/.config/drydock/links"
+	printf '%s|/workspace-siblings/%s|rw\n' "$sib" "$(basename "$sib")" \
+		>"$fake_home/.config/drydock/links/myproject.list"
+
+	unset DRYDOCK_GITCONFIG
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# Compose interpolates this into docker-compose.ssh.yml as the
+	# GIT_CONFIG_GLOBAL container env var.
+	[ "${DRYDOCK_GITCONFIG:-}" = "$fake_home/.config/drydock/gitconfig-myproject" ]
+}
+
+@test "#89 RED: export_compose_env restores aliased URL to canonical on startup (migration from v0.2.1)" {
+	local fake_home="$BATS_TEST_TMPDIR/89-migrate-home"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	# Sibling has the v0.2.1-era aliased URL still in its .git/config.
+	local sib="$BATS_TEST_TMPDIR/89-migrate-sib"
+	mkdir -p "$sib"
+	git -C "$sib" init -q -b main >/dev/null 2>&1
+	local sanitized
+	sanitized="$(sanitize_project_name "$(basename "$sib")")"
+	git -C "$sib" remote add origin "git@github.com-${sanitized}:owner/repo.git"
+
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	mkdir -p "$fake_home/.config/drydock/links"
+	printf '%s|/workspace-siblings/%s|rw\n' "$sib" "$(basename "$sib")" \
+		>"$fake_home/.config/drydock/links/myproject.list"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# After startup migration, sibling .git/config must hold the canonical URL.
+	local restored
+	restored="$(git -C "$sib" remote get-url origin)"
+	[ "$restored" = "git@github.com:owner/repo.git" ]
+}
+
+@test "#89 RED: export_compose_env skips RW sibling with non-GitHub URL without erroring" {
+	local fake_home="$BATS_TEST_TMPDIR/89-skip-home"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	# Sibling with an HTTPS URL — cannot generate an insteadOf block.
+	local sib="$BATS_TEST_TMPDIR/89-skip-sib"
+	mkdir -p "$sib"
+	git -C "$sib" init -q -b main >/dev/null 2>&1
+	git -C "$sib" remote add origin "https://github.com/owner/repo.git"
+	local sanitized
+	sanitized="$(sanitize_project_name "$(basename "$sib")")"
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	mkdir -p "$fake_home/.config/drydock/links"
+	printf '%s|/workspace-siblings/%s|rw\n' "$sib" "$(basename "$sib")" \
+		>"$fake_home/.config/drydock/links/myproject.list"
+
+	# Must NOT abort — non-canonical URLs are skipped silently or with warn.
+	export_compose_env "$TEST_PROJECT_DIR" 2>/dev/null
+
+	# Gitconfig was generated (still has [include] block) but has no url block
+	# for the unparseable sibling.
+	local gconf="$fake_home/.config/drydock/gitconfig-myproject"
+	[ -f "$gconf" ]
+	grep -q '^\[include\]' "$gconf"
+	! grep -qE '^\[url ' "$gconf"
+}
+
+@test "#89 RED: export_compose_env writes minimal gitconfig ([include] only) when no RW sibling but SSH overlay active (primary key only)" {
+	# Activation gate parity with SSH overlay: when primary-key-only triggers
+	# the SSH overlay, GIT_CONFIG_GLOBAL is still set (overlay activation is
+	# the single gate) and the file contains the [include] passthrough.
+	local fake_home="$BATS_TEST_TMPDIR/89-minimal-home"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/myproject_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/myproject_deploy"
+
+	unset DRYDOCK_GITCONFIG
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	[ -n "${DRYDOCK_GITCONFIG:-}" ]
+	[ -f "$DRYDOCK_GITCONFIG" ]
+	grep -q '^\[include\]' "$DRYDOCK_GITCONFIG"
+	# No url blocks (no RW siblings).
+	! grep -qE '^\[url ' "$DRYDOCK_GITCONFIG"
+}
+
+@test "#89 RED: export_compose_env does NOT set DRYDOCK_GITCONFIG when SSH overlay inactive (no key, no RW)" {
+	local fake_home="$BATS_TEST_TMPDIR/89-noconf-home"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	unset DRYDOCK_GITCONFIG
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	[ -z "${DRYDOCK_GITCONFIG:-}" ]
+}
+
+@test "#89 RED: export_compose_env does NOT mutate canonical sibling URL during startup migration" {
+	local fake_home="$BATS_TEST_TMPDIR/89-noop-home"
+	mkdir -p "$fake_home/.claude-container"
+	touch "$fake_home/.claude-container.json"
+	export HOME="$fake_home"
+
+	local sib="$BATS_TEST_TMPDIR/89-noop-sib"
+	_make_rw_sibling_with_url "$sib" "owner/repo"
+	local before
+	before="$(git -C "$sib" remote get-url origin)"
+
+	local sanitized
+	sanitized="$(sanitize_project_name "$(basename "$sib")")"
+	mkdir -p "$fake_home/.config/drydock/keys"
+	touch "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	chmod 600 "$fake_home/.config/drydock/keys/${sanitized}_deploy"
+	mkdir -p "$fake_home/.config/drydock/links"
+	printf '%s|/workspace-siblings/%s|rw\n' "$sib" "$(basename "$sib")" \
+		>"$fake_home/.config/drydock/links/myproject.list"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	local after
+	after="$(git -C "$sib" remote get-url origin)"
+	[ "$before" = "$after" ]
+	[ "$after" = "git@github.com:owner/repo.git" ]
+}

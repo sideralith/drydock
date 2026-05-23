@@ -25,24 +25,46 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 
 - **Rule**: The compose stack MUST NOT bind-mount host `~/.ssh`, `~/.gnupg`, or the gpg-agent
   socket. SSH and GPG material MUST live exclusively under `~/.config/drydock/keys/<project>_deploy`
-  and `~/.config/drydock/signing/`.
-- **Why**: A compromised or instruction-following-too-literally agent has direct read access to the
-  user's primary auth identities. A single `cat ~/.ssh/id_ed25519` or accidental `cp` to `/tmp/`
-  leaks the host's primary identity — not just a deploy key. The credential blast radius extends to
-  every system that trusts that key (GitHub personal account, servers, cloud providers).
-- **Consequence of violating**: A buggy or prompt-injected agent exfiltrates the full SSH identity
-  in one command, compromising every system tied to that identity — not merely the one project
-  being worked on.
+  and `~/.config/drydock/signing/`. **Drydock MUST NOT mutate any file the host owns** — in
+  particular, the sibling repo's `.git/config` (`remote.*.url`, hooks, includes) and the host's
+  `~/.gitconfig` are off-limits. Container-only routing (SSH alias resolution, `url.insteadOf`)
+  is delivered via drydock-owned files under `~/.config/drydock/` that are RO bind-mounted into
+  the container, never by editing host artifacts in place.
+- **Why**: Two independent failure modes share the same boundary.
+  (1) **Credential blast radius.** A compromised or instruction-following-too-literally agent
+  has direct read access to the user's primary auth identities. A single `cat ~/.ssh/id_ed25519`
+  or accidental `cp` to `/tmp/` leaks the host's primary identity — not just a deploy key. The
+  blast radius extends to every system that trusts that key (GitHub personal account, servers,
+  cloud providers).
+  (2) **Host gitconfig non-contamination (issue #89).** A drydock mutation of the sibling's
+  `.git/config` — for example, rewriting `remote.origin.url` to a container-only SSH alias —
+  silently breaks the same git operation on the host because `.git/config` is a single file
+  shared across the bind-mount. The host's `git fetch` / `git push` against the sibling stops
+  working the moment drydock writes; the host has no way to use a URL that only the container's
+  managed SSH config knows how to resolve. Routing MUST happen via container-only mechanisms
+  (`url.insteadOf` in a drydock-owned gitconfig, the managed SSH config, `GIT_SSH_COMMAND`) so
+  the host artifact stays canonical end-to-end.
+- **Consequence of violating**: (1) A buggy or prompt-injected agent exfiltrates the full SSH
+  identity in one command, compromising every system tied to that identity — not merely the
+  one project being worked on. (2) A drydock release that writes host artifacts breaks the
+  user's host workflow silently (e.g. `git fetch` fails immediately after `drydock link --rw`)
+  and creates a mutually exclusive state where no value of the contaminated file works on both
+  sides at once.
 - **Where this lives in code**: `docker-compose.yml` mounts list (no `~/.ssh`, no `~/.gnupg`);
   `docker-compose.ssh.yml` and `docker-compose.gpg.yml` (credential overlays sourced from
-  `~/.config/drydock/` exclusively). For RW sibling mode: `lib/sibling_ssh.sh` (per-sibling
-  key generation, managed SSH config regeneration, and `remote.origin.url` rewrite/restore
-  helpers); the managed SSH config is written to `~/.config/drydock/ssh-config-<primary>` and
-  RO bind-mounted into the container; the keys directory (`~/.config/drydock/keys/`) mounts as
-  a single `:ro` directory (no per-key overlay enumeration — scales to N siblings without
-  changing the compose files). All per-sibling key material stays under
+  `~/.config/drydock/` exclusively). For RW sibling mode: `lib/sibling_ssh.sh`
+  (`_generate_sibling_deploy_key`, `_regenerate_session_gitconfig`, `_restore_canonical_remote_url`);
+  the managed SSH config is written to `~/.config/drydock/ssh-config-<primary>` and RO
+  bind-mounted into the container; the per-project gitconfig is written to
+  `~/.config/drydock/gitconfig-<primary>` and RO bind-mounted, with `GIT_CONFIG_GLOBAL`
+  pointing at it (`docker-compose.ssh.yml`). The keys directory (`~/.config/drydock/keys/`)
+  mounts as a single `:ro` directory (no per-key overlay enumeration — scales to N siblings
+  without changing the compose files). All per-sibling key material stays under
   `~/.config/drydock/keys/` — already covered by the `__HOME__/.config/drydock/**` deny rule
-  in `templates/managed-settings.d/00-secrets.json`.
+  in `templates/managed-settings.d/00-secrets.json`. `cmd_link --rw` (`lib/commands.sh`) MUST
+  NOT call `git remote set-url` on the sibling; `export_compose_env` (`lib/compose.sh`) runs
+  `_restore_canonical_remote_url` once per RW sibling on every `drydock run` as a startup
+  migration for repos still carrying a v0.2.1 aliased URL.
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-2: Container State Split

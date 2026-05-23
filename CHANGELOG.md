@@ -13,6 +13,23 @@ CI hygiene & infrastructure polish for the v0.2.2 cycle.
 - Add `scripts/lint-commits.sh` and CI job `Lint (commit-message)` that
   enforces Conventional Commits format on PR commits targeting `dev` (#10).
 
+### Fixed
+- **`drydock link --rw` no longer contaminates the host's git configuration**
+  (#89). Pre-fix, link mutated the sibling's `remote.origin.url` from
+  `git@github.com:owner/repo.git` to the container-only alias
+  `git@github.com-<sibling>:owner/repo.git` so OpenSSH could route per-sibling
+  deploy keys. That alias only resolved inside the container, so `git fetch`
+  on the host failed immediately after linking and stayed broken until
+  `drydock unlink`. The fix moves URL routing to `url.insteadOf` in a
+  drydock-managed per-project gitconfig at
+  `~/.config/drydock/gitconfig-<primary>` that the container reads via
+  `GIT_CONFIG_GLOBAL`. Sibling `.git/config` is never touched — host `git
+  fetch` keeps working with the canonical URL while the container resolves
+  the alias in memory. Migration: the first `drydock run` after upgrading
+  auto-restores any aliased URL left by v0.2.1 to canonical (idempotent,
+  per-sibling, non-fatal on failure). INV-1 extended to capture the host
+  gitconfig non-contamination rule.
+
 ### Changed
 - **Hooks RO overlay sources from the per-session container-state dir** —
   `docker-compose.yml`'s `:ro` hooks mount now sources from
