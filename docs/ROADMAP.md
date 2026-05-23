@@ -42,7 +42,7 @@ file.
 | [session-awareness-state-model](#session-awareness-state-model) | v0.2.1 | [#79][i79] | Done |
 | [guardrail-deny-layer-port](#guardrail-deny-layer-port) | v0.2.1 | [#76][i76] | Done |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Planned |
-| [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Planned |
+| [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Done |
 | [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Planned |
 | [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Planned |
 | [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Planned |
