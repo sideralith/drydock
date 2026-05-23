@@ -132,12 +132,13 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 
 - **Rule**: The per-session `~/.claude-container-<disc>/hooks/` subpath MUST be bind-mounted
   `:ro` on top of the container's `.claude` mount. The agent MUST NOT have write access to its
-  own hook scripts. Additionally, drydock's agent policy — the `permissions.deny` block and the
-  `hooks.SessionStart` entry — MUST be delivered via a Claude Code managed-settings drop-in
-  baked into the image and owned by root. The agent MUST NOT have write access to these policy
-  files.
-- **Why**: drydock's tier-1 defense is composed of three layers, ALL sealed at session startup
-  via image-layer ownership or per-session seeding — no layer is a live host bind-mount.
+  own hook scripts. Additionally, drydock's agent policy — the `permissions.deny` block, the
+  `hooks.SessionStart` entry, and the `hooks.PreToolUse` entry — MUST be delivered via a Claude
+  Code managed-settings drop-in baked into the image and owned by root. The agent MUST NOT have
+  write access to these policy files.
+- **Why**: drydock's tier-1 defense is composed of three layers, ALL sealed before or at session
+  startup — layers (a) and (b) via image-layer ownership at build time, layer (c) via per-session
+  seeding at startup. No layer is a live host bind-mount.
   (a) The `permissions.deny` block lives in `templates/managed-settings.d/00-secrets.json` and
   is baked into the image at `/etc/claude-code/managed-settings.d/00-secrets.json` (root-owned,
   non-root container user, loaded by Claude Code at highest precedence and not overridable from

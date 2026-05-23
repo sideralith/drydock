@@ -534,7 +534,7 @@ was a permanent `skip` regardless of any flag.
 **What shipped.** Two-flag namespace under a shared `DRYDOCK_INTEGRATION_*`
 prefix, structurally separating CI-safe from local-only tiers:
 
-- `DRYDOCK_INTEGRATION=1` — DooD-safe bats integration tests (T5 + T19-A/B/C
+- `DRYDOCK_INTEGRATION=1` — DooD-safe bats integration tests (T5 + the T19 family
   in `test/managed_settings.bats`). The smoke job sets this flag after
   `drydock build`, so every PR that touches the image, the compose stack,
   the CLI, the baked managed-settings drop-ins, or the per-session-sealed
