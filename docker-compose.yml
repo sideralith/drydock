@@ -106,6 +106,12 @@ services:
       # mid-session host edits to templates/hooks/ do not leak in (bounded
       # blast radius under threat model A — same property as mount #1).
       - "${DRYDOCK_SESSION_HOOKS_DIR:?DRYDOCK_SESSION_HOOKS_DIR not set — invoke via the drydock CLI}:/opt/drydock/hooks:ro"
+      # Re-mount :ro at the .claude/drydock-hooks path to override the parent .claude:rw mount.
+      # DRYDOCK_SESSION_HOOKS_DIR is a subpath of DRYDOCK_SESSION_CLAUDE_DIR, so the parent :rw
+      # mount exposes drydock-hooks/ as writable at ~/.claude/drydock-hooks/. This second mount
+      # seals that inode alias — the agent cannot modify the hook scripts via the :rw path.
+      # (Same pattern as mount #1's hooks overlay above.)
+      - "${DRYDOCK_SESSION_HOOKS_DIR:?DRYDOCK_SESSION_HOOKS_DIR not set — invoke via the drydock CLI}:${HOME}/.claude/drydock-hooks:ro"
 
       # Optional opt-in overlays (activated by drydock CLI when detected):
       #   docker-compose.mcp-auth.yml      — ~/.mcp-auth/      (mcp-remote OAuth)
