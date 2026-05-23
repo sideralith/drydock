@@ -43,7 +43,7 @@ file.
 | [guardrail-deny-layer-port](#guardrail-deny-layer-port) | v0.2.1 | [#76][i76] | Done |
 | [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Done |
 | [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Done |
-| [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Planned |
+| [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Done |
 | [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Planned |
 | [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.4.0 | [#16][i16] | Planned |
@@ -520,31 +520,39 @@ and the agent-cannot-write-its-own-hooks guarantee are preserved.
 
 ### integration-in-ci
 
-**Status: Planned (v0.2.2, issue #74).**
+**Status: Done (v0.2.2, issue #74).**
 
-**Problem.** Integration tests (`test/integration/`) ship with the repo but
-do not run in CI — `DRYDOCK_INTEGRATION=1` is the opt-in flag, and the
-GitHub Actions workflow does not set it. The unit suite catches most
-regressions, but a class of issues only surfaces against a built image
-(real `docker compose up`, real bind-mounts, INV-2 sub-mount resolution).
-Issue #73 closed the hermeticity gap that previously made running the
-integration tests in CI unsafe; with that fixed the remaining work is
-wiring them in.
+**Problem.** Integration tests (`test/integration/` and the
+`DRYDOCK_INTEGRATION`-gated tests in `test/managed_settings.bats`) shipped
+with the repo but did not run in CI. The unit suite caught most regressions,
+but the INV-3 bake step (deny rules + hooks baked root-owned into
+`drydock:latest`) and the per-file `__HOME__` substitution were verified
+only when a contributor ran the integration suite locally with the right
+flag — and one corner of that suite (T5 in `test/managed_settings.bats`)
+was a permanent `skip` regardless of any flag.
 
-**Why this scope.** Pure CI infrastructure. Risk reduction: a future
-INV-1/INV-2/INV-8 regression that the unit suite cannot catch lands in
-`dev` undetected until a contributor runs the integration suite locally.
+**What shipped.** Two-flag namespace under a shared `DRYDOCK_INTEGRATION_*`
+prefix, structurally separating CI-safe from local-only tiers:
 
-**Invariants touched.** None — adding a CI job, not changing runtime
-behaviour.
+- `DRYDOCK_INTEGRATION=1` — DooD-safe bats integration tests (T5 + T19-A/B/C
+  in `test/managed_settings.bats`). The smoke job sets this flag after
+  `drydock build`, so every PR that touches the image, the compose stack,
+  the CLI, the baked managed-settings drop-ins, or the baked hooks gets the
+  bake verified end-to-end.
+- `DRYDOCK_INTEGRATION_HOSTNET=1` — local-only host-network tier (SR-9, the
+  shared `projects/` sub-mount resolution test). Renamed from
+  `RUN_INTEGRATION` for the unified namespace. Stays out of CI because
+  `network_mode: host` is unreliable under GHA DinD.
 
-**Open questions.** Whether to run integration tests on every PR or only
-on release-prep branches; the CI runner image size constraint; whether the
-integration opt-in flag is unified (a single `DRYDOCK_INTEGRATION=1` vs.
-the current per-suite gates).
+The smoke job's path filter was extended to include
+`templates/managed-settings.d/**` and `templates/hooks/**` so a PR touching
+only the baked drop-ins still triggers the bake-verification job. T5 was
+converted from an unconditional `skip` to the same `DRYDOCK_INTEGRATION=1`
+guard the T19 tests use. CONTRIBUTING.md documents both flags and the
+local invocation commands.
 
-**Provenance.** Issue [#74][i74]. Surfaced alongside #73 (the SR-9
-hermetic rewrite).
+**Provenance.** Issue [#74][i74]. Resolves the flag-unification open
+question and the in-CI-running question listed in the prior Planned entry.
 
 ---
 

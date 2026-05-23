@@ -49,6 +49,34 @@ image ships none). Always use `scripts/test.sh` inside the container; plain
 `bats test/` is the host-only invocation (equivalent on a normal host, but
 not safe inside drydock where `/tmp` is `noexec`).
 
+### Running integration tests locally
+
+Most bats tests run unit-mode and need no special flag. Two integration tiers
+exist for tests that exercise a built `drydock:latest` image; both are gated by
+explicit opt-in flags so the default `scripts/test.sh` invocation stays fast
+and green on a fresh checkout.
+
+| Flag | What it enables | Where it runs |
+|------|-----------------|---------------|
+| `DRYDOCK_INTEGRATION=1` | Bats tests that `docker run --rm drydock:latest …` against the built image (T5 + T19-A/B/C in `test/managed_settings.bats` — verify the INV-3 deny-rule and hooks bake). DooD-safe. | Locally **and in CI** — the smoke job sets this flag after `drydock build`. |
+| `DRYDOCK_INTEGRATION_HOSTNET=1` | Tests that launch real containers via `docker compose run` and require `network_mode: host` (`test/integration/test_projects_submount.sh` — SR-9, the shared `projects/` sub-mount resolution proof). | **Local only.** GitHub Actions runners use DinD where `network_mode: host` maps to the runner's container namespace, not a bare Linux host, and produces unreliable results. |
+
+Local invocation:
+
+```bash
+# DooD-safe integration tier (also what CI runs):
+drydock build
+DRYDOCK_INTEGRATION=1 scripts/test.sh test/managed_settings.bats
+
+# Host-network tier (local only — must run on a real host or inside a drydock
+# container with the host Docker socket; cannot run in GHA):
+drydock build
+DRYDOCK_INTEGRATION_HOSTNET=1 test/integration/test_projects_submount.sh
+```
+
+The shared `DRYDOCK_INTEGRATION_*` prefix marks these as runtime-tier flags;
+the `_HOSTNET` suffix is the explicit reason SR-9 stays out of CI.
+
 ### No submodule step needed
 
 The bats helper libraries (`bats-support` and `bats-assert`) are vendored
