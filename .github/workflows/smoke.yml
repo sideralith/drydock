@@ -19,6 +19,9 @@ on:
       - "docker-compose*.yml"
       - "bin/**"
       - "lib/**"
+      - "templates/managed-settings.d/**"
+      - "templates/hooks/**"
+      - ".github/workflows/smoke.yml"
 
 jobs:
   smoke:
@@ -39,6 +42,19 @@ jobs:
         # guards against any set -euo pipefail interaction with missing paths
         # that might surface as a non-zero exit on the runner.
         run: bin/drydock doctor || true
+
+      - name: Run managed-settings integration tests against built image
+        # T19-A/B/C in test/managed_settings.bats verify drydock's INV-3 bake
+        # (deny rules + hooks baked root-owned into drydock:latest, agent
+        # cannot rewrite them). These tests run `docker run --rm drydock:latest
+        # cat <file>` — DooD-safe, no network_mode:host dependency, so they
+        # work in GHA. The DRYDOCK_INTEGRATION=1 flag unmasks T5 + T19-A/B/C;
+        # all other bats tests are unit-mode and CI runs them in ci.yml.
+        # Scope is the single file (not test/) — smoke is post-build bake
+        # verification, not a unit re-run.
+        env:
+          DRYDOCK_INTEGRATION: "1"
+        run: scripts/test.sh test/managed_settings.bats
 
       - name: Validate hardening overlay YAML (compose config)
         # Renders the full -f chain (base + hardening overlay) and exits 0
