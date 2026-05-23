@@ -3,7 +3,8 @@
 #
 # Run this ON THE HOST after a drydock release tag exists upstream. It:
 #   1. Computes the SHA256 of the tagged release tarball from GitHub.
-#   2. Substitutes URL + SHA into the formula template.
+#   2. Substitutes __VERSION__, the url line, and __SHA256_PLACEHOLDER__
+#      into the formula template (packaging/homebrew/drydock.rb).
 #   3. Creates sideralith/homebrew-tap on GitHub if missing (else updates).
 #   4. Pushes Formula/drydock.rb to that repo.
 #
@@ -96,9 +97,14 @@ echo "→ SHA256: $sha"
 tmp_formula="$(mktemp)"
 trap 'rm -f "$tmp_tarball" "$tmp_formula"' EXIT
 
-# url line: replace the tag portion; sha line: replace placeholder.
-# Use a literal-safe sed by anchoring on known strings.
+# Substitute the three placeholder fields in the template:
+#   __VERSION__         → the resolved tag (e.g. v0.2.1)
+#   __SHA256_PLACEHOLDER__ → the SHA256 of the tagged tarball
+# The url line is also regex-replaced as a safety net so a maintainer can
+# accidentally land a real version in the template without breaking the
+# publish (the regex wins over whatever literal is on disk).
 sed \
+	-e "s|__VERSION__|$tag|g" \
 	-e "s|^  url \".*\"\$|  url \"$tarball_url\"|" \
 	-e "s|__SHA256_PLACEHOLDER__|$sha|" \
 	"$formula_src" >"$tmp_formula"
