@@ -131,11 +131,13 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 ### INV-3: Hooks Read-Only Overlay
 
 - **Rule**: The per-session `~/.claude-container-<disc>/hooks/` subpath MUST be bind-mounted
-  `:ro` on top of the container's `.claude` mount. The agent MUST NOT have write access to its
-  own hook scripts. Additionally, drydock's agent policy — the `permissions.deny` block, the
-  `hooks.SessionStart` entry, and the `hooks.PreToolUse` entry — MUST be delivered via a Claude
-  Code managed-settings drop-in baked into the image and owned by root. The agent MUST NOT have
-  write access to these policy files.
+  `:ro` on top of the container's `.claude` mount, and the per-session
+  `~/.claude-container-<disc>/drydock-hooks/` subpath MUST likewise be bind-mounted `:ro` at
+  `~/.claude/drydock-hooks` to seal the inode-alias exposure introduced by the parent `:rw`
+  mount. The agent MUST NOT have write access to its own hook scripts. Additionally, drydock's
+  agent policy — the `permissions.deny` block, the `hooks.SessionStart` entry, and the
+  `hooks.PreToolUse` entry — MUST be delivered via a Claude Code managed-settings drop-in baked
+  into the image and owned by root. The agent MUST NOT have write access to these policy files.
 - **Why**: drydock's tier-1 defense is composed of three layers, ALL sealed before or at session
   startup — layers (a) and (b) via image-layer ownership at build time, layer (c) via per-session
   seeding at startup. No layer is a live host bind-mount.
@@ -150,7 +152,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   (`${DRYDOCK_SESSION_HOOKS_DIR}` — populated by `seed_session_config_dir()` from
   `${DRYDOCK_HOME}/templates/hooks/`). Likewise, the per-session `~/.claude-container-<disc>/hooks/`
   subpath is bind-mounted `:ro` into `~/.claude/hooks/` so the agent cannot rewrite its own
-  Claude-side hook scripts. Both per-session bind-mounts source from session-local dirs (NOT
+  Claude-side hook scripts. The `~/.claude/drydock-hooks` `:ro` overlay (mount #3) seals the
+  inode-alias gap: because `DRYDOCK_SESSION_HOOKS_DIR` is a subpath of `DRYDOCK_SESSION_CLAUDE_DIR`,
+  the parent `:rw` mount exposes it as writable; the third `:ro` overlay closes that gap.
+  All three per-session bind-mounts source from session-local dirs (NOT
   host `~/.claude/hooks/` or host `${DRYDOCK_HOME}/templates/hooks/` directly), which keeps
   INV-2's "container never reads host `~/.claude/` directly" rule unconditional and bounds the
   blast radius of accidental host edits: a fat-fingered change does not propagate to running
@@ -161,10 +166,12 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: A buggy or prompt-injected agent disables its own guardrails
   mid-session. Hook-based protections are silently bypassed for the remainder of the session
   with no indication to the operator.
-- **Where this lives in code**: two `:ro` bind-mount lines in `docker-compose.yml` — mount #1
-  `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks → ${HOME}/.claude/hooks` (Claude-side hooks) and mount #2
+- **Where this lives in code**: three `:ro` bind-mount lines in `docker-compose.yml` — mount #1
+  `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks → ${HOME}/.claude/hooks` (Claude-side hooks), mount #2
   `${DRYDOCK_SESSION_HOOKS_DIR} → /opt/drydock/hooks` (drydock-side hook scripts referenced by
-  the baked hook entries); the `hooks` entry in `cmd_setup`'s `mkdir -p` list in
+  the baked hook entries), and mount #3 `${DRYDOCK_SESSION_HOOKS_DIR} → ${HOME}/.claude/drydock-hooks`
+  (inode-alias seal — re-mounts the same source `:ro` to override the parent `:rw` exposure);
+  the `hooks` entry in `cmd_setup`'s `mkdir -p` list in
   `lib/commands.sh` (guarantees the prototype always has the Claude-side hooks subdir so Docker
   never has to auto-create the bind-mount source as root on fresh-init for mount #1);
   `ensure_runtime_dirs` in `lib/compose.sh` (unconditional `mkdir -p "$CONTAINER_CLAUDE/hooks"`
