@@ -41,7 +41,7 @@ file.
 | [container-config-overlay](#container-config-overlay) | v0.2.1 | [#77][i77] | Done |
 | [session-awareness-state-model](#session-awareness-state-model) | v0.2.1 | [#79][i79] | Done |
 | [guardrail-deny-layer-port](#guardrail-deny-layer-port) | v0.2.1 | [#76][i76] | Done |
-| [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Planned |
+| [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Done |
 | [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Done |
 | [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Planned |
 | [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Planned |
@@ -466,23 +466,25 @@ adversarial review.
 
 ### ci-commit-lint
 
+**Status: Done — shipping in v0.2.2 (issue #10).**
+
 **Problem.** `CLAUDE.md` §5 records that conventional-commit format is a soft
 norm, not CI-enforced. A non-conforming subject can ship undetected.
 
-**Proposed solution.** A CI job that lints the conventional-commit subject format
+**Solution shipped.** A hand-rolled Bash script (`scripts/lint-commits.sh`) and
+a CI job `Lint (commit-message)` that lints the conventional-commit subject format
 (`type(scope): subject`, allowed types per §5). **Scope deliberately narrowed:**
 the `Co-Authored-By` trailer ban is *not* CI-enforced — it remains a §5 soft norm.
 CI-enforcing a custom trailer ban is unusual in OSS and not worth the machinery.
+`commitlint` (Node) was rejected in favour of a hand-rolled Bash check to keep
+the image minimal (§3) and avoid a Node install step in CI (NFR-1).
 
 **Why this scope.** Pure CI infrastructure, no user-facing change — kept out of
 the v0.2.0 feature story and shipped as a small hygiene patch.
 
 **Invariants touched.** None.
 
-**Open questions.** `commitlint` with a conventional config vs. a hand-rolled
-check.
-
-**Provenance.** The §5 enforcement gap; this session; issue [#10][i10].
+**Provenance.** The §5 enforcement gap; issue [#10][i10].
 
 ### hooks-mount-source
 

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 CI hygiene & infrastructure polish for the v0.2.2 cycle.
 
+### Added
+- Add `scripts/lint-commits.sh` and CI job `Lint (commit-message)` that
+  enforces Conventional Commits format on PR commits targeting `dev` (#10).
+
 ### Changed
 - **Hooks RO overlay sources from the per-session container-state dir** —
   `docker-compose.yml`'s `:ro` hooks mount now sources from
