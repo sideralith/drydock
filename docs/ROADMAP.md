@@ -41,9 +41,9 @@ file.
 | [container-config-overlay](#container-config-overlay) | v0.2.1 | [#77][i77] | Done |
 | [session-awareness-state-model](#session-awareness-state-model) | v0.2.1 | [#79][i79] | Done |
 | [guardrail-deny-layer-port](#guardrail-deny-layer-port) | v0.2.1 | [#76][i76] | Done |
-| [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Planned |
-| [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Planned |
-| [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Planned |
+| [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Done |
+| [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Done |
+| [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Done |
 | [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Planned |
 | [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.4.0 | [#16][i16] | Planned |
@@ -123,16 +123,24 @@ mount prevents `git push` and all write operations.
 **What shipped.** `drydock link --rw <path>`: per-sibling ed25519 deploy keys
 generated at `~/.config/drydock/keys/<basename>_deploy{,.pub}`, a managed SSH
 config at `~/.config/drydock/ssh-config-<primary>` with `Host github.com-<sibling>`
-alias blocks, `GIT_SSH_COMMAND` rewritten to route through the managed config
-inside the container, and the sibling's `remote.origin.url` updated from the
-canonical GitHub remote to the alias (restored on `drydock unlink`). The keys
-directory mounts `:ro` as a directory — no per-key overlay enumeration, scales to
-N siblings. A cross-project basename collision check scans ALL `*.list` files at
-link time. `drydock unlink` prints a dual hint covering both the local key path
-(for `rm`) and the GitHub-side deploy key revocation URL, because drydock cannot
-revoke remote deploy keys. See `docs/links.md` for the user-facing workflow.
+alias blocks, and `GIT_SSH_COMMAND` set to route through the managed config
+inside the container. The keys directory mounts `:ro` as a directory — no
+per-key overlay enumeration, scales to N siblings. A cross-project basename
+collision check scans ALL `*.list` files at link time. `drydock unlink` prints
+a dual hint covering both the local key path (for `rm`) and the GitHub-side
+deploy key revocation URL, because drydock cannot revoke remote deploy keys.
 
-**Status.** Done — shipped in v0.2.0 (issue #47 closed by PR squash merge).
+Routing fix (#89, v0.2.2): URL aliasing happens inside the container via
+`url.insteadOf` in a per-project gitconfig at
+`~/.config/drydock/gitconfig-<primary>` (pointed at by `GIT_CONFIG_GLOBAL`).
+The sibling's `.git/config` is never mutated, so the host's `git fetch` keeps
+working with the canonical URL. v0.2.1's `remote.origin.url` rewrite (which
+broke host git) was removed; the first `drydock run` after upgrading auto-
+restores aliased URLs to canonical. See `docs/links.md` for the user-facing
+workflow.
+
+**Status.** Done — shipped in v0.2.0 (issue #47); host-contamination fix
+shipped in v0.2.2 (issue #89).
 
 **Provenance.** SDD artifacts in engram: spec #2442, design #2443, tasks #2444.
 
@@ -466,77 +474,94 @@ adversarial review.
 
 ### ci-commit-lint
 
+**Status: Done — shipping in v0.2.2 (issue #10).**
+
 **Problem.** `CLAUDE.md` §5 records that conventional-commit format is a soft
 norm, not CI-enforced. A non-conforming subject can ship undetected.
 
-**Proposed solution.** A CI job that lints the conventional-commit subject format
+**Solution shipped.** A hand-rolled Bash script (`scripts/lint-commits.sh`) and
+a CI job `Lint (commit-message)` that lints the conventional-commit subject format
 (`type(scope): subject`, allowed types per §5). **Scope deliberately narrowed:**
 the `Co-Authored-By` trailer ban is *not* CI-enforced — it remains a §5 soft norm.
 CI-enforcing a custom trailer ban is unusual in OSS and not worth the machinery.
+`commitlint` (Node) was rejected in favour of a hand-rolled Bash check to keep
+the image minimal (§3) and avoid a Node install step in CI (NFR-1).
 
 **Why this scope.** Pure CI infrastructure, no user-facing change — kept out of
 the v0.2.0 feature story and shipped as a small hygiene patch.
 
 **Invariants touched.** None.
 
-**Open questions.** `commitlint` with a conventional config vs. a hand-rolled
-check.
-
-**Provenance.** The §5 enforcement gap; this session; issue [#10][i10].
+**Provenance.** The §5 enforcement gap; issue [#10][i10].
 
 ### hooks-mount-source
 
-**Status: Planned (v0.2.2, issue #71).**
+**Status: Done — shipping in v0.2.2 (issue #71).**
 
-**Problem.** drydock's hook scripts are bind-mounted RO from the host's
-`~/.claude/hooks/` (INV-3). That means the container sees the host's hook
-directory directly — a tight coupling: a user with no host Claude Code
-install has an empty hooks dir mounted, and drydock-shipped hook scripts
-must live on the host side. Evaluate sourcing from
-`~/.claude-container/hooks/` instead — the prototype dir drydock already
-controls — so drydock-shipped hooks ride with the install and host
-overrides become an explicit opt-in.
+**Problem.** drydock's `:ro` hooks overlay was bind-mounted directly from
+the host's `~/.claude/hooks/` (INV-3) — the only mount where the container
+read directly from host `~/.claude/`, a lone exception to INV-2's
+container-state-only rule. The original rationale (always-current hooks,
+no sync lag) did not hold: `ensure_synced` runs on every `drydock run` /
+`shell`, the rsync does not exclude `hooks/`, and the staleness probe does
+not prune it — the synced copy is always current in normal operation.
+
+**Resolution.** The `:ro` overlay now sources from the per-session
+`${DRYDOCK_SESSION_CLAUDE_DIR}/hooks/` subpath (the seeded copy from the
+prototype) — NOT from host `~/.claude/hooks/`. The `:ro` flag and the
+"agent cannot write its own hooks" guarantee are unchanged. INV-2 becomes
+unconditional ("the container never reads host `~/.claude/` directly")
+with no carve-out for hooks. Bounded blast radius under threat model A:
+a fat-fingered host hook edit no longer propagates live to running
+sessions — only future sessions pick it up via the next sync + seed.
+`cmd_setup` now `mkdir -p`s the prototype's `hooks/` so the bind-mount
+source always exists even on a fresh host with no `~/.claude/hooks/`.
 
 **Why this scope.** Infrastructure polish — no new user-visible behaviour;
 the change is "where the hook scripts come from."
 
-**Invariants touched.** INV-3 — the RO mount property remains; only the
-source path changes. The "agent cannot write its own hooks" guarantee is
-preserved regardless of source.
-
-**Open questions.** Whether a host-override mechanism is still needed; how
-auto-sync interacts; whether the existing `~/.claude/hooks/` mount becomes
-a fallback or is removed.
+**Invariants touched.** INV-2 — the carve-out for the hooks overlay is
+removed; the rule is now unconditional. INV-3 — the RO mount property
+and the agent-cannot-write-its-own-hooks guarantee are preserved.
 
 **Provenance.** Issue [#71][i71].
 
 ### integration-in-ci
 
-**Status: Planned (v0.2.2, issue #74).**
+**Status: Done (v0.2.2, issue #74).**
 
-**Problem.** Integration tests (`test/integration/`) ship with the repo but
-do not run in CI — `DRYDOCK_INTEGRATION=1` is the opt-in flag, and the
-GitHub Actions workflow does not set it. The unit suite catches most
-regressions, but a class of issues only surfaces against a built image
-(real `docker compose up`, real bind-mounts, INV-2 sub-mount resolution).
-Issue #73 closed the hermeticity gap that previously made running the
-integration tests in CI unsafe; with that fixed the remaining work is
-wiring them in.
+**Problem.** Integration tests (`test/integration/` and the
+`DRYDOCK_INTEGRATION`-gated tests in `test/managed_settings.bats`) shipped
+with the repo but did not run in CI. The unit suite caught most regressions,
+but the INV-3 managed-settings bake step (deny rules baked root-owned into
+`drydock:latest`) and the per-file `__HOME__` substitution were verified
+only when a contributor ran the integration suite locally with the right
+flag — and one corner of that suite (T5 in `test/managed_settings.bats`)
+was a permanent `skip` regardless of any flag.
 
-**Why this scope.** Pure CI infrastructure. Risk reduction: a future
-INV-1/INV-2/INV-8 regression that the unit suite cannot catch lands in
-`dev` undetected until a contributor runs the integration suite locally.
+**What shipped.** Two-flag namespace under a shared `DRYDOCK_INTEGRATION_*`
+prefix, structurally separating CI-safe from local-only tiers:
 
-**Invariants touched.** None — adding a CI job, not changing runtime
-behaviour.
+- `DRYDOCK_INTEGRATION=1` — DooD-safe bats integration tests (T5 + the T19 family
+  in `test/managed_settings.bats`). The smoke job sets this flag after
+  `drydock build`, so every PR that touches the image, the compose stack,
+  the CLI, the baked managed-settings drop-ins, or the per-session-sealed
+  hook scripts under `templates/hooks/` gets the managed-settings bake
+  verified end-to-end by smoke (seed behavior verified by the unit suite in CI).
+- `DRYDOCK_INTEGRATION_HOSTNET=1` — local-only host-network tier (SR-9, the
+  shared `projects/` sub-mount resolution test). Renamed from
+  `RUN_INTEGRATION` for the unified namespace. Stays out of CI because
+  `network_mode: host` is unreliable under GHA DinD.
 
-**Open questions.** Whether to run integration tests on every PR or only
-on release-prep branches; the CI runner image size constraint; whether the
-integration opt-in flag is unified (a single `DRYDOCK_INTEGRATION=1` vs.
-the current per-suite gates).
+The smoke job's path filter was extended to include
+`templates/managed-settings.d/**` and `templates/hooks/**` so a PR touching
+only the baked drop-ins still triggers the bake-verification job. T5 was
+converted from an unconditional `skip` to the same `DRYDOCK_INTEGRATION=1`
+guard the T19 tests use. CONTRIBUTING.md documents both flags and the
+local invocation commands.
 
-**Provenance.** Issue [#74][i74]. Surfaced alongside #73 (the SR-9
-hermetic rewrite).
+**Provenance.** Issue [#74][i74]. Resolves the flag-unification open
+question and the in-CI-running question listed in the prior Planned entry.
 
 ---
 

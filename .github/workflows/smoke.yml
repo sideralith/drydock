@@ -19,6 +19,11 @@ on:
       - "docker-compose*.yml"
       - "bin/**"
       - "lib/**"
+      - "templates/managed-settings.d/**"
+      - "templates/hooks/**"
+      - "scripts/test.sh"
+      - "test/managed_settings.bats"
+      - ".github/workflows/smoke.yml"
 
 jobs:
   smoke:
@@ -40,6 +45,21 @@ jobs:
         # that might surface as a non-zero exit on the runner.
         run: bin/drydock doctor || true
 
+      - name: Run managed-settings integration tests against built image
+        # The T19 family in test/managed_settings.bats verifies drydock's INV-3
+        # managed-settings bake: presence + JSON-validity of all six drop-ins,
+        # root ownership of the bake target, and the 00-secrets.json deny-rule
+        # contract (agent cannot rewrite the bake). These tests run
+        # `docker run --rm drydock:latest
+        # cat <file>` — DooD-safe, no network_mode:host dependency, so they
+        # work in GHA. The DRYDOCK_INTEGRATION=1 flag unmasks T5 + T19 family;
+        # all other bats tests are unit-mode and CI runs them in ci.yml.
+        # Scope is the single file (not test/) — smoke is post-build bake
+        # verification, not a unit re-run.
+        env:
+          DRYDOCK_INTEGRATION: "1"
+        run: scripts/test.sh test/managed_settings.bats
+
       - name: Validate hardening overlay YAML (compose config)
         # Renders the full -f chain (base + hardening overlay) and exits 0
         # only if the merged YAML is syntactically valid. Catches YAML typos
@@ -55,6 +75,7 @@ jobs:
           DRYDOCK_DISCRIMINATOR="smoke" \
           DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-smoke" \
           DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-smoke.json" \
+          DRYDOCK_SESSION_HOOKS_DIR="$HOME/.claude-container-smoke/drydock-hooks" \
           docker compose \
             -f docker-compose.yml \
             -f docker-compose.hardening.yml \
@@ -75,6 +96,7 @@ jobs:
           DRYDOCK_DISCRIMINATOR="smoke" \
           DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-smoke" \
           DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-smoke.json" \
+          DRYDOCK_SESSION_HOOKS_DIR="$HOME/.claude-container-smoke/drydock-hooks" \
           docker compose \
             -f docker-compose.yml \
             config >/dev/null

@@ -278,7 +278,8 @@ GIT_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/10-git-safety.json"
 
 # ── T5: Dockerfile bakes managed-settings.d (integration, skipped in unit mode)
 @test "managed-settings: Dockerfile bakes managed-settings.d with USER_NAME substituted" {
-    skip "requires built drydock image (integration test — set DRYDOCK_INTEGRATION=1 and rebuild to enable)"
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
     # Confirm __HOME__ is fully resolved and paths use /home/<user>/.ssh, not placeholder.
     run docker run --rm drydock:latest cat /etc/claude-code/managed-settings.d/00-secrets.json
     [ "$status" -eq 0 ]
@@ -862,6 +863,50 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
             >/dev/null \
             || { echo "MISSING in deployed image: $rule"; return 1; }
     done
+}
+
+@test "managed-settings: all six drop-ins present and JSON-valid in running image (integration)" {
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
+
+    # Canonical drop-in list — mirrors `ls templates/managed-settings.d/*.json`.
+    # Adding a new drop-in to the directory MUST add it here too: the test is
+    # the contract surface.
+    local -a drop_ins=(
+        00-secrets.json
+        10-git-safety.json
+        20-hooks.json
+        30-os-safety.json
+        40-guardrails-hook.json
+        50-prod-ops.json
+    )
+
+    for f in "${drop_ins[@]}"; do
+        # Existence + non-empty + JSON-parseable in a single shell pipeline:
+        # `test -s` covers existence-and-non-empty; `jq -e .` covers parseability.
+        run docker run --rm drydock:latest sh -c \
+            "test -s /etc/claude-code/managed-settings.d/$f \
+             && jq -e . /etc/claude-code/managed-settings.d/$f >/dev/null"
+        [ "$status" -eq 0 ] \
+            || { echo "MISSING or INVALID JSON in deployed image: $f"; return 1; }
+    done
+}
+
+@test "managed-settings: image-baked drop-ins owned by root:root (integration, canary)" {
+    [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
+        || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
+
+    # Single-file canary: `COPY templates/managed-settings.d/ ...` in the
+    # Dockerfile applies ownership at directory level — one representative
+    # file proves the COPY contract. A future patch that selectively chowns
+    # an individual file would not be caught here (accepted trade-off; see
+    # proposal Risk #5), but the realistic failure mode (broken COPY adding
+    # --chown=user:user) is detected.
+    run docker run --rm drydock:latest \
+        stat -c '%U:%G' /etc/claude-code/managed-settings.d/00-secrets.json
+    [ "$status" -eq 0 ]
+    [ "$output" = "root:root" ] \
+        || { echo "expected root:root, got: $output"; return 1; }
 }
 
 # ── JD1-C-RED: Bash deny coverage for keys dir ────────────────────────────────

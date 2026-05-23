@@ -385,6 +385,41 @@ _maybe_export_ssh_config() {
 	export DRYDOCK_SSH_CONFIG="$config_path"
 }
 
+# _maybe_export_session_gitconfig(primary_project)
+#
+# Issue #89: when the SSH overlay activates (DRYDOCK_SSH_CONFIG set), also
+# regenerate the per-project gitconfig and export DRYDOCK_GITCONFIG so the SSH
+# overlay's environment block can set GIT_CONFIG_GLOBAL inside the container.
+# Also restores any aliased remote.origin.url left by v0.2.1 back to canonical —
+# idempotent (no-op if already canonical) and per-sibling (a single broken
+# sibling cannot block the whole run).
+#
+# Activation gate parity with the SSH overlay: same single gate
+# (DRYDOCK_SSH_CONFIG set), so a primary-only setup gets a minimal
+# `[include]`-only gitconfig as a harmless pass-through.
+_maybe_export_session_gitconfig() {
+	local primary="$1"
+	[ -n "${DRYDOCK_SSH_CONFIG:-}" ] || return 0
+	local list_file="$HOME/.config/drydock/links/${primary}.list"
+
+	# Startup migration (issue #89): restore aliased URLs left over from
+	# v0.2.1 to canonical. Idempotent — early-returns when URL is already
+	# canonical. Per-sibling failure is non-fatal (warn from helper).
+	if [ -f "$list_file" ]; then
+		local _h _t _f _sanitized
+		while IFS='|' read -r _h _t _f; do
+			[ -z "$_h" ] && continue
+			[ "${_f:-}" = "rw" ] || continue
+			_sanitized="$(sanitize_project_name "$(basename "$_h")")"
+			_restore_canonical_remote_url "$_h" "$_sanitized" || true
+		done <"$list_file"
+	fi
+
+	local gitconfig_path
+	gitconfig_path="$(_regenerate_session_gitconfig "$primary" "$list_file")"
+	export DRYDOCK_GITCONFIG="$gitconfig_path"
+}
+
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
 	local project_dir="$1"
@@ -496,6 +531,7 @@ export_compose_env() {
 	export DRYDOCK_DISCRIMINATOR="$_disc"
 	export DRYDOCK_SESSION_CLAUDE_DIR="$HOME/.claude-container-${_disc}"
 	export DRYDOCK_SESSION_CLAUDE_JSON="$HOME/.claude-container-${_disc}.json"
+	export DRYDOCK_SESSION_HOOKS_DIR="$HOME/.claude-container-${_disc}/drydock-hooks"
 	export DRYDOCK_SESSION_NAME="$_session_name"
 	export COMPOSE_PROJECT_NAME="$_session_name"
 
@@ -536,6 +572,11 @@ export_compose_env() {
 	# Exports DRYDOCK_SSH_CONFIG (used by compose_files to activate the SSH overlay
 	# and by docker-compose.ssh.yml for the GIT_SSH_COMMAND -F flag).
 	_maybe_export_ssh_config "$PROJECT_NAME"
+	# Per-project gitconfig (issue #89): paired with the SSH overlay — generates
+	# ~/.config/drydock/gitconfig-<primary> with url.insteadOf entries per RW
+	# sibling and exports DRYDOCK_GITCONFIG. Also restores any aliased
+	# remote.origin.url left by v0.2.1 (one-shot, idempotent migration).
+	_maybe_export_session_gitconfig "$PROJECT_NAME"
 	# Sandbox GPG signing key: ~/.config/drydock/signing/ → GitHub-Verified commits
 	# (consumed by docker-compose.gpg.yml: bind-mount rw + GNUPGHOME + GIT_CONFIG_*).
 	local _signing_home="$HOME/.config/drydock/signing"
@@ -812,6 +853,21 @@ seed_session_config_dir() {
 	# Remove the staleness marker — it belongs to the prototype, not sessions.
 	rm -f "$session_dir/.drydock-last-sync"
 
+	# ── Seed per-session drydock-side hook scripts (INV-3 mount #2) ──────────
+	# Source of truth: $DRYDOCK_HOME/templates/hooks/ (always present in repo).
+	# Target: $session_dir/drydock-hooks/ — bind-mounted :ro to /opt/drydock/hooks
+	# by docker-compose.yml. Parallel to the prototype-copy loop above (which
+	# seeds mount #1's hooks/ subpath). The enclosing rm -rf "$session_dir" /
+	# mkdir -p "$session_dir" already cleared and recreated the parent; this is
+	# the new subpath population. Explicit rm -rf + mkdir is belt-and-suspenders
+	# so a future refactor decoupling the subpath from the session dir still
+	# re-seeds correctly. cp -a preserves +x on the .sh scripts; the "/." trailing
+	# pair copies CONTENTS (drydock-hooks/<script>.sh) not the source dir itself
+	# (would yield drydock-hooks/hooks/<script>.sh).
+	rm -rf "$session_dir/drydock-hooks"
+	mkdir -p "$session_dir/drydock-hooks"
+	cp -a "$DRYDOCK_HOME/templates/hooks/." "$session_dir/drydock-hooks/"
+
 	# Apply the persistent host-authored container-config overlay (issue #77).
 	# Whole-file recursive copy on top of the freshly re-seeded dir; scope-
 	# enforced (no .claude.json / .credentials.json, no symlinks) — see INV-2
@@ -992,6 +1048,15 @@ ensure_runtime_dirs() {
 		note "runtime state missing — running 'drydock setup' automatically"
 		cmd_setup
 	fi
+	# Upgrade-path defense for the #71 hooks RO overlay source. cmd_setup's
+	# mkdir covers fresh-init; this covers pre-existing prototypes that predate
+	# the hooks subdir (cmd_sync's rsync only copies it if the host has
+	# ~/.claude/hooks/). Without this, the narrow upgrade case — existing
+	# prototype + no host hooks dir — leaves the bind-mount source missing;
+	# Docker would auto-create it as a root-owned directory at run time,
+	# breaking perms. Idempotent mkdir -p closes that gap cheaply on every
+	# invocation.
+	mkdir -p "$CONTAINER_CLAUDE/hooks"
 	# One-time consolidation of pre-upgrade scattered per-session projects/ trees
 	# into the shared store (issue #68). Sentinel-gated; no-op after first run.
 	migrate_projects_to_shared_store

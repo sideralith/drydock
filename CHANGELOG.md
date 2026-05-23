@@ -5,6 +5,67 @@ All notable changes to drydock are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.2] - 2026-05-23
+
+CI hygiene & infrastructure polish, plus a host-contamination fix for the
+RW-sibling SSH flow.
+
+### Added
+- `scripts/lint-commits.sh` + CI job `Lint (commit-message)` enforce
+  Conventional Commits on PR commits targeting `dev` (#10).
+- Managed-settings integration tests now run in the smoke CI job; the
+  `--integration` and `--smoke` bats flags are unified into a single
+  selector (#74, #87).
+- T19 ("INV-3 bake contract") in `test/managed_settings.bats` now covers the
+  full drop-in set (all five `templates/managed-settings.d/*.json` files),
+  asserts root ownership of baked drop-ins, and verifies the hook-stance
+  contract end-to-end (#88, #90).
+
+### Fixed
+- **`drydock link --rw` no longer contaminates the host's git configuration**
+  (#89). Pre-fix, link mutated the sibling's `remote.origin.url` from
+  `git@github.com:owner/repo.git` to the container-only alias
+  `git@github.com-<sibling>:owner/repo.git` so OpenSSH could route per-sibling
+  deploy keys. That alias only resolved inside the container, so `git fetch`
+  on the host failed immediately after linking and stayed broken until
+  `drydock unlink`. The fix moves URL routing to `url.insteadOf` in a
+  drydock-managed per-project gitconfig at
+  `~/.config/drydock/gitconfig-<primary>` that the container reads via
+  `GIT_CONFIG_GLOBAL`. Sibling `.git/config` is never touched — host `git
+  fetch` keeps working with the canonical URL while the container resolves
+  the alias in memory. Migration: the first `drydock run` after upgrading
+  auto-restores any aliased URL left by v0.2.1 to canonical (idempotent,
+  per-sibling, non-fatal on failure). INV-1 extended to capture the host
+  gitconfig non-contamination rule.
+
+### Changed
+- **Hooks RO overlay sources from the per-session container-state dir** —
+  `docker-compose.yml`'s `:ro` hooks mount now sources from
+  `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks` (the per-session seeded dir) instead
+  of host `~/.claude/hooks/`. This eliminates the lone container-reads-host
+  exception in INV-2: the rule is now unconditional ("the container never
+  reads host `~/.claude/` directly") with no carve-out. The `:ro` flag and
+  INV-3's "agent cannot write its own hooks" guarantee are unchanged.
+  Behavior change under threat model A (INV-7): a fat-fingered host hook
+  edit no longer propagates live to running sessions; only future sessions
+  pick it up via the next sync + seed (bounded blast radius). The original
+  argument for host-direct sourcing (always-current hooks) did not hold —
+  `ensure_synced` runs on every `drydock run` / `shell`, the rsync does not
+  exclude `hooks/`, and `~/.claude-container/hooks/` is always current
+  before a session starts in normal operation. `cmd_setup` now `mkdir -p`s
+  the prototype's `hooks/` so the bind-mount source always exists even on
+  a fresh host with no personal `~/.claude/hooks/`. Closes #71.
+- **Homebrew formula template uses a `__VERSION__` placeholder** instead of a
+  hard-coded `v0.2.0` `url` line. `scripts/publish-homebrew-tap.sh` now
+  substitutes `__VERSION__` alongside `__SHA256_PLACEHOLDER__` at publish
+  time. The url-line regex substitution is retained as a safety net. This
+  closes the silent-drift class where the template's static `v0.2.0` looked
+  authoritative but was overridden at publish — every release left the
+  template referencing a stale version. The dry-run output and the published
+  formula are byte-for-byte identical to the prior behavior.
+
 ## [0.2.1] - 2026-05-22
 
 OAuth token persistence, container-config overlay, expanded destructive-command
@@ -367,6 +428,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.2.2]: https://github.com/sideralith/drydock/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sideralith/drydock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sideralith/drydock/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sideralith/drydock/releases/tag/v0.1.2

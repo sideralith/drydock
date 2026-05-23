@@ -49,6 +49,34 @@ image ships none). Always use `scripts/test.sh` inside the container; plain
 `bats test/` is the host-only invocation (equivalent on a normal host, but
 not safe inside drydock where `/tmp` is `noexec`).
 
+### Running integration tests locally
+
+Most bats tests run unit-mode and need no special flag. Two integration tiers
+exist for tests that exercise a built `drydock:latest` image; both are gated by
+explicit opt-in flags so the default `scripts/test.sh` invocation stays fast
+and green on a fresh checkout.
+
+| Flag | What it enables | Where it runs |
+|------|-----------------|---------------|
+| `DRYDOCK_INTEGRATION=1` | Bats tests that `docker run --rm drydock:latest …` against the built image (T5 + the T19 family in `test/managed_settings.bats` — verify the INV-3 managed-settings bake: presence + JSON-validity of all six drop-ins, root ownership of the bake target, and the `00-secrets.json` deny-rule contract). DooD-safe. | Locally **and in CI** — the smoke job sets this flag after `drydock build`. |
+| `DRYDOCK_INTEGRATION_HOSTNET=1` | Tests that launch real containers via `docker compose run` and require `network_mode: host` (`test/integration/test_projects_submount.sh` — SR-9, the shared `projects/` sub-mount resolution proof). | **Local only.** GitHub Actions runners use DinD where `network_mode: host` maps to the runner's container namespace, not a bare Linux host, and produces unreliable results. |
+
+Local invocation:
+
+```bash
+# DooD-safe integration tier (also what CI runs):
+drydock build
+DRYDOCK_INTEGRATION=1 scripts/test.sh test/managed_settings.bats
+
+# Host-network tier (local only — must run on a real host or inside a drydock
+# container with the host Docker socket; cannot run in GHA):
+drydock build
+DRYDOCK_INTEGRATION_HOSTNET=1 test/integration/test_projects_submount.sh
+```
+
+The shared `DRYDOCK_INTEGRATION_*` prefix marks these as runtime-tier flags;
+the `_HOSTNET` suffix is the explicit reason SR-9 stays out of CI.
+
 ### No submodule step needed
 
 The bats helper libraries (`bats-support` and `bats-assert`) are vendored
@@ -192,6 +220,20 @@ shellcheck bin/drydock lib/*.sh scripts/*.sh install.sh   # must produce no erro
 shfmt -d bin/drydock lib/ scripts/ install.sh             # must produce no diff
 scripts/test.sh                                           # all tests must pass
 ```
+
+Every commit subject on a PR targeting `dev` must follow Conventional Commits format.
+Verify locally before pushing:
+
+```bash
+scripts/lint-commits.sh   # auto-detects the range via git merge-base origin/dev HEAD
+```
+
+The same script runs in CI via the `Lint (commit-message)` job. For the exact set of valid
+types and the `Co-Authored-By` trailer prohibition, see
+[CLAUDE.md §5: Tracking & Contribution](CLAUDE.md#5-tracking--contribution).
+
+Note: the script lints commits on the feature branch. When a PR is squash-merged, the
+maintainer-provided squash subject lands on `dev` and is not CI-enforced.
 
 Every script MUST start with `set -euo pipefail` — see [CLAUDE.md §3: Code / Tooling Conventions](CLAUDE.md#3-code--tooling-conventions) for the full Bash conventions.
 

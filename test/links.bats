@@ -1408,7 +1408,10 @@ _make_git_sibling() {
 	[ "$(stat -c '%a' "$config")" = "600" ]
 }
 
-@test "OQ-A-3: cmd_link --rw rewrites sibling remote.origin.url to alias form" {
+@test "OQ-A-3 (#89): cmd_link --rw leaves sibling remote.origin.url canonical (no host contamination)" {
+	# Pre-#89 (v0.2.1) rewrote remote.origin.url to the aliased form, breaking
+	# `git fetch` on the host. Post-#89 the sibling .git/config is never
+	# mutated — URL routing happens via url.insteadOf inside the container.
 	_links_setup
 
 	local sibling_dir="$BATS_TEST_TMPDIR/rw-url-sibling"
@@ -1422,11 +1425,9 @@ _make_git_sibling() {
 		cmd_link --rw "$sibling_dir"
 	)
 
-	local sanitized
-	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
 	local url
 	url="$(git -C "$sibling_dir" remote get-url origin)"
-	[ "$url" = "git@github.com-${sanitized}:owner/repo.git" ]
+	[ "$url" = "git@github.com:owner/repo.git" ]
 }
 
 @test "D10: cmd_link --rw <plain-dir> (no .git/) mounts RW, skips key-gen + URL rewrite" {
@@ -1458,7 +1459,7 @@ _make_git_sibling() {
 	[ ! -f "$key_path" ]
 }
 
-@test "D11: re-running cmd_link --rw on same path is idempotent — key unchanged, URL no-op" {
+@test "D11 (#89): re-running cmd_link --rw on same path is idempotent — key unchanged, URL stays canonical" {
 	_links_setup
 
 	local sibling_dir="$BATS_TEST_TMPDIR/rw-idempotent"
@@ -1490,10 +1491,10 @@ _make_git_sibling() {
 	mtime2="$(stat -c '%Y' "$key_path" 2>/dev/null || echo 0)"
 	[ "$mtime1" = "$mtime2" ]
 
-	# URL must still be the aliased form
+	# Issue #89: URL must stay canonical — link does not mutate .git/config.
 	local url
 	url="$(git -C "$sibling_dir" remote get-url origin)"
-	[ "$url" = "git@github.com-${sanitized}:owner/repo.git" ]
+	[ "$url" = "git@github.com:owner/repo.git" ]
 }
 
 @test "D5: cmd_link --rw with same sanitized basename from different path — rejected" {
@@ -1789,7 +1790,7 @@ _make_git_sibling() {
 	)
 }
 
-@test "JD1-AB-3: link --rw then link --rw same path → idempotent success, single .list entry" {
+@test "JD1-AB-3 (#89): link --rw then link --rw same path → idempotent success, URL stays canonical" {
 	_links_setup
 
 	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-3"
@@ -1813,7 +1814,8 @@ _make_git_sibling() {
 	count="$(grep -cF "$canonical" "$list_file")"
 	[ "$count" -eq 1 ]
 
-	# SSH config still has alias block
+	# SSH config still has alias block (managed SSH config is the container-side
+	# routing artifact — owned by drydock, not the host).
 	local sanitized
 	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
 	local ssh_config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
@@ -1823,13 +1825,13 @@ _make_git_sibling() {
 	# Key file still present
 	[ -f "$FAKE_HOME/.config/drydock/keys/${sanitized}_deploy" ]
 
-	# URL still aliased
+	# Issue #89: sibling .git/config URL stays canonical end-to-end.
 	local url
 	url="$(git -C "$sibling_dir" remote get-url origin)"
-	[[ "$url" == *"github.com-${sanitized}"* ]]
+	[ "$url" = "git@github.com:owner/myrepo.git" ]
 }
 
-@test "JD1-AB-4: partial-state self-heal — .list entry exists but SSH config absent, re-link --rw completes mutations" {
+@test "JD1-AB-4 (#89): partial-state self-heal — .list entry exists but SSH config absent, re-link --rw completes mutations" {
 	_links_setup
 
 	local sibling_dir="$BATS_TEST_TMPDIR/ab-sibling-4"
@@ -1843,13 +1845,11 @@ _make_git_sibling() {
 	local sanitized
 	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
 
-	# Simulate partial state: .list has the RW entry, but no SSH config exists
-	# and URL is still canonical (as if steps 4+5 never ran).
+	# Simulate partial state: .list has the RW entry, but no SSH config exists.
 	mkdir -p "$(dirname "$list_file")"
 	printf '%s|/workspace-siblings/%s|rw\n' "$canonical" "$(basename "$sibling_dir")" >"$list_file"
 	local ssh_config="$FAKE_HOME/.config/drydock/ssh-config-myproject"
 	rm -f "$ssh_config"
-	# URL left at canonical (not aliased)
 
 	(
 		cd "$PROJECT_DIR"
@@ -1857,17 +1857,103 @@ _make_git_sibling() {
 		[ "$status" -eq 0 ]
 	)
 
-	# SSH config must now have the alias block
+	# SSH config must now have the alias block (self-healed by re-link).
 	[ -f "$ssh_config" ]
 	grep -q "Host github.com-${sanitized}" "$ssh_config"
 
-	# URL must be aliased now
+	# Issue #89: URL stays canonical — link never mutates .git/config.
 	local url
 	url="$(git -C "$sibling_dir" remote get-url origin)"
-	[[ "$url" == *"github.com-${sanitized}"* ]]
+	[ "$url" = "git@github.com:owner/myrepo.git" ]
 
 	# Still exactly one entry in .list
 	local count
 	count="$(grep -cF "$canonical" "$list_file")"
 	[ "$count" -eq 1 ]
+}
+
+# ── #89 RED — link/unlink no longer mutate the sibling's .git/config ──────────
+#
+# Issue #89: rewriting remote.origin.url broke `git fetch` on the host because
+# the SSH alias only resolves inside the container. The fix routes URLs via
+# url.insteadOf in a container-only gitconfig — the sibling .git/config stays
+# canonical end-to-end. INV-1 extended: drydock never contaminates the host's
+# git configuration.
+
+@test "#89 RED: cmd_link --rw does NOT mutate sibling remote.origin.url (host stays intact)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/89-link-noop"
+	_make_git_sibling "$sibling_dir" "git@github.com:owner/repo.git"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	local before
+	before="$(git -C "$sibling_dir" remote get-url origin)"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	local after
+	after="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$before" = "$after" ]
+	[ "$after" = "git@github.com:owner/repo.git" ]
+}
+
+@test "#89 RED: cmd_link --rw auto-heals a stale aliased URL from v0.2.1 by restoring to canonical" {
+	_links_setup
+
+	# Sibling was already linked under v0.2.1 — URL is the aliased form left
+	# behind by _rewrite_sibling_remote_url before the user upgraded.
+	local sibling_dir="$BATS_TEST_TMPDIR/89-link-heal"
+	mkdir -p "$sibling_dir"
+	git -C "$sibling_dir" init -q -b main
+	local sanitized
+	sanitized="$(basename "$sibling_dir" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_-' '-' | sed 's/--*/-/g; s/^[^a-z0-9]*//; s/[-_]*$//')"
+	git -C "$sibling_dir" remote add origin "git@github.com-${sanitized}:owner/repo.git"
+
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --rw "$sibling_dir"
+		[ "$status" -eq 0 ]
+	)
+
+	# Auto-heal: link restored the URL to canonical so host git works again.
+	local url
+	url="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$url" = "git@github.com:owner/repo.git" ]
+}
+
+@test "#89 RED: cmd_unlink leaves sibling remote.origin.url unchanged (no mutation to undo)" {
+	_links_setup
+
+	local sibling_dir="$BATS_TEST_TMPDIR/89-unlink-noop"
+	_make_git_sibling "$sibling_dir" "git@github.com:owner/repo.git"
+	mkdir -p "$FAKE_HOME/.config/drydock/keys"
+	touch "$FAKE_HOME/.config/drydock/keys/myproject_deploy"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --rw "$sibling_dir"
+	)
+
+	# URL is still canonical post-link (covered by separate RED test above).
+	# Unlink must leave it canonical too — no mutation, no restore.
+	local before
+	before="$(git -C "$sibling_dir" remote get-url origin)"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_unlink "$sibling_dir"
+	)
+
+	local after
+	after="$(git -C "$sibling_dir" remote get-url origin)"
+	[ "$before" = "$after" ]
+	[ "$after" = "git@github.com:owner/repo.git" ]
 }

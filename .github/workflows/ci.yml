@@ -55,3 +55,17 @@ jobs:
 
       - name: Run bats suite
         run: scripts/test.sh
+
+  commit-lint:
+    name: Lint (commit-message)
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for base..HEAD range
+
+      - name: Lint PR commit subjects
+        run: scripts/lint-commits.sh --base "${{ github.event.pull_request.base.sha }}"
