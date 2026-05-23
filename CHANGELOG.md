@@ -26,6 +26,14 @@ CI hygiene & infrastructure polish for the v0.2.2 cycle.
   before a session starts in normal operation. `cmd_setup` now `mkdir -p`s
   the prototype's `hooks/` so the bind-mount source always exists even on
   a fresh host with no personal `~/.claude/hooks/`. Closes #71.
+- **Homebrew formula template uses a `__VERSION__` placeholder** instead of a
+  hard-coded `v0.2.0` `url` line. `scripts/publish-homebrew-tap.sh` now
+  substitutes `__VERSION__` alongside `__SHA256_PLACEHOLDER__` at publish
+  time. The url-line regex substitution is retained as a safety net. This
+  closes the silent-drift class where the template's static `v0.2.0` looked
+  authoritative but was overridden at publish — every release left the
+  template referencing a stale version. The dry-run output and the published
+  formula are byte-for-byte identical to the prior behavior.
 
 ## [0.2.1] - 2026-05-22
 
