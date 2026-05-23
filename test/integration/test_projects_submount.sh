@@ -11,9 +11,9 @@
 #   - The drydock:latest image to already be built
 #
 # Run locally or inside a drydock container:
-#   RUN_INTEGRATION=1 test/integration/test_projects_submount.sh
+#   DRYDOCK_INTEGRATION_HOSTNET=1 test/integration/test_projects_submount.sh
 #
-# Guard: skips (with a clear message and exit 0) unless RUN_INTEGRATION=1 is set.
+# Guard: skips (with a clear message and exit 0) unless DRYDOCK_INTEGRATION_HOSTNET=1 is set.
 # scripts/test.sh does NOT include this file — it only runs test/*.bats — so the
 # normal bats suite stays green without a Docker daemon.
 #
@@ -45,8 +45,8 @@
 set -euo pipefail
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
-if [ "${RUN_INTEGRATION:-}" != "1" ]; then
-	echo "SKIP: SR-9 integration test (requires Docker daemon — set RUN_INTEGRATION=1 to run)"
+if [ "${DRYDOCK_INTEGRATION_HOSTNET:-}" != "1" ]; then
+	echo "SKIP: SR-9 integration test (requires Docker daemon and network_mode:host — set DRYDOCK_INTEGRATION_HOSTNET=1 to run)"
 	exit 0
 fi
 
