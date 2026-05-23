@@ -114,7 +114,7 @@ rm -rf "$INTTEST_ROOT"
 #   77                               → .claude-container/projects/
 #   90  (DRYDOCK_SESSION_CLAUDE_DIR/hooks) → .claude-container-<disc>/hooks/
 #   108 (DRYDOCK_SESSION_HOOKS_DIR)   → .claude-container-<disc>/drydock-hooks/
-#   113 (DRYDOCK_SESSION_HOOKS_DIR inode alias) → same source, .claude/drydock-hooks:ro
+#   114 (DRYDOCK_SESSION_HOOKS_DIR inode alias) → same source, .claude/drydock-hooks:ro
 #   93                               → .local/
 #   96                               → .gitconfig
 #   97                               → .config/gh/
