@@ -36,11 +36,13 @@ fi
 # (drydock run always leaves this unset, using the image-baked default).
 _LAYOUT="${DRYDOCK_ZELLIJ_LAYOUT_OVERRIDE:-/etc/drydock/layouts/drydock.kdl}"
 
-# Validate layout path against known-safe locations to prevent shell injection via
-# `script -c "... ${_LAYOUT}"` (§3 CLAUDE.md: no bash -c "$untrusted" pattern).
-# Allowlist: production image path and the empirical-gate test seam path.
+# Validate layout path against known-safe locations (§3 CLAUDE.md: no bash -c "$untrusted").
+# Locks the layout to either the production image path with a safe filename (character class
+# [A-Za-z0-9._-] rejects shell metacharacters and path traversal) or the exact test-seam path.
+# Does NOT claim to prevent all shell injection — only rejects metacharacters and traversal
+# in the filename portion of /etc/drydock/layouts/<name>.kdl.
 case "$_LAYOUT" in
-/etc/drydock/layouts/*.kdl | /tmp/drydock-gate-layout.kdl) ;;
+/etc/drydock/layouts/[A-Za-z0-9._-]*.kdl | /tmp/drydock-gate-layout.kdl) ;;
 *)
 	printf 'drydock: invalid layout path: %s\n' "$_LAYOUT" >&2
 	exit 1

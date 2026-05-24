@@ -22,12 +22,15 @@ load "../helpers/load"
 # ── Poll helper ───────────────────────────────────────────────────────────────
 # Waits up to 30s for `zellij list-sessions` inside the named container to list
 # the "drydock" session. Replaces fixed `sleep 5` to avoid flakes on slow runners.
+# Uses --short (strips ANSI formatting) and grep -qxF (exact whole-line match)
+# to avoid false-positives from future sessions whose names contain "drydock" as
+# a substring (e.g. "drydock-foo").
 _wait_for_zellij_session() {
 	local container="$1"
 	local timeout=30
 	local elapsed=0
 	while [ $elapsed -lt $timeout ]; do
-		if docker exec "$container" zellij list-sessions 2>/dev/null | grep -q 'drydock'; then
+		if docker exec "$container" zellij list-sessions --short 2>/dev/null | grep -qxF 'drydock'; then
 			return 0
 		fi
 		sleep 1
@@ -114,7 +117,7 @@ teardown() {
 	# Wait for Zellij to start (poll instead of fixed sleep to avoid flakes on slow runners)
 	_wait_for_zellij_session "$_NAME" || { docker logs "$_NAME"; fail "Zellij session did not start within 30s"; }
 
-	run docker exec "$_NAME" zellij list-sessions
+	run docker exec "$_NAME" zellij list-sessions --short
 	assert_success
-	assert_output --partial 'drydock'
+	assert_line 'drydock'
 }
