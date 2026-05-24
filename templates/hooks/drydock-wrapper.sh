@@ -37,17 +37,18 @@ fi
 _LAYOUT="${DRYDOCK_ZELLIJ_LAYOUT_OVERRIDE:-/etc/drydock/layouts/drydock.kdl}"
 
 # Validate layout path against known-safe locations (§3 CLAUDE.md: no bash -c "$untrusted").
-# Locks the layout to either the production image path with a safe filename (character class
-# [A-Za-z0-9._-] rejects shell metacharacters and path traversal) or the exact test-seam path.
-# Does NOT claim to prevent all shell injection — only rejects metacharacters and traversal
-# in the filename portion of /etc/drydock/layouts/<name>.kdl.
-case "$_LAYOUT" in
-/etc/drydock/layouts/[A-Za-z0-9._-]*.kdl | /tmp/drydock-gate-layout.kdl) ;;
-*)
+# Uses bash regex (not case glob) so the character class quantifies the entire filename:
+# `+` in `[[ =~ ]]` is a real regex quantifier; the analogous `[class]*` in bash glob would
+# only constrain the first character (the trailing `*` matches any char, including `/`, `;`, `$`).
+# Anchored with `^...$` so the full string must match — rejects path traversal and metacharacters
+# in the production filename portion. The test-seam path is a literal exact match.
+if [[ "$_LAYOUT" =~ ^/etc/drydock/layouts/[A-Za-z0-9._-]+\.kdl$ ]] ||
+	[ "$_LAYOUT" = "/tmp/drydock-gate-layout.kdl" ]; then
+	:
+else
 	printf 'drydock: invalid layout path: %s\n' "$_LAYOUT" >&2
 	exit 1
-	;;
-esac
+fi
 
 # Start Zellij inside its own pseudo-TTY (via `script`) so Zellij's client can
 # acquire a terminal without needing PID 1 to be the terminal owner.
