@@ -1,0 +1,7 @@
+// drydock default Zellij layout — single pane running the claude shim.
+// The shim (drydock-claude-shim.sh) runs claude then kills the session
+// so the container exits cleanly under --rm.
+
+layout {
+    pane command="/opt/drydock/hooks/drydock-claude-shim.sh"
+}

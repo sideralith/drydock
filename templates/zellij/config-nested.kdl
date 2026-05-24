@@ -1,0 +1,17 @@
+// drydock nested/stealth Zellij config (REQ-16 / REQ-17, design D-22).
+// Loaded when DRYDOCK_NESTED_ZELLIJ=1 and DRYDOCK_FORCE_INNER_ZELLIJ_FULL is unset.
+//
+// default_mode "locked": inner Zellij captures no keystrokes; the user's
+// host Zellij session remains in control. The inner Zellij is effectively
+// invisible as a multiplexer.
+// simplified_ui true: ASCII-fies plugin chrome (removes arrow/powerline glyphs from
+// plugin UI). It does NOT suppress the status-bar or tab-bar — per Zellij v0.41.2
+// docs, it only "sends a request for a simplified ui (without arrow fonts) to plugins".
+// REQ-16's "hide the status bar" acceptance criterion is satisfied by the LAYOUT
+// (templates/zellij/layouts/drydock.kdl), which omits the `plugin location="status-bar"`
+// and `plugin location="tab-bar"` entries that the default Zellij layout includes.
+// pane_frames false: disables pane border decorations.
+
+default_mode "locked"
+pane_frames false
+simplified_ui true

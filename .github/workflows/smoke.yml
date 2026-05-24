@@ -21,7 +21,9 @@ on:
       - "lib/**"
       - "templates/managed-settings.d/**"
       - "templates/hooks/**"
+      - "templates/zellij/**"
       - "scripts/test.sh"
+      - "test/integration/**"
       - "test/managed_settings.bats"
       - ".github/workflows/smoke.yml"
 
@@ -45,6 +47,18 @@ jobs:
         # that might surface as a non-zero exit on the runner.
         run: bin/drydock doctor || true
 
+      - name: Verify Zellij binary is present in image
+        # Confirms the sha256-pinned Zellij install landed in /usr/local/bin/
+        # and responds to --version. Catches tarball-fetch or pin-mismatch
+        # failures that would make sighup_survival.bats impossible to pass.
+        run: docker run --rm drydock:latest zellij --version
+
+      - name: Verify stealth config is baked into image
+        # Confirms /etc/drydock/zellij-nested.kdl exists in the image.
+        # This file is root-owned (non-root agent cannot overwrite it) and
+        # loaded by drydock-wrapper.sh when DRYDOCK_NESTED_ZELLIJ=1.
+        run: docker run --rm drydock:latest test -f /etc/drydock/zellij-nested.kdl
+
       - name: Run managed-settings integration tests against built image
         # The T19 family in test/managed_settings.bats verifies drydock's INV-3
         # managed-settings bake: presence + JSON-validity of all six drop-ins,
@@ -59,6 +73,18 @@ jobs:
         env:
           DRYDOCK_INTEGRATION: "1"
         run: scripts/test.sh test/managed_settings.bats
+
+      - name: Run session-persistence integration tests
+        # sighup_survival.bats: empirical GO/NO-GO gate for Slice 1 — verifies the wrapper
+        # boots cleanly, survives SIGHUP, keeps the Zellij session alive, and exits cleanly
+        # when zellij kill-session is called.
+        # nested_zellij_stealth.bats: verifies REQ-16 / REQ-17 stealth-mode contract —
+        # DRYDOCK_NESTED_ZELLIJ=1 loads the nested config, DRYDOCK_FORCE_INNER_ZELLIJ_FULL=1
+        # bypasses it.
+        # Both require drydock:latest built above and the Verify steps above to pass first.
+        env:
+          DRYDOCK_INTEGRATION: "1"
+        run: scripts/test.sh test/integration/sighup_survival.bats test/integration/nested_zellij_stealth.bats
 
       - name: Validate hardening overlay YAML (compose config)
         # Renders the full -f chain (base + hardening overlay) and exits 0
