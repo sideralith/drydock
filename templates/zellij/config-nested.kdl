@@ -1,0 +1,13 @@
+// drydock nested/stealth Zellij config (REQ-16 / REQ-17, design D-22).
+// Loaded when DRYDOCK_NESTED_ZELLIJ=1 and DRYDOCK_FORCE_INNER_ZELLIJ_FULL is unset.
+//
+// default_mode "locked": inner Zellij captures no keystrokes; the user's
+// host Zellij session remains in control. The inner Zellij is effectively
+// invisible as a multiplexer.
+// simplified_ui true: disables status bar / tabs / pane-frames chrome — the inner
+// Zellij is visually invisible in the user's host terminal (satisfies REQ-16's
+// "hide the status bar" acceptance criterion).
+
+default_mode "locked"
+pane_frames false
+simplified_ui true

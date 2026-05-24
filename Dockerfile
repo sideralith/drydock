@@ -25,6 +25,10 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 ARG HOST_DOCKER_GID=1001
 
+# Zellij version pin (design D-4) — update both args together when bumping.
+ARG ZELLIJ_VERSION=v0.41.2
+ARG ZELLIJ_SHA256=b1c321a817d8a5baf55c2798f6ac7495bba925d686d9877e9604a50784bf6c78
+
 RUN [ -n "${USER_NAME}" ] || { \
         echo 'ERROR: USER_NAME build-arg is required — invoke via the drydock CLI, not a bare docker build' >&2; \
         exit 1; \
@@ -138,6 +142,41 @@ RUN sed -i "s|__HOME__|/home/${USER_NAME}|g" /etc/claude-code/managed-settings.d
 RUN install -d -m 0755 -o ${USER_NAME} -g ${USER_NAME} \
         /home/${USER_NAME}/.cache \
         /home/${USER_NAME}/.config
+
+# ── Zellij — session-persistence multiplexer (design D-1 / D-4) ─────────────
+# Installed from a sha256-pinned tarball as root so the binary lands in
+# /usr/local/bin/ (world-executable; no extra PATH needed for the non-root user).
+# The pin is in ARG ZELLIJ_VERSION / ARG ZELLIJ_SHA256 at the top of this file.
+# MUST stay before `USER ${USER_NAME}` — tarball extraction needs root.
+RUN set -eux; \
+    _url="https://github.com/zellij-org/zellij/releases/download/${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz"; \
+    _archive="/tmp/zellij.tar.gz"; \
+    curl -fsSL "$_url" -o "$_archive"; \
+    echo "${ZELLIJ_SHA256}  $_archive" | sha256sum --check --status; \
+    tar -xzf "$_archive" -C /usr/local/bin/ zellij; \
+    chmod 0755 /usr/local/bin/zellij; \
+    rm -f "$_archive"
+
+# ── Drydock hook scripts — wrapper + shim (baked for `docker run` gate) ──────
+# These are baked into the image so that the empirical SIGHUP-survival gate
+# (which uses `docker run`, not `docker compose run`) can find them at
+# /opt/drydock/hooks/ without relying on bind-mount from templates/hooks/.
+# The :ro bind-mounts in docker-compose.yml overlay per-session copies on top
+# at runtime (INV-3), but the image-baked fallback is required for the gate.
+RUN install -d -m 0755 /opt/drydock/hooks
+COPY templates/hooks/drydock-wrapper.sh templates/hooks/drydock-claude-shim.sh \
+     /opt/drydock/hooks/
+RUN chmod 0755 /opt/drydock/hooks/drydock-wrapper.sh /opt/drydock/hooks/drydock-claude-shim.sh
+
+# ── Zellij configs — default layout + nested stealth mode (design D-22) ─────
+# Baked as root so the non-root agent cannot overwrite them (same protection
+# model as /etc/claude-code/managed-settings.d/).
+# /etc/drydock/layouts/drydock.kdl — default layout used by drydock-wrapper.sh
+# /etc/drydock/zellij-nested.kdl  — loaded when DRYDOCK_NESTED_ZELLIJ=1
+RUN install -d -m 0755 /etc/drydock /etc/drydock/layouts
+COPY templates/zellij/config-nested.kdl /etc/drydock/zellij-nested.kdl
+COPY templates/zellij/layouts/drydock.kdl /etc/drydock/layouts/drydock.kdl
+RUN chmod 0644 /etc/drydock/zellij-nested.kdl /etc/drydock/layouts/drydock.kdl
 
 USER ${USER_NAME}
 # Explicit HOME for non-login shells: T19-C resolves $HOME from a

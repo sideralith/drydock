@@ -21,6 +21,7 @@ on:
       - "lib/**"
       - "templates/managed-settings.d/**"
       - "templates/hooks/**"
+      - "templates/zellij/**"
       - "scripts/test.sh"
       - "test/managed_settings.bats"
       - ".github/workflows/smoke.yml"
@@ -59,6 +60,18 @@ jobs:
         env:
           DRYDOCK_INTEGRATION: "1"
         run: scripts/test.sh test/managed_settings.bats
+
+      - name: Verify Zellij binary is present in image
+        # Confirms the sha256-pinned Zellij install landed in /usr/local/bin/
+        # and responds to --version. Catches tarball-fetch or pin-mismatch
+        # failures that would make sighup_survival.bats impossible to pass.
+        run: docker run --rm drydock:latest zellij --version
+
+      - name: Verify stealth config is baked into image
+        # Confirms /etc/drydock/zellij-nested.kdl exists in the image.
+        # This file is root-owned (non-root agent cannot overwrite it) and
+        # loaded by drydock-wrapper.sh when DRYDOCK_NESTED_ZELLIJ=1.
+        run: docker run --rm drydock:latest test -f /etc/drydock/zellij-nested.kdl
 
       - name: Validate hardening overlay YAML (compose config)
         # Renders the full -f chain (base + hardening overlay) and exits 0
