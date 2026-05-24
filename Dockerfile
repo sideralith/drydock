@@ -155,6 +155,7 @@ RUN set -eux; \
     echo "${ZELLIJ_SHA256}  $_archive" | sha256sum --check --status; \
     tar -xzf "$_archive" -C /usr/local/bin/ zellij; \
     chmod 0755 /usr/local/bin/zellij; \
+    /usr/local/bin/zellij --version; \
     rm -f "$_archive"
 
 # ── Drydock hook scripts — wrapper + shim (baked for `docker run` gate) ──────

@@ -18,6 +18,23 @@
 
 load "../helpers/load"
 
+# ── Poll helper ───────────────────────────────────────────────────────────────
+# Waits up to 30s for `zellij list-sessions` inside the named container to list
+# the "drydock" session. Replaces fixed `sleep 5` to avoid flakes on slow runners.
+_wait_for_zellij_session() {
+	local container="$1"
+	local timeout=30
+	local elapsed=0
+	while [ $elapsed -lt $timeout ]; do
+		if docker exec "$container" zellij list-sessions 2>/dev/null | grep -q 'drydock'; then
+			return 0
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	return 1
+}
+
 # ── Integration gate ──────────────────────────────────────────────────────────
 setup_file() {
 	[[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] || skip "DRYDOCK_INTEGRATION not set — skipping integration tests"
@@ -43,8 +60,8 @@ setup() {
 			exec /opt/drydock/hooks/drydock-wrapper.sh
 		"
 
-	# Give Zellij time to start up
-	sleep 5
+	# Wait for Zellij to start (poll instead of fixed sleep to avoid flakes on slow runners)
+	_wait_for_zellij_session "$_NAME" || { docker logs "$_NAME"; fail "Zellij session did not start within 30s"; }
 }
 
 teardown() {
@@ -65,11 +82,19 @@ teardown() {
 	# Send SIGHUP — mimics terminal close
 	docker kill -s HUP "$_NAME"
 
-	sleep 5
+	# Wait for Zellij session to recover / remain after SIGHUP (poll instead of fixed sleep)
+	_wait_for_zellij_session "$_NAME" || { docker logs "$_NAME"; fail "Zellij session not alive after SIGHUP within 30s"; }
 
 	run docker ps --filter "name=^${_NAME}$" --format '{{.Names}}'
 	assert_success
 	assert_output --partial "$_NAME"
+
+	# Zellij session must still be alive inside the container — not just the container.
+	# A regression where SIGHUP killed only the Zellij session but left PID 1 alive
+	# would pass the docker ps check above but fail here (the original #64 failure mode).
+	run docker exec "$_NAME" zellij list-sessions
+	assert_success
+	assert_output --partial 'drydock'
 }
 
 # ── C: Zellij session named "drydock" exists ─────────────────────────────────
@@ -80,11 +105,20 @@ teardown() {
 }
 
 # ── D: Container exits after zellij kill-session ─────────────────────────────
-@test "D: container exits within 5s after zellij kill-session drydock" {
+@test "D: container exits within 30s after zellij kill-session drydock" {
 	# Kill the named session — wrapper's `wait` returns, container exits cleanly
 	docker exec "$_NAME" zellij kill-session drydock || true
 
-	sleep 5
+	# Poll until container disappears (--rm removes it after exit) instead of fixed sleep.
+	local timeout=30
+	local elapsed=0
+	while [ $elapsed -lt $timeout ]; do
+		if ! docker ps --filter "name=^${_NAME}$" --format '{{.Names}}' | grep -q "$_NAME"; then
+			break
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
 
 	# Container must be gone (--rm removes it after exit; docker ps returns empty)
 	run docker ps --filter "name=^${_NAME}$" --format '{{.Names}}'

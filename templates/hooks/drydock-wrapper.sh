@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # drydock-wrapper.sh — Container PID 1 wrapper for Zellij session persistence.
 #
+# NOTE: Container PID 1 wrapper — invoked as the container entrypoint by Slice 2
+# (compose wiring). In Slice 1, this script delivers the wrapper CONTRACT and is
+# exercised by `test/integration/sighup_survival.bats`. The Dockerfile CMD is still
+# `["claude"]` until Slice 2 wires the wrapper as the production entrypoint via compose.
+#
 # Installs SIG_IGN for SIGHUP on PID 1 (this script). Zellij runs as a child
 # process inside its own pseudo-TTY (via `script -qec`), so a terminal close
 # (SIGHUP to the container's PID 1) does not kill the session. The Zellij
@@ -31,9 +36,19 @@ fi
 # (drydock run always leaves this unset, using the image-baked default).
 _LAYOUT="${DRYDOCK_ZELLIJ_LAYOUT_OVERRIDE:-/etc/drydock/layouts/drydock.kdl}"
 
+# Validate layout path against known-safe locations to prevent shell injection via
+# `script -c "... ${_LAYOUT}"` (§3 CLAUDE.md: no bash -c "$untrusted" pattern).
+# Allowlist: production image path and the empirical-gate test seam path.
+case "$_LAYOUT" in
+/etc/drydock/layouts/*.kdl | /tmp/drydock-gate-layout.kdl) ;;
+*)
+	printf 'drydock: invalid layout path: %s\n' "$_LAYOUT" >&2
+	exit 1
+	;;
+esac
+
 # Start Zellij inside its own pseudo-TTY (via `script`) so Zellij's client can
 # acquire a terminal without needing PID 1 to be the terminal owner.
-# shellcheck disable=SC2086
 script -qec "zellij ${_ZELLIJ_CONFIG} --session drydock --new-session-with-layout ${_LAYOUT}" /dev/null &
 _ZPID=$!
 

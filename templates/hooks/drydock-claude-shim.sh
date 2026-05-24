@@ -9,5 +9,5 @@
 
 set -euo pipefail
 
-claude "$@"
+claude "$@" || true
 zellij kill-session drydock

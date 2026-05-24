@@ -19,6 +19,23 @@
 
 load "../helpers/load"
 
+# ── Poll helper ───────────────────────────────────────────────────────────────
+# Waits up to 30s for `zellij list-sessions` inside the named container to list
+# the "drydock" session. Replaces fixed `sleep 5` to avoid flakes on slow runners.
+_wait_for_zellij_session() {
+	local container="$1"
+	local timeout=30
+	local elapsed=0
+	while [ $elapsed -lt $timeout ]; do
+		if docker exec "$container" zellij list-sessions 2>/dev/null | grep -q 'drydock'; then
+			return 0
+		fi
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	return 1
+}
+
 # ── Integration gate ──────────────────────────────────────────────────────────
 setup_file() {
 	[[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] || skip "DRYDOCK_INTEGRATION not set — skipping integration tests"
@@ -49,7 +66,8 @@ teardown() {
 			exec /opt/drydock/hooks/drydock-wrapper.sh
 		"
 
-	sleep 5
+	# Wait for Zellij to start (poll instead of fixed sleep to avoid flakes on slow runners)
+	_wait_for_zellij_session "$_NAME" || { docker logs "$_NAME"; fail "Zellij session did not start within 30s"; }
 
 	# The script child's cmdline (via script -qec) should include the nested config path.
 	# We check the running Zellij processes inside the container.
@@ -72,7 +90,8 @@ teardown() {
 			exec /opt/drydock/hooks/drydock-wrapper.sh
 		"
 
-	sleep 5
+	# Wait for Zellij to start (poll instead of fixed sleep to avoid flakes on slow runners)
+	_wait_for_zellij_session "$_NAME" || { docker logs "$_NAME"; fail "Zellij session did not start within 30s"; }
 
 	# Zellij process should NOT contain the nested config path
 	run docker exec "$_NAME" sh -c 'ps aux | grep zellij'
@@ -92,7 +111,8 @@ teardown() {
 			exec /opt/drydock/hooks/drydock-wrapper.sh
 		"
 
-	sleep 5
+	# Wait for Zellij to start (poll instead of fixed sleep to avoid flakes on slow runners)
+	_wait_for_zellij_session "$_NAME" || { docker logs "$_NAME"; fail "Zellij session did not start within 30s"; }
 
 	run docker exec "$_NAME" zellij list-sessions
 	assert_success

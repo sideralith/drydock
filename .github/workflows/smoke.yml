@@ -61,6 +61,18 @@ jobs:
           DRYDOCK_INTEGRATION: "1"
         run: scripts/test.sh test/managed_settings.bats
 
+      - name: Run session-persistence integration tests
+        # sighup_survival.bats: empirical GO/NO-GO gate for Slice 1 — verifies the wrapper
+        # boots cleanly, survives SIGHUP, keeps the Zellij session alive, and exits cleanly
+        # when zellij kill-session is called.
+        # nested_zellij_stealth.bats: verifies REQ-16 / REQ-17 stealth-mode contract —
+        # DRYDOCK_NESTED_ZELLIJ=1 loads the nested config, DRYDOCK_FORCE_INNER_ZELLIJ_FULL=1
+        # bypasses it.
+        # Both require drydock:latest built above; run after the managed-settings step.
+        env:
+          DRYDOCK_INTEGRATION: "1"
+        run: scripts/test.sh test/integration/sighup_survival.bats test/integration/nested_zellij_stealth.bats
+
       - name: Verify Zellij binary is present in image
         # Confirms the sha256-pinned Zellij install landed in /usr/local/bin/
         # and responds to --version. Catches tarball-fetch or pin-mismatch

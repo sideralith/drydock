@@ -1,7 +1,0 @@
-// drydock default Zellij config — sourced at container startup.
-// pane_frames false: no decorative borders (clean interface).
-// quit_on_pane_close true: Zellij exits when the last pane closes.
-// Default layout is loaded from layouts/drydock.kdl.
-
-pane_frames false
-quit_on_pane_close true
