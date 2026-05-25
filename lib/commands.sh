@@ -1412,6 +1412,253 @@ cmd_unlink() {
 	fi
 }
 
+# ── Session management helpers ────────────────────────────────────────────────
+# Shared by cmd_new, cmd_attach, cmd_stop, cmd_run (T-4), and cmd_doctor.
+
+# _current_project_name — emit sanitized PROJECT_NAME for the current directory
+# without calling export_compose_env (no side effects). Used by read-only queries
+# (cmd_list, cmd_doctor) that must not mint a new discriminator.
+_current_project_name() {
+	sanitize_project_name "$(basename "$(pwd)")"
+}
+
+# _live_sessions — list live run-session container names for PROJECT_NAME.
+# Emits one name per line (no -shell companions — run sessions only).
+# Post-filters defensively: some Docker daemons don't fully honor anchored ERE.
+# Usage: _live_sessions [project_name]  (default: $PROJECT_NAME or cwd-derived)
+_live_sessions() {
+	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
+	"$DOCKER" ps \
+		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--format '{{.Names}}' 2>/dev/null |
+		grep -E "^drydock-${proj}-[0-9a-f]+$" || true
+}
+
+# _resolve_session_name disc_or_full [project_name]
+# Normalises a 4-char disc or full container name → canonical drydock-<proj>-<disc>.
+# Outputs the canonical name on stdout. Exits 0 always (validation is the caller's job).
+_resolve_session_name() {
+	local input="$1"
+	local proj="${2:-${PROJECT_NAME:-$(_current_project_name)}}"
+	# Already a full drydock-<proj>-<disc> name?
+	if [[ "$input" == drydock-*-* ]]; then
+		printf '%s' "$input"
+	else
+		# Treat as a disc suffix.
+		printf 'drydock-%s-%s' "$proj" "$input"
+	fi
+}
+
+# _pick_session_menu sessions_list_newline — interactive numbered menu for N>1 sessions.
+# Requires TTY (caller must check). Emits the chosen container name on stdout.
+# Exits non-zero if the user cancels or input is invalid.
+_pick_session_menu() {
+	local sessions_list="$1"
+	local -a sessions=()
+	while IFS= read -r line; do
+		[ -n "$line" ] && sessions+=("$line")
+	done <<<"$sessions_list"
+
+	local n="${#sessions[@]}"
+	local i
+	printf 'Multiple sessions for this project:\n' >&2
+	for ((i = 0; i < n; i++)); do
+		printf '  [%d] %s\n' "$((i + 1))" "${sessions[$i]}" >&2
+	done
+	printf 'Select session (1-%d, q=cancel): ' "$n" >&2
+
+	local choice
+	read -r choice
+	case "$choice" in
+	[qQ] | '')
+		err "cancelled"
+		;;
+	*)
+		if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$n" ]; then
+			printf '%s' "${sessions[$((choice - 1))]}"
+		else
+			err "invalid selection: $choice"
+		fi
+		;;
+	esac
+}
+
+# ── cmd_new ───────────────────────────────────────────────────────────────────
+
+# cmd_new [-- ARGS]
+# Start a new persistent container for the current project without any prompt.
+# Coexists with any existing live sessions (REQ-N4). Mints a new discriminator
+# via export_compose_env, runs compose up -d, then execs claude interactively.
+cmd_new() {
+	local -a passthrough=()
+	if [ "${1:-}" = "--" ]; then
+		shift
+		passthrough=("$@")
+	fi
+	ensure_prereqs
+	ensure_runtime_dirs
+	ensure_image
+	ensure_synced
+	local project_dir
+	project_dir="$(resolve_project_dir "")"
+	export_compose_env "$project_dir"
+
+	local compose_args=()
+	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+
+	local _name="$DRYDOCK_SESSION_NAME"
+	note "Starting new session $_name in $project_dir"
+
+	# Persistent lifecycle: compose up -d starts the container (PID 1 = sleep infinity),
+	# then compose exec attaches Claude interactively.
+	"$DOCKER" compose "${compose_args[@]}" -p "$_name" up -d
+	exec "$DOCKER" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+}
+
+# ── cmd_attach ────────────────────────────────────────────────────────────────
+
+# cmd_attach [disc|full_name] [-- ARGS]
+# Reconnect to a live container via compose exec ... claude --resume (REQ-6-M).
+# Disambiguation per REQ-7-M sub-scenarios (a/b/c/d).
+cmd_attach() {
+	local name_arg=""
+	local -a passthrough=()
+	if [ $# -gt 0 ] && [ "$1" != "--" ]; then
+		name_arg="$1"
+		shift
+	fi
+	if [ "${1:-}" = "--" ]; then
+		shift
+		passthrough=("$@")
+	fi
+
+	local proj
+	proj="${PROJECT_NAME:-$(_current_project_name)}"
+
+	local target_name
+	if [ -n "$name_arg" ]; then
+		# Sub-scenario (a): explicit name given.
+		target_name="$(_resolve_session_name "$name_arg" "$proj")"
+		# Verify the container is actually live.
+		local live
+		live="$(_live_sessions "$proj")"
+		if ! printf '%s\n' "$live" | grep -qxF "$target_name"; then
+			err "no live session for project '$proj' named '$name_arg'"
+		fi
+	else
+		# Sub-scenarios (b/c/d): no name given — query live sessions.
+		local live
+		live="$(_live_sessions "$proj")"
+		local count
+		count="$(printf '%s\n' "$live" | grep -c . || true)"
+
+		if [ "$count" -eq 0 ]; then
+			err "no live sessions for project '$proj' — run: drydock new"
+		elif [ "$count" -eq 1 ]; then
+			# Sub-scenario (b): exactly one session — attach directly.
+			target_name="$(printf '%s\n' "$live" | head -1)"
+		else
+			# Sub-scenarios (c/d): multiple sessions.
+			if [ -t 0 ]; then
+				# Sub-scenario (c): TTY — interactive menu.
+				target_name="$(_pick_session_menu "$live")"
+			else
+				# Sub-scenario (d): no-TTY — list + exit 2.
+				printf 'Multiple sessions for project %s:\n' "$proj" >&2
+				printf '%s\n' "$live" >&2
+				printf 'Use: drydock attach <disc> — or drydock list\n' >&2
+				return 2
+			fi
+		fi
+	fi
+
+	note "Attaching to $target_name"
+	exec "$DOCKER" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+}
+
+# ── cmd_list ──────────────────────────────────────────────────────────────────
+
+# cmd_list
+# List live (and recently-exited) containers for the current project.
+# Output: NAME   STATUS   AGE — parseable, one row per container.
+# Exited containers are shown with a [Exited] marker (OQ-T5, REQ-N6).
+cmd_list() {
+	local proj
+	proj="${PROJECT_NAME:-$(_current_project_name)}"
+
+	local rows
+	rows="$("$DOCKER" ps \
+		--filter "name=^drydock-${proj}-" \
+		--format '{{.Names}}|{{.Status}}|{{.CreatedAt}}' 2>/dev/null || true)"
+	# Defensive post-filter: ensure only this project's containers are shown.
+	rows="$(printf '%s\n' "$rows" | grep -E "^drydock-${proj}-" || true)"
+
+	if [ -z "$rows" ]; then
+		return 0
+	fi
+
+	local name status age display_status
+	while IFS='|' read -r name status age; do
+		[ -n "$name" ] || continue
+		# Mark exited containers distinctly (OQ-T5).
+		if [[ "$status" == Exited* ]]; then
+			display_status="[Exited] $status"
+		else
+			display_status="$status"
+		fi
+		printf '%-40s  %-35s  %s\n' "$name" "$display_status" "$age"
+	done <<<"$rows"
+}
+
+# ── cmd_stop ──────────────────────────────────────────────────────────────────
+
+# cmd_stop [disc|full_name]
+# Stop (docker rm -f) a live container. Disambiguation same as cmd_attach (REQ-7-M).
+cmd_stop() {
+	local name_arg=""
+	if [ $# -gt 0 ]; then
+		name_arg="$1"
+		shift
+	fi
+
+	local proj
+	proj="${PROJECT_NAME:-$(_current_project_name)}"
+
+	local target_name
+	if [ -n "$name_arg" ]; then
+		# Sub-scenario (a): explicit name.
+		target_name="$(_resolve_session_name "$name_arg" "$proj")"
+	else
+		# Sub-scenarios (b/c/d): no name — query live sessions.
+		local live
+		live="$(_live_sessions "$proj")"
+		local count
+		count="$(printf '%s\n' "$live" | grep -c . || true)"
+
+		if [ "$count" -eq 0 ]; then
+			err "no live sessions for project '$proj' — nothing to stop"
+		elif [ "$count" -eq 1 ]; then
+			# Sub-scenario (b): exactly one session — stop directly.
+			target_name="$(printf '%s\n' "$live" | head -1)"
+		else
+			# Sub-scenarios (c/d): multiple sessions.
+			if [ -t 0 ]; then
+				# Sub-scenario (c): TTY — interactive menu.
+				target_name="$(_pick_session_menu "$live")"
+			else
+				# Sub-scenario (d): no-TTY — list + exit 2.
+				printf 'Multiple sessions for project %s:\n' "$proj" >&2
+				printf '%s\n' "$live" >&2
+				printf 'Use: drydock stop <disc> — or drydock list\n' >&2
+				return 2
+			fi
+		fi
+	fi
+
+	note "Stopping $target_name"
+	"$DOCKER" rm -f "$target_name"
+}
+
 # ── cmd_links ─────────────────────────────────────────────────────────────────
 
 # cmd_links
