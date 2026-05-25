@@ -216,7 +216,7 @@ drydock-myproj-ef56ab78")"
 	# Must have 'rm' in the log
 	grep -q "rm" "$DOCKER_CALL_LOG"
 	# Must NOT use 'docker stop'
-	! grep -qE "^stop " "$DOCKER_CALL_LOG" || true
+	! grep -qE "^stop " "$DOCKER_CALL_LOG"
 }
 
 # ── FIX-4: explicit name targets Exited containers too ───────────────────────
