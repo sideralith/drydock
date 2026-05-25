@@ -33,8 +33,12 @@ usage() {
 	# ── COMMANDS ──
 	_dr_section "COMMANDS"
 	local _DR_LABEL_WIDTH=28
-	_dr_help_row "(no args)" "Default — launch Claude in current directory's project"
-	_dr_help_row "run [DIR] [-- ARGS]" "Launch Claude in DIR (or cwd); ARGS after -- go to claude"
+	_dr_help_row "(no args)" "Default — attach to existing session or launch Claude (prompts if multiple)"
+	_dr_help_row "run [DIR] [-- ARGS]" "Detect + delegate: attach, new, or prompt; ARGS after -- go to claude"
+	_dr_help_row "new" "Start a new session (skips prompt; runs alongside any existing sessions)"
+	_dr_help_row "attach [NAME]" "Reconnect to an existing session (claude --resume)"
+	_dr_help_row "list" "List live sessions for the current project"
+	_dr_help_row "stop [NAME]" "Stop a session (docker rm -f); with no arg, prompts if multiple"
 	_dr_help_row "shell [DIR] [-- CMD]" "Bash shell in container; with -- CMD, run CMD instead"
 	_dr_help_row "build" "Build / rebuild the drydock image"
 	_dr_help_row "sync" "Sync host ~/.claude/ → ~/.claude-container/"
