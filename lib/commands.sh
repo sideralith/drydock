@@ -65,6 +65,10 @@ usage() {
 	_dr_help_row "drydock link ~/git/shared-lib /opt/lib" "mount at custom path"
 	_dr_help_row "drydock unlink ~/git/shared-lib" "remove sibling"
 	_dr_help_row "drydock links" "list current project's siblings"
+	_dr_help_row "drydock new" "start a fresh session alongside any existing ones"
+	_dr_help_row "drydock attach ab12" "reconnect to session with discriminator ab12"
+	_dr_help_row "drydock list" "list all live sessions for the current project"
+	_dr_help_row "drydock stop ab12" "stop (remove) a specific session"
 
 	# ── ENV ──
 	_dr_section "ENV"
@@ -1516,13 +1520,6 @@ cmd_unlink() {
 
 # ── Session management helpers ────────────────────────────────────────────────
 # Shared by cmd_new, cmd_attach, cmd_stop, cmd_run (T-4), and cmd_doctor.
-
-# _current_project_name — emit sanitized PROJECT_NAME for the current directory
-# without calling export_compose_env (no side effects). Used by read-only queries
-# (cmd_list, cmd_doctor) that must not mint a new discriminator.
-_current_project_name() {
-	sanitize_project_name "$(basename "$(pwd)")"
-}
 
 # _live_sessions — list live run-session container names for PROJECT_NAME.
 # Emits one name per line (no -shell companions — run sessions only).
