@@ -7,25 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-25
+
+Session persistence and multi-session UX. The container moves from
+ephemeral-per-session to long-lived via Docker's native lifecycle, and the
+CLI gains explicit session management commands. See #64.
+
 ### Added
 - **New session subcommands** (`drydock new`, `drydock attach`, `drydock list`,
-  `drydock stop`) for the persistent-container lifecycle model (#64, #67).
+  `drydock stop`) for the persistent-container lifecycle model (#64).
   `drydock new` starts a fresh container without prompting (coexists with any
   live session). `drydock attach [disc]` reconnects via `compose exec … claude
   --resume`. `drydock list` shows live sessions for the current project in
-  parseable format. `drydock stop [disc]` removes a container with `docker rm -f`.
+  parseable format. `drydock stop [disc]` removes a container.
   All four support the disambiguation protocol: explicit name → direct action;
-  no arg + 1 session → direct; no arg + N>1 + TTY → numbered menu; no arg +
-  N>1 + no-TTY → list + exit 2.
+  no arg + 1 session → direct; no arg + N>1 + TTY → interactive selector;
+  no arg + N>1 + no-TTY → list + exit 2.
 - **`drydock` default command now detects live sessions** (REQ-9-M): nested
   (inside Zellij/tmux/screen or `DRYDOCK_NESTED=1`) → ephemeral `compose run
   --rm`; non-nested + no sessions → `compose up -d` + `compose exec`; non-nested
-  + live sessions + TTY → prompt `attach / new / stop+new / cancel`; non-nested
-  + live sessions + no-TTY → list + exit 2.
+  + live sessions + TTY → interactive selector (attach / new / stop+new /
+  cancel); non-nested + live sessions + no-TTY → list + exit 2.
+- **Interactive TUI selector** for choosing between live sessions and actions.
+  3-tier fallback chain: [`gum`](https://github.com/charmbracelet/gum) (preferred,
+  premium UX) → [`fzf`](https://github.com/junegunn/fzf) (fallback, incremental
+  search) → built-in Bash ANSI renderer (safety net, zero deps). Override env:
+  `DRYDOCK_DISABLE_GUM=1` / `DRYDOCK_DISABLE_FZF=1`. Test seam via `GUM=` /
+  `FZF=` env indirection. `drydock doctor` reports which tier is active and
+  install hints for the others.
 - Integration gate `test/integration/session_lifecycle_compose_exec.bats`
   (assertions L-A..L-D) gated by `DRYDOCK_INTEGRATION=1` — verifies PID 1 =
   `sleep`, SIGHUP survival of exec processes, re-exec to same container, and
-  `docker rm -f` cleanup.
+  container removal cleanup.
 
 ### Changed
 - **`drydock doctor` ACTIVE SESSIONS cheat-sheet** now shows `drydock attach
@@ -36,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Container PID 1 changed** from `drydock-wrapper.sh` to `sleep infinity`
   (T-2, REQ-1-M). CMD (not ENTRYPOINT) so `compose run drydock claude` still
   overrides it for the ephemeral nested path.
+- **README + ROADMAP + troubleshooting** aligned with the new lifecycle:
+  README documents the four new subcommands and persistent-session model;
+  ROADMAP flips #64 to `Done` and #67 to `Not planned` (closed; successor:
+  external [drydock-zellij-plugin](https://github.com/sideralith/drydock/issues/97),
+  post-v0.3.0); troubleshooting's TTY-latency section reflects the
+  `compose up -d` + `exec` chain.
 
 ### Removed
 - **Zellij scaffolding (Slice 1 debt) removed** (#64). The nested-Zellij stealth
@@ -50,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test/integration/nested_zellij_stealth.bats`. Zellij binary (~10-12 MB)
   removed from image. Smoke CI steps for Zellij binary presence and stealth
   config removed.
+
+### Notes
+- Issue #67 (session-management-ui) was closed as not-planned in this cycle —
+  the substrate pivot away from in-container Zellij removed the dependency the
+  issue assumed, and the CLI selector now covers the in-terminal navigation
+  use cases that motivated it. The plugin idea is tracked externally at #97,
+  post-v0.3.0.
 
 ## [0.2.2] - 2026-05-23
 
@@ -472,6 +498,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.3.0]: https://github.com/sideralith/drydock/releases/tag/v0.3.0
 [0.2.2]: https://github.com/sideralith/drydock/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sideralith/drydock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sideralith/drydock/releases/tag/v0.2.0
