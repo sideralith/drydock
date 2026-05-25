@@ -44,8 +44,8 @@ file.
 | [ci-commit-lint](#ci-commit-lint) | v0.2.2 | [#10][i10] | Done |
 | [hooks-mount-source](#hooks-mount-source) | v0.2.2 | [#71][i71] | Done |
 | [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Done |
-| [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Planned |
-| [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Planned |
+| [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Done |
+| [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Not planned (closed; successor: external [drydock-zellij-plugin][i97], post-v0.3.0) |
 | [toolchain-mise](#toolchain-mise) | v0.4.0 | [#16][i16] | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.4.0 | [#17][i17] | Planned |
 | [agent-adapter](#agent-adapter) | v0.5.0 | [#18][i18] | Planned |
@@ -82,6 +82,7 @@ Order for later releases is not yet decided.
 [i76]: https://github.com/sideralith/drydock/issues/76
 [i77]: https://github.com/sideralith/drydock/issues/77
 [i79]: https://github.com/sideralith/drydock/issues/79
+[i97]: https://github.com/sideralith/drydock/issues/97
 
 ---
 
@@ -569,77 +570,89 @@ question and the in-CI-running question listed in the prior Planned entry.
 
 ### session-persistence
 
-**Status: Planned (v0.3.0, issue #64).**
+**Status: Done (v0.3.0, issue [#64][i64]).** Shipped across PRs #94 (Slice 1
+foundation), #96 (Slice 1 cleanup, PR 1/2), and #98 (impl + polish, PR 2/2).
 
-**Problem.** A `drydock run` session does not reliably survive the host
-terminal closing. `cmd_run` launches Claude via `docker compose run --rm`
-attached to the terminal; on terminal close the outcome is nondeterministic —
-a clean `SIGHUP` is forwarded to `claude` (session dies, `--rm` removes the
-container), an abrupt teardown is not (the container survives orphaned in the
-Docker VM). Survival is luck, not design.
+**Problem.** A `drydock run` session did not reliably survive the host
+terminal closing. `cmd_run` launched Claude via `docker compose run --rm`
+attached to the terminal; on terminal close the outcome was nondeterministic —
+a clean `SIGHUP` was forwarded to `claude` (session died, `--rm` removed the
+container), an abrupt teardown was not (the container survived orphaned in the
+Docker VM). Survival was luck, not design.
 
-**Proposed solution.** Make persistence deterministic: run Claude inside a
-detach-capable layer in the container so `SIGHUP` cannot kill it — closing the
-terminal merely detaches. A `drydock attach` command reattaches to a live
-session; the container is torn down only when Claude itself exits, making
-`/exit` the single end condition. Leading substrate: **Zellij** (over
-`abduco` / `dtach` — detach-only, no path to a later session UI — and `tmux` —
-breaks mouse scroll in alternate-screen TUIs). Interim mitigation already
-shipped: `drydock doctor` prints a `docker exec` resume cheat-sheet per live
-session.
+**Solution shipped — Model X "Detect + Delegate".** Persistence is now
+deterministic via Docker's native lifecycle, not an in-container multiplexer:
+
+- **Container PID 1 = `sleep infinity`** (CMD-not-entrypoint). The container
+  is a long-lived no-op; closing the terminal cannot kill it. `docker compose
+  run drydock claude` still overrides the CMD for ephemeral nested mode.
+- **Launcher = `docker compose up -d` + `docker compose exec -it ... claude`**.
+  Sessions are persistent by default. All overlays (hardening, SSH, GPG,
+  hooks RO, session dirs, engram) apply identically under `up -d`.
+- **Host multiplexer detection** via env vars (`$ZELLIJ` / `$TMUX` / `$STY` /
+  `$DRYDOCK_NESTED=1`) — nested invocations fall back to ephemeral `compose
+  run --rm -it claude` so host multiplexers keep owning lifecycle.
+- **New CLI surface**: `drydock new` (force-fresh session), `drydock attach
+  [NAME]` (reconnect via `claude --resume`), `drydock list` (live sessions
+  per project), `drydock stop [NAME]` (force-remove the container).
+- **Interactive TUI selector** when `drydock` is re-invoked for a project with
+  live sessions — 3-tier fallback: `gum` (preferred) → `fzf` (fallback) →
+  built-in Bash ANSI renderer (safety net, zero deps). Override env:
+  `DRYDOCK_DISABLE_GUM=1` / `DRYDOCK_DISABLE_FZF=1`.
+- **Reattach mechanics**: `compose exec -it ... claude --resume` reads the
+  per-uuid append-only `~/.claude-container/projects/<slug>/<uuid>.jsonl`
+  (existing INV-2 carve-out — no schema change, no new shared writers).
+
+Earlier Zellij-based design (engram `redesign-*`) was prototyped in Slice 1
+and abandoned post-empirical-gate failures (TTY contamination via `script
+-qec` + alternate-screen interactions, engram #2707). The Model X design is
+strictly simpler: no inner Zellij, no wrapper PID 1, no stealth layouts —
+just the standard Docker lifecycle.
 
 **Why this scope.** Ergonomics — the in-container equivalent of `tmux` on the
-host. Squarely threat model A (INV-7): a closed terminal losing an in-progress
+host, delivered by Docker's own primitives instead of a bespoke layer.
+Squarely threat model A (INV-7): a closed terminal losing an in-progress
 agent task is the footgun class drydock exists to catch.
 
-**Invariants touched.** INV-2 — the detach layer must wrap Claude inside the
-*same* per-session `~/.claude-container-<disc>/` config; no new write-sharing.
-INV-7 — ergonomics only, no adversarial protection, no invariant amendment.
+**Invariants touched.** All preserved. INV-2 — per-session
+`~/.claude-container-<disc>/` config isolation is unchanged; the `projects/`
+carve-out handles `--resume` via append-only-per-uuid (no RMW, no SQLite).
+INV-3 — both `:ro` hook overlay mounts apply identically under `compose up
+-d`. INV-7 — ergonomics only, no adversarial protection, no invariant
+amendment. INV-1, INV-4, INV-5, INV-6, INV-8 — no impact.
 
-**Open questions.** Substrate confirmation (Zellij vs. alternatives); the
-`drydock attach` command name and UX; the container teardown-on-exit
-mechanism; how `--rm` semantics change. Resolved in the SDD.
-
-**Pairs with.** [session-management-ui](#session-management-ui) below
-builds on the same multiplexer substrate this item establishes.
+**Pairs with.** [session-management-ui](#session-management-ui) below was
+*re-scoped* to a separate plugin and externalized — see that section.
 
 **Provenance.** Issue [#64][i64]. Surfaced from a container permissions audit
 that also fixed root-owned `~/.cache` / `~/.config` and added the doctor
-resume cheat-sheet.
+resume cheat-sheet (since updated from `claude --continue` to `drydock attach
+<disc>` per the new lifecycle). Full SDD trail in engram under
+`sdd/session-persistence/redesign3-*` topic keys; archive report at
+`sdd/session-persistence/redesign3-archive-report`.
 
 ### session-management-ui
 
-**Status: Planned (v0.3.0, issue #67).**
+**Status: Not planned (closed as not-planned, issue [#67][i67]).** The
+original v0.3.0 scope — an in-container multi-session UI built on top of the
+[session-persistence](#session-persistence) substrate — was made obsolete by
+the redesign3 pivot. Once persistence stopped depending on an in-container
+multiplexer (Zellij), there was no substrate left to "build a sidebar on,"
+and the in-CLI surface (`drydock list` + the interactive TUI selector on
+`drydock`) already covers the navigation use cases the issue originally
+called out. The plugin idea — a Zellij sidebar that drives drydock — is now
+tracked as the external repository [drydock-zellij-plugin][i97], post-v0.3.0.
 
-**Problem.** Concurrent same-project sessions work
-([concurrent-sessions](#concurrent-sessions) in v0.2.0), but navigating
-between them is bare: each session lives in its own terminal, and there is
-no in-container UI for switching between them, listing live sessions, or
-reattaching to one from a different terminal. `drydock doctor` lists active
-sessions but does not offer navigation.
+**What ships in v0.3.0 instead.** The CLI selector that opens when `drydock`
+is re-invoked for a project with live sessions (attach / new / stop+new /
+cancel) — see [session-persistence](#session-persistence) for the 3-tier
+rendering chain (gum → fzf → built-in ANSI). For listing without launching,
+`drydock list` shows the live session table. This covers the in-terminal
+navigation use case that motivated #67 without an in-container UI layer.
 
-**Proposed solution.** A multi-session UI inside the container — a sidebar
-showing all live drydock sessions for the project, with tabs/keys to switch
-between them. Builds on the detach-capable multiplexer substrate
-[session-persistence](#session-persistence) establishes — they share the
-detach layer and the live-session enumeration logic.
-
-**Why this scope.** Ergonomics — once a project has more than one active
-session (test driver + dev work + a parallel docs PR), the bare
-per-terminal model adds friction. Distinct enough from `session-persistence`
-to be a separate item: persistence keeps a session alive across terminal
-close; this is multi-session navigation while terminals are open.
-
-**Invariants touched.** None new. INV-2 per-session config isolation is
-unchanged — the UI surfaces sessions, it does not write-share state.
-
-**Open questions.** The substrate (Zellij sidebar plugin vs. a
-drydock-specific TUI vs. a status-bar approach); whether this is a
-"navigate to other sessions from inside one" feature or a session-launcher;
-attach-from-remote-terminal ergonomics vs. spawning a new one.
-
-**Provenance.** Issue [#67][i67]. Surfaced from the same audit that drove
-`session-persistence`.
+**Provenance.** Issue [#67][i67] (closed not-planned). Successor: external
+plugin issue [#97][i97], scoped post-v0.3.0. Surfaced from the same audit
+that drove `session-persistence`.
 
 ---
 

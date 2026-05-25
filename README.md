@@ -115,6 +115,8 @@ session inside drydock logs in once — see
 | **`engram`** on host `PATH` | Persistent memory MCP server. Auto-detected per INV-4; everything works without it. |
 | **`gh`** CLI authenticated | Needed if you want the agent (or you) to do GitHub work from inside the container. Also required by the Homebrew tap publish script for maintainers. |
 | **GPG agent** + key | Only needed if you want signed commits inside the container; enabled via the GPG overlay. |
+| **[`gum`](https://github.com/charmbracelet/gum)** | Premium interactive session selector (arrow navigation, colors, borders). Install: `brew install gum` or `apt install gum`. Falls back to `fzf` or built-in ANSI selector if absent. |
+| **[`fzf`](https://github.com/junegunn/fzf)** | Fallback interactive session selector (incremental search). Install: `brew install fzf` or `apt install fzf`. Used when `gum` is absent. |
 
 ## Quick start
 
@@ -180,11 +182,23 @@ cd ~/git/myproject && drydock
 
 # Other commands:
 drydock shell [DIR]      # bash inside the container — for debugging
+drydock new              # start a new session alongside existing ones (skips prompt)
+drydock attach [NAME]    # reconnect to a live session (claude --resume)
+drydock list             # list live sessions for the current project
+drydock stop [NAME]      # stop a session (removes the container)
 drydock status           # short health snapshot
 drydock doctor           # detailed diagnostics + cwd context
 drydock sync             # refresh container's ~/.claude/ + ~/.claude.json from host
 drydock build            # rebuild the image
 ```
+
+Sessions are **persistent**: closing the terminal leaves the container
+running. Re-running `drydock` for the same project opens an interactive
+selector (attach to existing / start new / stop+new / cancel) — the
+selector uses [`gum`](https://github.com/charmbracelet/gum) if installed,
+falls back to [`fzf`](https://github.com/junegunn/fzf), and finally to a
+built-in ANSI renderer. The container keeps running after Claude exits — call
+`drydock stop` explicitly to remove it.
 
 drydock's safety policy is image-baked (`/etc/claude-code/managed-settings.d/`,
 INV-3) and applies to every project automatically. You don't need to "initialize"
@@ -199,7 +213,11 @@ scripts, a justfile) runs the same way.
 
 | Command | What it does |
 |---|---|
-| `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed — run it again for the same project to get a second concurrent session |
+| `drydock` / `drydock run [DIR]` | Launch Claude Code in DIR (or cwd), sandboxed. Sessions persist across terminal close — re-running `drydock` for the same project opens an interactive selector (attach existing / start new / stop+new / cancel). |
+| `drydock new` | Start a new session alongside any existing ones — skips the attach prompt |
+| `drydock attach [NAME]` | Reconnect to a live session via `claude --resume`. With N>1 sessions and a TTY, opens an interactive selector. |
+| `drydock list` | List live sessions for the current project (columns: NAME, STATUS, AGE) |
+| `drydock stop [NAME]` | Stop a session (force-removes the container). With no arg and N>1 sessions, prompts. |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
 | `drydock link [--rw] <PATH> [CONTAINER-PATH]` | Mount a sibling project inside the container at `/workspace-siblings/<name>` (or a custom path). Without `--rw`: read-only mount, no key needed. With `--rw`: read-write mount; generates a per-sibling deploy key and managed SSH config so the agent can `git push` from the sibling without exposing `~/.ssh/`. |
 | `drydock unlink PATH` | Remove a sibling mount from the current project's list |

@@ -190,8 +190,11 @@ remove from its side without breaking the design.
 
 ### The chain
 
-drydock launches each session via `docker compose run --rm` (see
-`lib/commands.sh`). Every byte the `claude` process writes flows through:
+drydock (v0.3.0+) launches each session via `docker compose up -d` (the
+container's PID 1 is `sleep infinity`) and attaches Claude via `docker
+compose exec -it ... claude` — see `lib/commands.sh`. The PTY chain is the
+same shape under `exec` as it was under the older `compose run --rm`
+model. Every byte the `claude` process writes flows through:
 
 ```
 claude (container)
@@ -231,11 +234,17 @@ as "feels a touch slower."
 
 ### What drydock cannot easily change
 
-A long-running container per project with `docker exec` per session would
-save the container creation cost (one-off, ~1 s) but **does not reduce
-per-byte TTY latency** — the daemon-to-host bridge is unchanged. It also
-sacrifices the `--rm` ephemeral-container design that backs INV-2 (each
-session a clean state). drydock keeps `compose run --rm` deliberately.
+The `compose up -d` + `exec` lifecycle (v0.3.0+) already removes the
+per-session container-creation cost (~1 s) compared with the older `compose
+run --rm`: subsequent `drydock attach` invocations reuse the live container
+and only spawn a new `claude` process via `exec`. What it **does not**
+change is the per-byte TTY latency — the daemon-to-host bridge is shared by
+both `compose run` and `compose exec`, so the chain length is unchanged.
+INV-2's per-session `~/.claude-container-<disc>/` config isolation is
+preserved by the per-session discriminator (each persistent container has
+its own session dir); the `~/.claude-container/projects/` shared store is
+the documented INV-2 carve-out for `claude --resume` (append-only-per-uuid,
+no RMW).
 
 ### What to check first
 

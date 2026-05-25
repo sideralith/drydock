@@ -22,6 +22,7 @@ on:
       - "templates/managed-settings.d/**"
       - "templates/hooks/**"
       - "scripts/test.sh"
+      - "test/integration/**"
       - "test/managed_settings.bats"
       - ".github/workflows/smoke.yml"
 

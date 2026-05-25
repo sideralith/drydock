@@ -15,22 +15,22 @@ drydock() {
   run bash -c '"$1" "$@"' -- "$DRYDOCK_HOME/bin/drydock" "$@" 2>&1
 }
 
-@test "drydock version exits 0 and prints exactly 'drydock 0.2.2' (v0.2.2)" {
+@test "drydock version exits 0 and prints exactly 'drydock 0.2.2' (v0.3.0)" {
   run "$DRYDOCK_HOME/bin/drydock" version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.2.2" ]
+  [ "$output" = "drydock 0.3.0" ]
 }
 
 @test "drydock --version exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" --version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.2.2" ]
+  [ "$output" = "drydock 0.3.0" ]
 }
 
 @test "drydock -v exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" -v
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.2.2" ]
+  [ "$output" = "drydock 0.3.0" ]
 }
 
 @test "drydock help exits 0 and contains command list" {
@@ -131,4 +131,56 @@ drydock() {
   [ "$status" -eq 0 ]
 
   [ ! -f "$orphan" ]
+}
+
+# ── T-5 RED: dispatcher subcommands new/attach/list/stop ─────────────────────
+# REQ-N4, REQ-6-M, REQ-N6, REQ-N7: verify the four new subcommands are dispatched
+# (not falling into the "unknown command" error path).
+
+@test "drydock new: dispatched (not 'unknown command') (REQ-N4, T-5)" {
+  # drydock new with no project dir will fail for other reasons (no docker, etc.)
+  # but must NOT fail with "unknown command".
+  run bash -c '"$1" new 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
+  [[ "$output" != *"unknown command"* ]]
+}
+
+@test "drydock attach: dispatched (not 'unknown command') (REQ-6-M, T-5)" {
+  run bash -c '"$1" attach 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
+  [[ "$output" != *"unknown command"* ]]
+}
+
+@test "drydock list: dispatched and exits 0 without container (REQ-N6, T-5)" {
+  # drydock list just calls docker ps — with no DOCKER override it may fail,
+  # but the key is: it must NOT be "unknown command".
+  run bash -c 'cd "$1" && "$2" list 2>&1' -- "$DRYDOCK_HOME" "$DRYDOCK_HOME/bin/drydock"
+  [[ "$output" != *"unknown command"* ]]
+}
+
+@test "drydock stop: dispatched (not 'unknown command') (REQ-N7, T-5)" {
+  run bash -c '"$1" stop 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
+  [[ "$output" != *"unknown command"* ]]
+}
+
+@test "drydock help output mentions 'new' (T-5 usage surface)" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"new"* ]]
+}
+
+@test "drydock help output mentions 'attach' (T-5 usage surface)" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"attach"* ]]
+}
+
+@test "drydock help output mentions 'list' (T-5 usage surface)" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"list"* ]]
+}
+
+@test "drydock help output mentions 'stop' (T-5 usage surface)" {
+  run "$DRYDOCK_HOME/bin/drydock" help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"stop"* ]]
 }

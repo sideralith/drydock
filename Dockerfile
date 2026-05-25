@@ -165,5 +165,7 @@ ENV GIT_CONFIG_COUNT=1 \
 # WORKDIR is set per-invocation by the drydock CLI via env or compose override.
 WORKDIR /home/${USER_NAME}
 
-# Default: launch Claude Code interactively. Mounts provide the binary at runtime.
-CMD ["claude"]
+# CMD (not ENTRYPOINT): `docker compose run drydock claude` overrides this for
+# ephemeral nested sessions (host mux owns the lifecycle). The persistent path
+# uses `compose up -d` (PID 1 = sleep infinity) + `compose exec ... claude`.
+CMD ["sleep", "infinity"]
