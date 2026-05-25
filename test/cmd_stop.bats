@@ -53,6 +53,31 @@ STUB
 	printf '%s' "$stub_dir/docker"
 }
 
+# make_docker_stub_split: distinguish running vs all (running + exited).
+# $1 = output for plain "docker ps" (running sessions)
+# $2 = output for "docker ps --all" (running + exited sessions)
+make_docker_stub_split() {
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-split-$$-$RANDOM"
+	mkdir -p "$stub_dir"
+	local running_output="$1"
+	local all_output="$2"
+	local call_log="${DOCKER_CALL_LOG}"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${call_log}"
+if [ "\${1:-}" = "ps" ]; then
+	if printf '%s' "\$*" | grep -q -- "--all"; then
+		printf '%s\n' "${all_output}"
+	else
+		printf '%s\n' "${running_output}"
+	fi
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	printf '%s' "$stub_dir/docker"
+}
+
 # ── Scenario (a): explicit disc/name → direct docker rm -f ───────────────────
 
 @test "cmd_stop: explicit disc arg → invokes docker rm -f on the container (REQ-N7)" {
@@ -122,7 +147,7 @@ drydock-myproj-ef56ab78")"
 	# Must exit 2 and NOT have removed a container
 	[ "$status" -eq 2 ]
 	# rm should NOT appear in call log for no-TTY multi-session
-	! grep -q "^rm " "$DOCKER_CALL_LOG" || true
+	! grep -q "^rm " "$DOCKER_CALL_LOG"
 }
 
 # ── No sessions → error + exit non-zero ──────────────────────────────────────
@@ -154,7 +179,7 @@ drydock-myproj-ef56ab78")"
 	export DOCKER="$stub"
 
 	run cmd_stop "drydock-otherproject-abc1" 2>&1
-	[[ "$output" == *"no live session"* ]] || [[ "$output" == *"not found"* ]] || [[ "$output" == *"no"* ]]
+	[[ "$output" == *"no live session"* ]]
 }
 
 @test "cmd_stop: explicit nonexistent disc → exits non-zero (FIX-3)" {
@@ -175,7 +200,7 @@ drydock-myproj-ef56ab78")"
 	run cmd_stop "deadbeef"
 	[ "$status" -ne 0 ]
 	# rm must NOT have been called since the target is not a live session.
-	! grep -q "^rm " "$DOCKER_CALL_LOG" || true
+	! grep -q "^rm " "$DOCKER_CALL_LOG"
 }
 
 # ── Stop is docker rm -f, not docker stop ────────────────────────────────────
@@ -192,4 +217,38 @@ drydock-myproj-ef56ab78")"
 	grep -q "rm" "$DOCKER_CALL_LOG"
 	# Must NOT use 'docker stop'
 	! grep -qE "^stop " "$DOCKER_CALL_LOG" || true
+}
+
+# ── FIX-4: explicit name targets Exited containers too ───────────────────────
+
+@test "cmd_stop: explicit disc of Exited container → succeeds (FIX-4)" {
+	# drydock list shows [Exited] sessions; users must be able to stop them by name.
+	# Split stub: ps (running) returns nothing; ps --all returns the Exited container.
+	local stub
+	stub="$(make_docker_stub_split "" "drydock-myproj-dead1234")"
+	export DOCKER="$stub"
+
+	run cmd_stop "dead1234"
+	[ "$status" -eq 0 ]
+	grep -q "drydock-myproj-dead1234" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_stop: explicit disc of Exited container → invokes docker rm -f (FIX-4)" {
+	local stub
+	stub="$(make_docker_stub_split "" "drydock-myproj-dead1234")"
+	export DOCKER="$stub"
+
+	run cmd_stop "dead1234"
+	[ "$status" -eq 0 ]
+	grep -q "rm" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_stop: explicit disc not in running or exited → still rejected (FIX-4)" {
+	# Existing rejection behaviour must hold: a name absent from ALL containers is an error.
+	local stub
+	stub="$(make_docker_stub_split "drydock-myproj-ab12cd34" "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "deadbeef"
+	[ "$status" -ne 0 ]
 }
