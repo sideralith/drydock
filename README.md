@@ -115,6 +115,8 @@ session inside drydock logs in once — see
 | **`engram`** on host `PATH` | Persistent memory MCP server. Auto-detected per INV-4; everything works without it. |
 | **`gh`** CLI authenticated | Needed if you want the agent (or you) to do GitHub work from inside the container. Also required by the Homebrew tap publish script for maintainers. |
 | **GPG agent** + key | Only needed if you want signed commits inside the container; enabled via the GPG overlay. |
+| **[`gum`](https://github.com/charmbracelet/gum)** | Premium interactive session selector (arrow navigation, colors, borders). Install: `brew install gum` or `apt install gum`. Falls back to `fzf` or built-in ANSI selector if absent. |
+| **[`fzf`](https://github.com/junegunn/fzf)** | Fallback interactive session selector (incremental search). Install: `brew install fzf` or `apt install fzf`. Used when `gum` is absent. |
 
 ## Quick start
 

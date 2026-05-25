@@ -12,6 +12,14 @@
 # Matches the DOCKER/UNAME/DRYDOCK_DISCRIMINATOR_FN seam idiom.
 : "${CLAUDE_BIN:=claude}"
 
+# ── GUM / FZF seams ───────────────────────────────────────────────────────────
+# Override in tests: export GUM=/path/to/stub-gum   (puts stub on detection path)
+#                    export FZF=/path/to/stub-fzf
+# Matches the DOCKER seam idiom: detection and invocation use the same var so
+# they can never desync (command -v "$_gum" finds the same binary that runs).
+: "${GUM:=gum}"
+: "${FZF:=fzf}"
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -436,39 +444,44 @@ cmd_run() {
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		_launch_new "$project_dir" compose_args "${passthrough[@]}"
-	elif [ -t 0 ]; then
-		# ── ≥1 sessions + TTY → interactive prompt ───────────────────────────
-		# REQ-N3: prompt attach (a) / new (n) / stop and new (s) / cancel (q)?
-		printf 'Existing session(s) for %s:\n' "$proj" >&2
-		printf '%s\n' "$live_sessions" >&2
-		printf 'attach (a) / new (n) / stop and new (s) / cancel (q)? [a]: ' >&2
-		local choice
-		read -r choice
-		case "${choice:-a}" in
-		[aA] | '')
-			# Attach: pick from menu if N>1, direct if N=1.
+	elif _drydock_has_tty; then
+		# ── ≥1 sessions + TTY → interactive TUI selector ─────────────────────
+		# REQ-N3: 3-tier selector (gum → fzf → Bash puro).
+		# Build options: one "Attach: <name>" per live session, then fixed verbs.
+		local -a menu_opts=()
+		local _s
+		while IFS= read -r _s; do
+			[ -n "$_s" ] && menu_opts+=("Attach: $_s")
+		done <<<"$live_sessions"
+		menu_opts+=("Start a new session")
+		menu_opts+=("Stop all sessions and start fresh")
+		menu_opts+=("Cancel")
+
+		local header
+		header="$(printf 'drydock — %s\nFound %d live session(s). What would you like to do?' \
+			"$proj" "$live_count")"
+
+		local chosen
+		chosen="$(_select_choice "$header" "${menu_opts[@]}")" || return 130
+
+		case "$chosen" in
+		Attach:*)
+			# Extract the container name (everything after "Attach: ").
+			local target="${chosen#Attach: }"
 			export_compose_env "$project_dir"
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
-			local target
-			if [ "$live_count" -gt 1 ]; then
-				target="$(_pick_session_menu "$live_sessions")"
-			else
-				target="$(printf '%s\n' "$live_sessions" | head -1)"
-			fi
 			note "Attaching to $target"
 			exec "$DOCKER" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
 			;;
-		[nN])
-			# New: mint new disc, start alongside existing session.
+		"Start a new session")
 			note "Starting new session alongside existing in $project_dir"
 			export_compose_env "$project_dir"
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
 			;;
-		[sS])
-			# Stop and new: rm -f all existing sessions, then launch fresh.
+		"Stop all sessions and start fresh")
 			note "Stopping existing sessions and starting new in $project_dir"
 			local sess
 			while IFS= read -r sess; do
@@ -479,11 +492,8 @@ cmd_run() {
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
 			;;
-		[qQ])
+		Cancel | '')
 			return 130
-			;;
-		*)
-			err "invalid choice: $choice — expected a/n/s/q"
 			;;
 		esac
 	else
@@ -703,6 +713,42 @@ cmd_doctor() {
 	_dr_item "${_compose_ver:+✓}" "docker compose" "${_compose_ver:-MISSING}"
 	if image_exists; then
 		_dr_item "✓" "drydock image" "$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null | cut -d'T' -f1)" "built"
+	fi
+
+	# ── TUI SELECTOR ───────────────────────────────────────────────────────────
+	# Reports availability of optional TUI dependencies for the session selector.
+	# gum is preferred (premium UX); fzf is the fallback; Bash puro is the safety
+	# net (no install required). DRYDOCK_DISABLE_GUM/FZF force-skip a tier.
+	_dr_section "TUI SELECTOR" "optional — for interactive session picker"
+	local _gum_bin="${GUM:-gum}"
+	local _fzf_bin="${FZF:-fzf}"
+	local _tui_any_found=0
+	if command -v "$_gum_bin" >/dev/null 2>&1; then
+		local _gum_ver
+		_gum_ver="$("$_gum_bin" --version 2>/dev/null | head -1 || printf '?')"
+		if [ -n "${DRYDOCK_DISABLE_GUM:-}" ]; then
+			_dr_item "⚠" "gum" "${_gum_ver}" "present but DRYDOCK_DISABLE_GUM is set"
+		else
+			_dr_item "✓" "gum" "${_gum_ver}" "premium UX (tier 1)"
+		fi
+		_tui_any_found=1
+	else
+		_dr_item "⚠" "gum" "not found" "install: brew install gum  |  apt install gum"
+	fi
+	if command -v "$_fzf_bin" >/dev/null 2>&1; then
+		local _fzf_ver
+		_fzf_ver="$("$_fzf_bin" --version 2>/dev/null | head -1 || printf '?')"
+		if [ -n "${DRYDOCK_DISABLE_FZF:-}" ]; then
+			_dr_item "⚠" "fzf" "${_fzf_ver}" "present but DRYDOCK_DISABLE_FZF is set"
+		else
+			_dr_item "✓" "fzf" "${_fzf_ver}" "fallback (tier 2)"
+		fi
+		_tui_any_found=1
+	else
+		_dr_item "⚠" "fzf" "not found" "install: brew install fzf  |  apt install fzf"
+	fi
+	if [ "$_tui_any_found" -eq 0 ]; then
+		_dr_item "·" "bash puro" "active" "functional safety net — install gum for premium UX"
 	fi
 
 	# ── POLICY ─────────────────────────────────────────────────────────────────
@@ -1548,9 +1594,164 @@ _resolve_session_name() {
 	fi
 }
 
-# _pick_session_menu sessions_list_newline — interactive numbered menu for N>1 sessions.
+# ── _drydock_has_tty — TTY detection seam ────────────────────────────────────
+# Returns 0 if stdin is a TTY, non-zero otherwise.
+# Overridable in tests: define _drydock_has_tty() { return 0; } before calling
+# any function that needs the TTY branch. Matches the DOCKER seam idiom.
+_drydock_has_tty() {
+	[ -t 0 ]
+}
+
+# ── _select_choice — 3-tier interactive selector ─────────────────────────────
+#
+# Usage: _select_choice <header> <option1> [<option2> ...]
+#   Renders an interactive selector with the given header and options.
+#   Prints the selected option to stdout on success (exit 0).
+#   Returns 130 if the user cancels (q, ESC, Ctrl-C, or non-zero from gum/fzf).
+#
+# Tier dispatch (first available wins):
+#   1. gum (preferred)    — premium UX with borders, colors, arrow navigation.
+#      Install: brew install gum  |  apt install gum
+#      Override binary: export GUM=/path/to/gum
+#      Skip tier:        export DRYDOCK_DISABLE_GUM=1
+#
+#   2. fzf (fallback)     — incremental search; common in dotfile setups.
+#      Install: brew install fzf  |  apt install fzf
+#      Override binary: export FZF=/path/to/fzf
+#      Skip tier:        export DRYDOCK_DISABLE_FZF=1
+#
+#   3. Bash puro (safety net) — ANSI + read -sn1; works everywhere, no deps.
+#      Alternate screen + hidden cursor + reverse-video highlight on active row.
+#      Keys: ↑/↓ navigate, Enter select, q/ESC cancel.
+#
+# Both override vars (DRYDOCK_DISABLE_GUM / DRYDOCK_DISABLE_FZF) are surfaced
+# in `drydock doctor` and can be set permanently in the user's shell rc.
+_select_choice() {
+	local header="$1"
+	shift
+	local -a opts=("$@")
+
+	# ── Tier 1: gum ──────────────────────────────────────────────────────────
+	local _gum="${GUM:-gum}"
+	if [ -z "${DRYDOCK_DISABLE_GUM:-}" ] && command -v "$_gum" >/dev/null 2>&1; then
+		local chosen
+		chosen="$("$_gum" choose \
+			--cursor "❯ " \
+			--header "$header" \
+			--no-show-help \
+			"${opts[@]}")" || return 130
+		printf '%s\n' "$chosen"
+		return 0
+	fi
+
+	# ── Tier 2: fzf ──────────────────────────────────────────────────────────
+	local _fzf="${FZF:-fzf}"
+	if [ -z "${DRYDOCK_DISABLE_FZF:-}" ] && command -v "$_fzf" >/dev/null 2>&1; then
+		local chosen
+		chosen="$(printf '%s\n' "${opts[@]}" |
+			"$_fzf" \
+				--prompt "> " \
+				--header "$header" \
+				--no-info \
+				--reverse \
+				--bind 'q:abort')" || return 130
+		printf '%s\n' "$chosen"
+		return 0
+	fi
+
+	# ── Tier 3: Bash puro ────────────────────────────────────────────────────
+	_select_choice_pure "$header" "${opts[@]}"
+}
+
+# _select_choice_pure — Bash-puro ANSI renderer for _select_choice tier 3.
+# Same signature as _select_choice. Not called directly by users.
+_select_choice_pure() {
+	local header="$1"
+	shift
+	local -a opts=("$@")
+	local n="${#opts[@]}"
+	local active=0
+
+	# ── Terminal control helpers ──────────────────────────────────────────────
+	local _smcup _rmcup _civis _cnorm _clear_line _reset
+	_smcup="$(tput smcup 2>/dev/null || printf '')"
+	_rmcup="$(tput rmcup 2>/dev/null || printf '')"
+	_civis="$(tput civis 2>/dev/null || printf '')"
+	_cnorm="$(tput cnorm 2>/dev/null || printf '')"
+	_clear_line="$(tput el 2>/dev/null || printf '')"
+	_reset=$'\e[0m'
+
+	# ── Cleanup trap — always restore terminal on exit/signal ─────────────────
+	_sc_pure_cleanup() {
+		printf '%s%s' "$_cnorm" "$_rmcup" >&2
+	}
+	trap '_sc_pure_cleanup' EXIT INT TERM
+
+	# ── Enter alternate screen, hide cursor ──────────────────────────────────
+	printf '%s%s' "$_smcup" "$_civis" >&2
+
+	# ── Render function ───────────────────────────────────────────────────────
+	_sc_pure_render() {
+		local i
+		# Move to top-left of alternate screen and clear each line as we draw.
+		printf '\033[H' >&2
+		# Header (may contain \n — print as-is).
+		printf '\n  %s\n\n' "$header" >&2
+		for ((i = 0; i < n; i++)); do
+			if [ "$i" -eq "$active" ]; then
+				# Active row: reverse video + cursor prefix.
+				printf '  \e[7m❯ %-60s\e[0m%s\n' "${opts[$i]}" "$_clear_line" >&2
+			else
+				# Inactive row: normal + indent (no cursor prefix).
+				printf '    %-60s%s\n' "${opts[$i]}" "$_clear_line" >&2
+			fi
+		done
+		printf '\n  %s↑/↓ navigate · enter select · q quit%s\n' $'\e[2m' "$_reset" >&2
+	}
+
+	# ── Input loop ────────────────────────────────────────────────────────────
+	local key seq result=130
+	while true; do
+		_sc_pure_render
+		# Read one byte; if it's ESC, read two more for arrow sequences.
+		IFS= read -rsn1 key 2>/dev/null || true
+		if [ "$key" = $'\e' ]; then
+			IFS= read -rsn2 seq 2>/dev/null || true
+			case "$seq" in
+			'[A') # ↑ arrow
+				((active > 0)) && active=$((active - 1))
+				;;
+			'[B') # ↓ arrow
+				((active < n - 1)) && active=$((active + 1))
+				;;
+			*) # ESC alone or other escape → cancel
+				result=130
+				break
+				;;
+			esac
+		elif [ "$key" = '' ] || [ "$key" = $'\n' ]; then
+			# ENTER (read -rsn1 returns empty string for CR/LF on some terms).
+			result=0
+			break
+		elif [ "$key" = 'q' ] || [ "$key" = 'Q' ]; then
+			result=130
+			break
+		fi
+	done
+
+	# Restore terminal (trap will also fire, but explicit restore here first).
+	trap - EXIT INT TERM
+	_sc_pure_cleanup
+
+	if [ "$result" -eq 0 ]; then
+		printf '%s\n' "${opts[$active]}"
+	fi
+	return "$result"
+}
+
+# _pick_session_menu sessions_list_newline — interactive TUI menu for N>1 sessions.
 # Requires TTY (caller must check). Emits the chosen container name on stdout.
-# Exits non-zero if the user cancels or input is invalid.
+# Returns 130 if the user cancels (consistent with _select_choice contract).
 _pick_session_menu() {
 	local sessions_list="$1"
 	local -a sessions=()
@@ -1558,28 +1759,9 @@ _pick_session_menu() {
 		[ -n "$line" ] && sessions+=("$line")
 	done <<<"$sessions_list"
 
-	local n="${#sessions[@]}"
-	local i
-	printf 'Multiple sessions for this project:\n' >&2
-	for ((i = 0; i < n; i++)); do
-		printf '  [%d] %s\n' "$((i + 1))" "${sessions[$i]}" >&2
-	done
-	printf 'Select session (1-%d, q=cancel): ' "$n" >&2
-
-	local choice
-	read -r choice
-	case "$choice" in
-	[qQ] | '')
-		err "cancelled"
-		;;
-	*)
-		if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$n" ]; then
-			printf '%s' "${sessions[$((choice - 1))]}"
-		else
-			err "invalid selection: $choice"
-		fi
-		;;
-	esac
+	local chosen
+	chosen="$(_select_choice "Pick a session" "${sessions[@]}")" || return 130
+	printf '%s' "$chosen"
 }
 
 # ── cmd_new ───────────────────────────────────────────────────────────────────
@@ -1658,9 +1840,9 @@ cmd_attach() {
 			target_name="$(printf '%s\n' "$live" | head -1)"
 		else
 			# Sub-scenarios (c/d): multiple sessions.
-			if [ -t 0 ]; then
+			if _drydock_has_tty; then
 				# Sub-scenario (c): TTY — interactive menu.
-				target_name="$(_pick_session_menu "$live")"
+				target_name="$(_pick_session_menu "$live")" || return 130
 			else
 				# Sub-scenario (d): no-TTY — list + exit 2.
 				printf 'Multiple sessions for project %s:\n' "$proj" >&2
@@ -1741,9 +1923,9 @@ cmd_stop() {
 			target_name="$(printf '%s\n' "$live" | head -1)"
 		else
 			# Sub-scenarios (c/d): multiple sessions.
-			if [ -t 0 ]; then
+			if _drydock_has_tty; then
 				# Sub-scenario (c): TTY — interactive menu.
-				target_name="$(_pick_session_menu "$live")"
+				target_name="$(_pick_session_menu "$live")" || return 130
 			else
 				# Sub-scenario (d): no-TTY — list + exit 2.
 				printf 'Multiple sessions for project %s:\n' "$proj" >&2
