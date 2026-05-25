@@ -12,6 +12,14 @@
 # Matches the DOCKER/UNAME/DRYDOCK_DISCRIMINATOR_FN seam idiom.
 : "${CLAUDE_BIN:=claude}"
 
+# ── GUM / FZF seams ───────────────────────────────────────────────────────────
+# Override in tests: export GUM=/path/to/stub-gum   (puts stub on detection path)
+#                    export FZF=/path/to/stub-fzf
+# Matches the DOCKER seam idiom: detection and invocation use the same var so
+# they can never desync (command -v "$_gum" finds the same binary that runs).
+: "${GUM:=gum}"
+: "${FZF:=fzf}"
+
 # ── Usage ─────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -33,8 +41,12 @@ usage() {
 	# ── COMMANDS ──
 	_dr_section "COMMANDS"
 	local _DR_LABEL_WIDTH=28
-	_dr_help_row "(no args)" "Default — launch Claude in current directory's project"
-	_dr_help_row "run [DIR] [-- ARGS]" "Launch Claude in DIR (or cwd); ARGS after -- go to claude"
+	_dr_help_row "(no args)" "Default — attach to existing session or launch Claude (prompts if multiple)"
+	_dr_help_row "run [DIR] [-- ARGS]" "Detect + delegate: attach, new, or prompt; ARGS after -- go to claude"
+	_dr_help_row "new" "Start a new session (skips prompt; runs alongside any existing sessions)"
+	_dr_help_row "attach [NAME]" "Reconnect to an existing session (claude --resume)"
+	_dr_help_row "list" "List live sessions for the current project"
+	_dr_help_row "stop [NAME]" "Stop a session (docker rm -f); with no arg, prompts if multiple"
 	_dr_help_row "shell [DIR] [-- CMD]" "Bash shell in container; with -- CMD, run CMD instead"
 	_dr_help_row "build" "Build / rebuild the drydock image"
 	_dr_help_row "sync" "Sync host ~/.claude/ → ~/.claude-container/"
@@ -61,6 +73,10 @@ usage() {
 	_dr_help_row "drydock link ~/git/shared-lib /opt/lib" "mount at custom path"
 	_dr_help_row "drydock unlink ~/git/shared-lib" "remove sibling"
 	_dr_help_row "drydock links" "list current project's siblings"
+	_dr_help_row "drydock new" "start a fresh session alongside any existing ones"
+	_dr_help_row "drydock attach ab12" "reconnect to session with discriminator ab12"
+	_dr_help_row "drydock list" "list all live sessions for the current project"
+	_dr_help_row "drydock stop ab12" "stop (remove) a specific session"
 
 	# ── ENV ──
 	_dr_section "ENV"
@@ -372,6 +388,11 @@ pre_flight_notice() {
 
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]
+	# REQ-9-M, REQ-N2, REQ-N3, SR-10-M: Detect + Delegate model.
+	# - Nested (mux/DRYDOCK_NESTED=1) → ephemeral: compose run --rm -it ... claude
+	# - Non-nested, 0 sessions → _launch_new: compose up -d + exec -it ... claude
+	# - Non-nested, ≥1 sessions, TTY → prompt: a/n/s/q
+	# - Non-nested, ≥1 sessions, no-TTY → list + exit 2
 	local project_dir_arg=""
 	local -a passthrough=()
 	if [ $# -gt 0 ] && [ "$1" != "--" ]; then
@@ -389,20 +410,117 @@ cmd_run() {
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
-	note "Launching Claude in $project_dir"
-	export_compose_env "$project_dir"
+	# ── Nested detect (REQ-N2, SR-10-M) ──────────────────────────────────────
+	# Treat as nested if any multiplexer var is set OR DRYDOCK_NESTED=1.
+	if [ -n "${ZELLIJ:-}${TMUX:-}${STY:-}" ] || [ "${DRYDOCK_NESTED:-}" = "1" ]; then
+		note "Nested session detected — launching ephemeral Claude in $project_dir"
+		export_compose_env "$project_dir"
+		local compose_args=()
+		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+		local _name="$DRYDOCK_SESSION_NAME"
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
+		# exec replaces the process in production. return 0 is a test safety-net:
+		# if exec() is overridden by a test stub (which returns without replacing
+		# the process), return ensures we don't fall through to the non-nested path.
+		return 0
+	fi
 
-	local compose_args=()
-	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+	# ── Non-nested path ───────────────────────────────────────────────────────
+	local proj
+	proj="${PROJECT_NAME:-$(sanitize_project_name "$(basename "$project_dir")")}"
 
-	# Per-session container name: export_compose_env has already generated a
-	# unique DRYDOCK_SESSION_NAME (drydock-<project>-<disc>) via collision retry.
-	# No is_container_running guard needed — the discriminator guarantees each
-	# invocation gets its own unique name (R4: existing containers are never
-	# stopped or killed).
+	# Query live run sessions for this project (no -shell companions).
+	local live_sessions live_count
+	live_sessions="$("$DOCKER" ps \
+		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--format '{{.Names}}' 2>/dev/null |
+		grep -E "^drydock-${proj}-[0-9a-f]+$" || true)"
+	live_count="$(printf '%s\n' "$live_sessions" | grep -c . || true)"
+
+	if [ "$live_count" -eq 0 ]; then
+		# ── 0 sessions → launch new persistent container ─────────────────────
+		note "Launching Claude in $project_dir"
+		export_compose_env "$project_dir"
+		local compose_args=()
+		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+		_launch_new "$project_dir" compose_args "${passthrough[@]}"
+	elif _drydock_has_tty; then
+		# ── ≥1 sessions + TTY → interactive TUI selector ─────────────────────
+		# REQ-N3: 3-tier selector (gum → fzf → Bash puro).
+		# Build options: one "Attach: <name>" per live session, then fixed verbs.
+		local -a menu_opts=()
+		local _s
+		while IFS= read -r _s; do
+			[ -n "$_s" ] && menu_opts+=("Attach: $_s")
+		done <<<"$live_sessions"
+		menu_opts+=("Start a new session")
+		menu_opts+=("Stop all sessions and start fresh")
+		menu_opts+=("Cancel")
+
+		local header
+		header="$(printf 'drydock — %s\nFound %d live session(s). What would you like to do?' \
+			"$proj" "$live_count")"
+
+		local chosen
+		chosen="$(_select_choice "$header" "${menu_opts[@]}")" || return 130
+
+		case "$chosen" in
+		Attach:*)
+			# Extract the container name (everything after "Attach: ").
+			local target="${chosen#Attach: }"
+			export_compose_env "$project_dir"
+			local compose_args=()
+			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			note "Attaching to $target"
+			exec "$DOCKER" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+			;;
+		"Start a new session")
+			note "Starting new session alongside existing in $project_dir"
+			export_compose_env "$project_dir"
+			local compose_args=()
+			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			_launch_new "$project_dir" compose_args "${passthrough[@]}"
+			;;
+		"Stop all sessions and start fresh")
+			note "Stopping existing sessions and starting new in $project_dir"
+			local sess
+			while IFS= read -r sess; do
+				[ -n "$sess" ] && "$DOCKER" rm -f "$sess" >/dev/null
+			done <<<"$live_sessions"
+			export_compose_env "$project_dir"
+			local compose_args=()
+			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			_launch_new "$project_dir" compose_args "${passthrough[@]}"
+			;;
+		Cancel | '')
+			return 130
+			;;
+		esac
+	else
+		# ── ≥1 sessions + no-TTY → list + exit 2 ─────────────────────────────
+		# REQ-9-M: non-interactive callers get the list + hints on stderr.
+		printf 'Existing sessions for project %s:\n' "$proj" >&2
+		printf '%s\n' "$live_sessions" >&2
+		printf 'Use: drydock attach  — reconnect to a session\n' >&2
+		printf '     drydock new     — start a new session alongside\n' >&2
+		printf '     drydock stop    — stop a session\n' >&2
+		return 2
+	fi
+}
+
+# _launch_new project_dir compose_args_nameref [passthrough...]
+# Internal: mint-and-launch a fresh persistent container.
+# Calls compose up -d then exec -it claude. Used by cmd_run (0-sessions path,
+# prompt 'n', prompt 's') and cmd_new.
+_launch_new() {
+	local project_dir="$1"
+	local -n _ln_compose_args="$2"
+	shift 2
+	local -a passthrough=("$@")
+
 	local _name="$DRYDOCK_SESSION_NAME"
-	pre_flight_notice
-	exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
+	"$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" up -d
+	exec "$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
 }
 
 cmd_shell() {
@@ -597,6 +715,42 @@ cmd_doctor() {
 		_dr_item "✓" "drydock image" "$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null | cut -d'T' -f1)" "built"
 	fi
 
+	# ── TUI SELECTOR ───────────────────────────────────────────────────────────
+	# Reports availability of optional TUI dependencies for the session selector.
+	# gum is preferred (premium UX); fzf is the fallback; Bash puro is the safety
+	# net (no install required). DRYDOCK_DISABLE_GUM/FZF force-skip a tier.
+	_dr_section "TUI SELECTOR" "optional — for interactive session picker"
+	local _gum_bin="${GUM:-gum}"
+	local _fzf_bin="${FZF:-fzf}"
+	local _tui_any_found=0
+	if command -v "$_gum_bin" >/dev/null 2>&1; then
+		local _gum_ver
+		_gum_ver="$("$_gum_bin" --version 2>/dev/null | head -1 || printf '?')"
+		if [ -n "${DRYDOCK_DISABLE_GUM:-}" ]; then
+			_dr_item "⚠" "gum" "${_gum_ver}" "present but DRYDOCK_DISABLE_GUM is set"
+		else
+			_dr_item "✓" "gum" "${_gum_ver}" "premium UX (tier 1)"
+		fi
+		_tui_any_found=1
+	else
+		_dr_item "⚠" "gum" "not found" "install: brew install gum  |  apt install gum"
+	fi
+	if command -v "$_fzf_bin" >/dev/null 2>&1; then
+		local _fzf_ver
+		_fzf_ver="$("$_fzf_bin" --version 2>/dev/null | head -1 || printf '?')"
+		if [ -n "${DRYDOCK_DISABLE_FZF:-}" ]; then
+			_dr_item "⚠" "fzf" "${_fzf_ver}" "present but DRYDOCK_DISABLE_FZF is set"
+		else
+			_dr_item "✓" "fzf" "${_fzf_ver}" "fallback (tier 2)"
+		fi
+		_tui_any_found=1
+	else
+		_dr_item "⚠" "fzf" "not found" "install: brew install fzf  |  apt install fzf"
+	fi
+	if [ "$_tui_any_found" -eq 0 ]; then
+		_dr_item "·" "bash puro" "active" "functional safety net — install gum for premium UX"
+	fi
+
 	# ── POLICY ─────────────────────────────────────────────────────────────────
 	_dr_section "POLICY"
 	local _policy_count=0
@@ -677,9 +831,9 @@ cmd_doctor() {
 	# ── ACTIVE SESSIONS ────────────────────────────────────────────────────────
 	# Lists running drydock containers scoped to the current project. Includes both
 	# run sessions (drydock-<proj>-<disc>) and shell companions (-<disc>-shell).
-	# Awareness signal for concurrent-sessions (INV-2) — never refuses, info-only.
+	# REQ-8-M, REQ-N11: cheat-sheet uses 'drydock attach <disc>' (not claude --continue).
 	_dr_section "ACTIVE SESSIONS" "this project"
-	local _proj_name _sess_lines _sess_name _sess_status
+	local _proj_name _sess_lines _sess_name _sess_status _sess_disc
 	_proj_name="$(_current_project_name)"
 	_sess_lines="$("$DOCKER" ps \
 		--filter "name=^drydock-${_proj_name}-[0-9a-f]+(-shell)?\$" \
@@ -687,31 +841,29 @@ cmd_doctor() {
 	# Some Docker versions don't fully honor anchored ERE in --filter; post-filter
 	# defensively so cross-project containers can never leak in.
 	_sess_lines="$(printf '%s\n' "$_sess_lines" | grep -E "^drydock-${_proj_name}-[0-9a-f]+(-shell)?\|" || true)"
+	# Discovery hint: always show 'drydock list' so users know how to see all sessions.
+	_dr_item "·" "discovery" "" "see all sessions: drydock list"
 	if [ -z "$_sess_lines" ]; then
 		_dr_item "·" "(none running)" ""
 	else
 		while IFS='|' read -r _sess_name _sess_status; do
 			[ -z "$_sess_name" ] && continue
 			_dr_item "✓" "$_sess_name" "$_sess_status"
-			# Resume cheat-sheet — the command to re-enter this LIVE container
-			# and recover the work. A -shell companion reattaches into bash; a
-			# run session reattaches Claude's conversation history via
-			# `claude --continue`. Both only work while the container is still
-			# running — this is not a way to revive a session whose container
-			# has already exited.
+			# Resume cheat-sheet — the command to re-enter this LIVE container.
+			# A -shell companion reattaches into bash; a run session reconnects
+			# via 'drydock attach <disc>' (compose exec ... claude --resume).
+			# REQ-N11: MUST NOT emit 'claude --continue' or Zellij references.
 			case "$_sess_name" in
 			*-shell)
 				_dr_item "·" "  re-enter" "docker exec -it $_sess_name bash"
 				;;
 			*)
-				_dr_item "·" "  resume" "docker exec -it $_sess_name claude --continue"
+				# Extract the 4-char disc suffix from the container name.
+				_sess_disc="${_sess_name##*-}"
+				_dr_item "·" "  resume" "drydock attach $_sess_disc"
 				;;
 			esac
 		done <<<"$_sess_lines"
-		# INV-2 caveat: exec'ing a second Claude into a live run session puts
-		# two writers on the same per-session config (~/.claude.json + the
-		# session JSONL). Surface the hazard here rather than hiding it.
-		_dr_item "⚠" "  caveat" "" "re-entering a live run starts a 2nd Claude on one config (INV-2)"
 	fi
 
 	# ── COMPOSE OVERLAYS ───────────────────────────────────────────────────────
@@ -1410,6 +1562,382 @@ cmd_unlink() {
 		printf '  Or run: gh repo deploy-key list --repo <owner>/%s\n' "$(basename "$canonical")" >&2
 		printf '  Then:   gh repo deploy-key delete <id> --repo <owner>/%s\n' "$(basename "$canonical")" >&2
 	fi
+}
+
+# ── Session management helpers ────────────────────────────────────────────────
+# Shared by cmd_new, cmd_attach, cmd_stop, cmd_run (T-4), and cmd_doctor.
+
+# _live_sessions — list live run-session container names for PROJECT_NAME.
+# Emits one name per line (no -shell companions — run sessions only).
+# Post-filters defensively: some Docker daemons don't fully honor anchored ERE.
+# Usage: _live_sessions [project_name]  (default: $PROJECT_NAME or cwd-derived)
+_live_sessions() {
+	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
+	"$DOCKER" ps \
+		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--format '{{.Names}}' 2>/dev/null |
+		grep -E "^drydock-${proj}-[0-9a-f]+$" || true
+}
+
+# _resolve_session_name disc_or_full [project_name]
+# Normalises a 4-char disc or full container name → canonical drydock-<proj>-<disc>.
+# Outputs the canonical name on stdout. Exits 0 always (validation is the caller's job).
+_resolve_session_name() {
+	local input="$1"
+	local proj="${2:-${PROJECT_NAME:-$(_current_project_name)}}"
+	# Already a full drydock-<proj>-<disc> name?
+	if [[ "$input" == drydock-*-* ]]; then
+		printf '%s' "$input"
+	else
+		# Treat as a disc suffix.
+		printf 'drydock-%s-%s' "$proj" "$input"
+	fi
+}
+
+# ── _drydock_has_tty — TTY detection seam ────────────────────────────────────
+# Returns 0 if stdin is a TTY, non-zero otherwise.
+# Overridable in tests: define _drydock_has_tty() { return 0; } before calling
+# any function that needs the TTY branch. Matches the DOCKER seam idiom.
+_drydock_has_tty() {
+	[ -t 0 ]
+}
+
+# ── _select_choice — 3-tier interactive selector ─────────────────────────────
+#
+# Usage: _select_choice <header> <option1> [<option2> ...]
+#   Renders an interactive selector with the given header and options.
+#   Prints the selected option to stdout on success (exit 0).
+#   Returns 130 if the user cancels (q, ESC, Ctrl-C, or non-zero from gum/fzf).
+#
+# Tier dispatch (first available wins):
+#   1. gum (preferred)    — premium UX with borders, colors, arrow navigation.
+#      Install: brew install gum  |  apt install gum
+#      Override binary: export GUM=/path/to/gum
+#      Skip tier:        export DRYDOCK_DISABLE_GUM=1
+#
+#   2. fzf (fallback)     — incremental search; common in dotfile setups.
+#      Install: brew install fzf  |  apt install fzf
+#      Override binary: export FZF=/path/to/fzf
+#      Skip tier:        export DRYDOCK_DISABLE_FZF=1
+#
+#   3. Bash puro (safety net) — ANSI + read -sn1; works everywhere, no deps.
+#      Alternate screen + hidden cursor + reverse-video highlight on active row.
+#      Keys: ↑/↓ navigate, Enter select, q/ESC cancel.
+#
+# Both override vars (DRYDOCK_DISABLE_GUM / DRYDOCK_DISABLE_FZF) are surfaced
+# in `drydock doctor` and can be set permanently in the user's shell rc.
+_select_choice() {
+	local header="$1"
+	shift
+	local -a opts=("$@")
+
+	# ── Tier 1: gum ──────────────────────────────────────────────────────────
+	local _gum="${GUM:-gum}"
+	if [ -z "${DRYDOCK_DISABLE_GUM:-}" ] && command -v "$_gum" >/dev/null 2>&1; then
+		local chosen
+		chosen="$("$_gum" choose \
+			--cursor "❯ " \
+			--header "$header" \
+			--no-show-help \
+			"${opts[@]}")" || return 130
+		printf '%s\n' "$chosen"
+		return 0
+	fi
+
+	# ── Tier 2: fzf ──────────────────────────────────────────────────────────
+	local _fzf="${FZF:-fzf}"
+	if [ -z "${DRYDOCK_DISABLE_FZF:-}" ] && command -v "$_fzf" >/dev/null 2>&1; then
+		local chosen
+		chosen="$(printf '%s\n' "${opts[@]}" |
+			"$_fzf" \
+				--prompt "> " \
+				--header "$header" \
+				--no-info \
+				--reverse \
+				--bind 'q:abort')" || return 130
+		printf '%s\n' "$chosen"
+		return 0
+	fi
+
+	# ── Tier 3: Bash puro ────────────────────────────────────────────────────
+	_select_choice_pure "$header" "${opts[@]}"
+}
+
+# _select_choice_pure — Bash-puro ANSI renderer for _select_choice tier 3.
+# Same signature as _select_choice. Not called directly by users.
+_select_choice_pure() {
+	local header="$1"
+	shift
+	local -a opts=("$@")
+	local n="${#opts[@]}"
+	local active=0
+
+	# ── Terminal control helpers ──────────────────────────────────────────────
+	local _smcup _rmcup _civis _cnorm _clear_line _reset
+	_smcup="$(tput smcup 2>/dev/null || printf '')"
+	_rmcup="$(tput rmcup 2>/dev/null || printf '')"
+	_civis="$(tput civis 2>/dev/null || printf '')"
+	_cnorm="$(tput cnorm 2>/dev/null || printf '')"
+	_clear_line="$(tput el 2>/dev/null || printf '')"
+	_reset=$'\e[0m'
+
+	# ── Cleanup trap — always restore terminal on exit/signal ─────────────────
+	_sc_pure_cleanup() {
+		printf '%s%s' "$_cnorm" "$_rmcup" >&2
+	}
+	trap '_sc_pure_cleanup' EXIT INT TERM
+
+	# ── Enter alternate screen, hide cursor ──────────────────────────────────
+	printf '%s%s' "$_smcup" "$_civis" >&2
+
+	# ── Render function ───────────────────────────────────────────────────────
+	_sc_pure_render() {
+		local i
+		# Move to top-left of alternate screen and clear each line as we draw.
+		printf '\033[H' >&2
+		# Header (may contain \n — print as-is).
+		printf '\n  %s\n\n' "$header" >&2
+		for ((i = 0; i < n; i++)); do
+			if [ "$i" -eq "$active" ]; then
+				# Active row: reverse video + cursor prefix.
+				printf '  \e[7m❯ %-60s\e[0m%s\n' "${opts[$i]}" "$_clear_line" >&2
+			else
+				# Inactive row: normal + indent (no cursor prefix).
+				printf '    %-60s%s\n' "${opts[$i]}" "$_clear_line" >&2
+			fi
+		done
+		printf '\n  %s↑/↓ navigate · enter select · q quit%s\n' $'\e[2m' "$_reset" >&2
+	}
+
+	# ── Input loop ────────────────────────────────────────────────────────────
+	local key seq result=130
+	while true; do
+		_sc_pure_render
+		# Read one byte; if it's ESC, read two more for arrow sequences.
+		IFS= read -rsn1 key 2>/dev/null || true
+		if [ "$key" = $'\e' ]; then
+			IFS= read -rsn2 seq 2>/dev/null || true
+			case "$seq" in
+			'[A') # ↑ arrow
+				((active > 0)) && active=$((active - 1))
+				;;
+			'[B') # ↓ arrow
+				((active < n - 1)) && active=$((active + 1))
+				;;
+			*) # ESC alone or other escape → cancel
+				result=130
+				break
+				;;
+			esac
+		elif [ "$key" = '' ] || [ "$key" = $'\n' ]; then
+			# ENTER (read -rsn1 returns empty string for CR/LF on some terms).
+			result=0
+			break
+		elif [ "$key" = 'q' ] || [ "$key" = 'Q' ]; then
+			result=130
+			break
+		fi
+	done
+
+	# Restore terminal (trap will also fire, but explicit restore here first).
+	trap - EXIT INT TERM
+	_sc_pure_cleanup
+
+	if [ "$result" -eq 0 ]; then
+		printf '%s\n' "${opts[$active]}"
+	fi
+	return "$result"
+}
+
+# _pick_session_menu sessions_list_newline — interactive TUI menu for N>1 sessions.
+# Requires TTY (caller must check). Emits the chosen container name on stdout.
+# Returns 130 if the user cancels (consistent with _select_choice contract).
+_pick_session_menu() {
+	local sessions_list="$1"
+	local -a sessions=()
+	while IFS= read -r line; do
+		[ -n "$line" ] && sessions+=("$line")
+	done <<<"$sessions_list"
+
+	local chosen
+	chosen="$(_select_choice "Pick a session" "${sessions[@]}")" || return 130
+	printf '%s' "$chosen"
+}
+
+# ── cmd_new ───────────────────────────────────────────────────────────────────
+
+# cmd_new [-- ARGS]
+# Start a new persistent container for the current project without any prompt.
+# Coexists with any existing live sessions (REQ-N4). Mints a new discriminator
+# via export_compose_env, runs compose up -d, then execs claude interactively.
+cmd_new() {
+	local -a passthrough=()
+	if [ "${1:-}" = "--" ]; then
+		shift
+		passthrough=("$@")
+	fi
+	ensure_prereqs
+	ensure_runtime_dirs
+	ensure_image
+	ensure_synced
+	local project_dir
+	project_dir="$(resolve_project_dir "")"
+	export_compose_env "$project_dir"
+
+	local compose_args=()
+	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+
+	local _name="$DRYDOCK_SESSION_NAME"
+	note "Starting new session $_name in $project_dir"
+
+	# Persistent lifecycle: compose up -d starts the container (PID 1 = sleep infinity),
+	# then compose exec attaches Claude interactively.
+	"$DOCKER" compose "${compose_args[@]}" -p "$_name" up -d
+	exec "$DOCKER" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+}
+
+# ── cmd_attach ────────────────────────────────────────────────────────────────
+
+# cmd_attach [disc|full_name] [-- ARGS]
+# Reconnect to a live container via compose exec ... claude --resume (REQ-6-M).
+# Disambiguation per REQ-7-M sub-scenarios (a/b/c/d).
+cmd_attach() {
+	local name_arg=""
+	local -a passthrough=()
+	if [ $# -gt 0 ] && [ "$1" != "--" ]; then
+		name_arg="$1"
+		shift
+	fi
+	if [ "${1:-}" = "--" ]; then
+		shift
+		passthrough=("$@")
+	fi
+
+	local proj
+	proj="${PROJECT_NAME:-$(_current_project_name)}"
+
+	local target_name
+	if [ -n "$name_arg" ]; then
+		# Sub-scenario (a): explicit name given.
+		target_name="$(_resolve_session_name "$name_arg" "$proj")"
+		# Verify the container is actually live.
+		local live
+		live="$(_live_sessions "$proj")"
+		if ! printf '%s\n' "$live" | grep -qxF "$target_name"; then
+			err "no live session for project '$proj' named '$name_arg'"
+		fi
+	else
+		# Sub-scenarios (b/c/d): no name given — query live sessions.
+		local live
+		live="$(_live_sessions "$proj")"
+		local count
+		count="$(printf '%s\n' "$live" | grep -c . || true)"
+
+		if [ "$count" -eq 0 ]; then
+			err "no live sessions for project '$proj' — run: drydock new"
+		elif [ "$count" -eq 1 ]; then
+			# Sub-scenario (b): exactly one session — attach directly.
+			target_name="$(printf '%s\n' "$live" | head -1)"
+		else
+			# Sub-scenarios (c/d): multiple sessions.
+			if _drydock_has_tty; then
+				# Sub-scenario (c): TTY — interactive menu.
+				target_name="$(_pick_session_menu "$live")" || return 130
+			else
+				# Sub-scenario (d): no-TTY — list + exit 2.
+				printf 'Multiple sessions for project %s:\n' "$proj" >&2
+				printf '%s\n' "$live" >&2
+				printf 'Use: drydock attach <disc> — or drydock list\n' >&2
+				return 2
+			fi
+		fi
+	fi
+
+	note "Attaching to $target_name"
+	exec "$DOCKER" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+}
+
+# ── cmd_list ──────────────────────────────────────────────────────────────────
+
+# cmd_list
+# List live (and recently-exited) containers for the current project.
+# Output: NAME   STATUS   AGE — parseable, one row per container.
+# Exited containers are shown with a [Exited] marker (OQ-T5, REQ-N6).
+cmd_list() {
+	local proj
+	proj="${PROJECT_NAME:-$(_current_project_name)}"
+
+	local rows
+	rows="$("$DOCKER" ps \
+		--filter "name=^drydock-${proj}-" \
+		--format '{{.Names}}|{{.Status}}|{{.CreatedAt}}' 2>/dev/null || true)"
+	# Defensive post-filter: ensure only this project's containers are shown.
+	rows="$(printf '%s\n' "$rows" | grep -E "^drydock-${proj}-" || true)"
+
+	if [ -z "$rows" ]; then
+		return 0
+	fi
+
+	local name status age display_status
+	while IFS='|' read -r name status age; do
+		[ -n "$name" ] || continue
+		# Mark exited containers distinctly (OQ-T5).
+		if [[ "$status" == Exited* ]]; then
+			display_status="[Exited] $status"
+		else
+			display_status="$status"
+		fi
+		printf '%-40s  %-35s  %s\n' "$name" "$display_status" "$age"
+	done <<<"$rows"
+}
+
+# ── cmd_stop ──────────────────────────────────────────────────────────────────
+
+# cmd_stop [disc|full_name]
+# Stop (docker rm -f) a live container. Disambiguation same as cmd_attach (REQ-7-M).
+cmd_stop() {
+	local name_arg=""
+	if [ $# -gt 0 ]; then
+		name_arg="$1"
+		shift
+	fi
+
+	local proj
+	proj="${PROJECT_NAME:-$(_current_project_name)}"
+
+	local target_name
+	if [ -n "$name_arg" ]; then
+		# Sub-scenario (a): explicit name.
+		target_name="$(_resolve_session_name "$name_arg" "$proj")"
+	else
+		# Sub-scenarios (b/c/d): no name — query live sessions.
+		local live
+		live="$(_live_sessions "$proj")"
+		local count
+		count="$(printf '%s\n' "$live" | grep -c . || true)"
+
+		if [ "$count" -eq 0 ]; then
+			err "no live sessions for project '$proj' — nothing to stop"
+		elif [ "$count" -eq 1 ]; then
+			# Sub-scenario (b): exactly one session — stop directly.
+			target_name="$(printf '%s\n' "$live" | head -1)"
+		else
+			# Sub-scenarios (c/d): multiple sessions.
+			if _drydock_has_tty; then
+				# Sub-scenario (c): TTY — interactive menu.
+				target_name="$(_pick_session_menu "$live")" || return 130
+			else
+				# Sub-scenario (d): no-TTY — list + exit 2.
+				printf 'Multiple sessions for project %s:\n' "$proj" >&2
+				printf '%s\n' "$live" >&2
+				printf 'Use: drydock stop <disc> — or drydock list\n' >&2
+				return 2
+			fi
+		fi
+	fi
+
+	note "Stopping $target_name"
+	"$DOCKER" rm -f "$target_name"
 }
 
 # ── cmd_links ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,153 @@
+#!/usr/bin/env bats
+# test/cmd_stop.bats — unit tests for cmd_stop in lib/commands.sh
+#
+# REQ-N7, REQ-7-M: drydock stop [name] executes docker rm -f <container>.
+# Disambiguation follows the same 4 sub-scenarios as cmd_attach:
+# (a) explicit name → direct stop; (b) no arg + 1 session → direct stop;
+# (c) no arg + N>1 + TTY → menu; (d) no arg + N>1 + no-TTY → list + exit 2.
+
+load "helpers/load"
+
+setup() {
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/common.sh"
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	# shellcheck disable=SC1090
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# DOCKER seam.
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	# Default PROJECT_NAME.
+	export PROJECT_NAME="myproj"
+
+	local tmpdir="$BATS_TEST_TMPDIR/myproj"
+	mkdir -p "$tmpdir"
+	cd "$tmpdir"
+}
+
+# ── Helper: build a docker stub returning N sessions ─────────────────────────
+
+make_docker_stub_with_sessions() {
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-stop-$$-$RANDOM"
+	mkdir -p "$stub_dir"
+	local sessions_output="$1"
+	local call_log="${DOCKER_CALL_LOG}"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${call_log}"
+if [ "\${1:-}" = "ps" ]; then
+	printf '%s\n' "${sessions_output}"
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	printf '%s' "$stub_dir/docker"
+}
+
+# ── Scenario (a): explicit disc/name → direct docker rm -f ───────────────────
+
+@test "cmd_stop: explicit disc arg → invokes docker rm -f on the container (REQ-N7)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "ab12cd34"
+	[ "$status" -eq 0 ]
+	grep -q "rm" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_stop: explicit disc arg → rm -f uses the full container name (REQ-N7)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "ab12cd34"
+	[ "$status" -eq 0 ]
+	grep -q "drydock-myproj-ab12cd34" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_stop: explicit full container name also works (REQ-N7 — _resolve_session_name)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "drydock-myproj-ab12cd34"
+	[ "$status" -eq 0 ]
+	grep -q "drydock-myproj-ab12cd34" "$DOCKER_CALL_LOG"
+}
+
+# ── Scenario (b): no arg + exactly 1 live session → direct stop ──────────────
+
+@test "cmd_stop: no arg + 1 live session → stops it directly without menu (REQ-7-M sub-scenario b)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop
+	[ "$status" -eq 0 ]
+	grep -q "rm" "$DOCKER_CALL_LOG"
+	grep -q "drydock-myproj-ab12cd34" "$DOCKER_CALL_LOG"
+	# No menu shown
+	[[ "$output" != *"[1]"* ]]
+}
+
+# ── Scenario (d): no arg + N>1 + no-TTY → list + exit 2 ─────────────────────
+
+@test "cmd_stop: no arg + N>1 sessions + no-TTY → exit 2 (REQ-7-M sub-scenario d)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34
+drydock-myproj-ef56ab78")"
+	export DOCKER="$stub"
+
+	run cmd_stop
+	[ "$status" -eq 2 ]
+}
+
+@test "cmd_stop: no arg + N>1 sessions + no-TTY → does NOT invoke rm -f (REQ-7-M sub-scenario d)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34
+drydock-myproj-ef56ab78")"
+	export DOCKER="$stub"
+
+	run cmd_stop
+	# Must exit 2 and NOT have removed a container
+	[ "$status" -eq 2 ]
+	# rm should NOT appear in call log for no-TTY multi-session
+	! grep -q "^rm " "$DOCKER_CALL_LOG" || true
+}
+
+# ── No sessions → error + exit non-zero ──────────────────────────────────────
+
+@test "cmd_stop: no arg + 0 live sessions → exits non-zero (nothing to stop)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "")"
+	export DOCKER="$stub"
+
+	run cmd_stop
+	[ "$status" -ne 0 ]
+}
+
+# ── Stop is docker rm -f, not docker stop ────────────────────────────────────
+
+@test "cmd_stop: uses 'rm' (docker rm -f), not 'stop' docker subcommand (REQ-N7)" {
+	# The spec says docker rm -f, not docker stop.
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "ab12cd34"
+	[ "$status" -eq 0 ]
+	# Must have 'rm' in the log
+	grep -q "rm" "$DOCKER_CALL_LOG"
+	# Must NOT use 'docker stop'
+	! grep -qE "^stop " "$DOCKER_CALL_LOG" || true
+}

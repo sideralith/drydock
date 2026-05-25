@@ -87,6 +87,10 @@ main() {
 	run) cmd_run "$@" ;;
 	shell) cmd_shell "$@" ;;
 	--) cmd_run -- "$@" ;;
+	new) cmd_new "$@" ;;
+	attach) cmd_attach "$@" ;;
+	list) cmd_list "$@" ;;
+	stop) cmd_stop "$@" ;;
 	setup) cmd_setup "$@" ;;
 	setup-token) cmd_setup_token "$@" ;;
 	revoke-token) cmd_revoke_token "$@" ;;

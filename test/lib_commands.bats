@@ -796,14 +796,15 @@ setup() {
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-s33.log"
 	touch "$DOCKER_CALL_LOG"
 
-	# cmd_run does exec so use a no-op replacement for docker compose run.
+	# cmd_run does exec (or "$DOCKER" compose up -d) — capture all docker calls.
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 
 	run cmd_run "$project_dir"
 
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"--name drydock-sideralith-com-test"* ]]
+	# New persistent path: compose ... -p drydock-sideralith-com-test up -d
+	[[ "$log" == *"drydock-sideralith-com-test"* ]]
 }
 
 @test "cmd_shell: S3.4 — dotted project dir → container name is drydock-sideralith-com-<disc>-shell" {
@@ -921,7 +922,8 @@ _setup_cmd_concurrent() {
 	[[ "$output" != *"already running"* ]]
 }
 
-@test "cmd_run: compose run receives correct discriminator-suffixed --name" {
+@test "cmd_run: container session uses discriminator-suffixed name (drydock-foo-<disc>)" {
+	# New persistent model: compose -p drydock-foo-<disc> up -d + exec -it.
 	_setup_cmd_concurrent
 	export MOCK_DOCKER_EXIT=0
 	local project_dir="$BATS_TEST_TMPDIR/cc-name/foo"
@@ -929,7 +931,7 @@ _setup_cmd_concurrent() {
 	run cmd_run "$project_dir"
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"--name drydock-foo-test"* ]]
+	[[ "$log" == *"drydock-foo-test"* ]]
 }
 
 # ── auto-sync: Phase 6 — parity guard: prune list == rsync exclude list ───────
@@ -1817,7 +1819,9 @@ _setup_ensure_synced() {
 	rm -rf "$tmpdir"
 }
 
-@test "cmd_doctor: active-sessions lists the resume command for a running run session" {
+@test "cmd_doctor: active-sessions lists 'drydock attach <disc>' for a running run session (REQ-8-M, T-7)" {
+	# REQ-8-M: cmd_doctor MUST emit 'drydock attach <disc>' (not 'claude --continue').
+	# REQ-N11: MUST NOT emit 'claude --continue' or INV-2 caveat.
 	setup_no_engram_on_path
 	setup_plain_linux_seams
 
@@ -1854,10 +1858,14 @@ STUB
 	run cmd_doctor
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"drydock-myproj-a1b2c3d4"* ]]
-	# Resume cheat-sheet: the exec command to re-enter this live session.
-	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4 claude --continue"* ]]
-	# INV-2 caveat must be surfaced, not hidden.
-	[[ "$output" == *"INV-2"* ]]
+	# T-7: cheat-sheet must use 'drydock attach <disc>' (REQ-8-M).
+	[[ "$output" == *"drydock attach a1b2c3d4"* ]]
+	# T-7: must show 'drydock list' discovery hint (OQ-T3).
+	[[ "$output" == *"drydock list"* ]]
+	# T-7: must NOT emit 'claude --continue' (REQ-N11).
+	[[ "$output" != *"--continue"* ]]
+	# T-7: INV-2 caveat removed (new model has no second-Claude-on-same-config risk).
+	[[ "$output" != *"INV-2"* ]]
 
 	cd - >/dev/null
 }
@@ -1989,15 +1997,15 @@ _setup_cmd_name_test() {
 	mkdir -p "$CMD_NAME_TEST_PROJECT_DIR"
 }
 
-@test "cmd_run: container --name uses DRYDOCK_SESSION_NAME (drydock-<proj>-<disc>)" {
+@test "cmd_run: session name uses DRYDOCK_SESSION_NAME (drydock-<proj>-<disc>)" {
+	# New persistent model: session name appears in compose -p flag, not --name.
 	_setup_cmd_name_test
-	# Override exec to capture the compose run args instead of replacing process.
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 	run cmd_run "$CMD_NAME_TEST_PROJECT_DIR"
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	# The --name arg must be drydock-<project>-abcd (discriminator suffix).
-	[[ "$log" == *"--name drydock-cmd-name-proj-"*"-abcd"* ]]
+	# The session name drydock-<project>-abcd must appear in docker calls.
+	[[ "$log" == *"drydock-cmd-name-proj-"*"-abcd"* ]]
 }
 
 @test "cmd_shell: container --name uses DRYDOCK_SESSION_NAME with -shell suffix" {
@@ -2128,10 +2136,10 @@ STUB
 	[ "$status" -eq 0 ]
 }
 
-@test "pre_flight_notice: called from cmd_run path (R5 — notice fires in cmd_run)" {
-	# This test verifies that cmd_run actually calls pre_flight_notice. We use a
-	# spy stub that writes a sentinel to a log, then assert the sentinel appears.
-	# Testing the notice content is covered by the direct unit tests above.
+@test "cmd_run: 0-sessions non-nested path proceeds without prompt (R5 superceded — new model)" {
+	# REQ-9-M: With 0 live sessions, cmd_run launches a new container directly
+	# (no prompt, no notice). The pre_flight_notice function is no longer called
+	# from cmd_run — the session-count check IS the notification mechanism.
 	local fakehome="$BATS_TEST_TMPDIR/pfn-run-home-$$"
 	mkdir -p "$fakehome/.claude-container"
 	touch "$fakehome/.claude-container.json"
@@ -2155,16 +2163,16 @@ STUB
 	touch "$DOCKER_CALL_LOG"
 	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
 
-	# Override pre_flight_notice with a spy that outputs a sentinel.
-	pre_flight_notice() { printf 'preflight-called\n'; }
-
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 
 	local project_dir="$BATS_TEST_TMPDIR/pfn-run-proj-$$"
 	mkdir -p "$project_dir"
 	run cmd_run "$project_dir"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"preflight-called"* ]]
+	# New persistent path: must have invoked compose up -d then exec
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *" up "* ]]
 }
 
 @test "pre_flight_notice: called from cmd_shell path (R5 — notice fires in cmd_shell)" {
@@ -2207,9 +2215,12 @@ STUB
 # ── integration smoke test (concurrent-sessions, PR 2 Wire-in — Task 2.8) ─────
 # Asserts end-to-end call order for cmd_run with all seams stubbed:
 # ensure_synced (skipped) → gc_orphan_session_dirs → discriminator → seed → pre_flight_notice → compose run
-# Also asserts --name argument and no stop/kill.
+# Also asserts session name and no stop/kill.
 
-@test "integration: cmd_run call order — gc → disc → seed → pre_flight_notice → compose run --name disc" {
+@test "integration: cmd_run call order — gc → disc → seed → compose up-d + exec (REQ-9-M)" {
+	# New persistent model: gc → disc → seed → compose up -d → exec -it.
+	# pre_flight_notice no longer called from cmd_run (new design handles session
+	# count check directly in the detect+delegate logic).
 	local fakehome="$BATS_TEST_TMPDIR/integ-home-$$"
 	mkdir -p "$fakehome/.claude-container"
 	touch "$fakehome/.claude-container.json"
@@ -2224,7 +2235,6 @@ STUB
 	ensure_prereqs() { :; }
 	ensure_runtime_dirs() { :; }
 	ensure_image() { :; }
-	# DRYDOCK_SKIP_AUTOSYNC=1 skips the actual sync; or stub ensure_synced directly.
 	ensure_synced() { :; }
 
 	# Call-order log for tracking function invocations.
@@ -2248,11 +2258,6 @@ STUB
 		printf 'seed-called\n' >> "$call_order_log"
 	}
 
-	# Wrap pre_flight_notice to log its call.
-	pre_flight_notice() {
-		printf 'preflight-called\n' >> "$call_order_log"
-	}
-
 	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-integ-$$.log"
 	touch "$DOCKER_CALL_LOG"
@@ -2262,7 +2267,7 @@ STUB
 
 	# Capture exec call instead of replacing process.
 	exec() {
-		printf 'compose-run-called\n' >> "$call_order_log"
+		printf 'compose-exec-called\n' >> "$call_order_log"
 		echo "$*" >> "$DOCKER_CALL_LOG"
 		return 0
 	}
@@ -2278,21 +2283,20 @@ STUB
 	# Verify gc was called before disc/seed.
 	[[ "$order" == *"gc-called"* ]]
 	[[ "$order" == *"seed-called"* ]]
-	[[ "$order" == *"preflight-called"* ]]
-	[[ "$order" == *"compose-run-called"* ]]
+	[[ "$order" == *"compose-exec-called"* ]]
 
 	# gc must appear before disc/seed in the log.
 	local gc_pos disc_pos seed_pos compose_pos
 	gc_pos=$(printf '%s' "$order" | grep -n "gc-called" | head -1 | cut -d: -f1)
 	disc_pos=$(printf '%s' "$order" | grep -n "gc-done disc-called" | head -1 | cut -d: -f1)
 	seed_pos=$(printf '%s' "$order" | grep -n "seed-called" | head -1 | cut -d: -f1)
-	compose_pos=$(printf '%s' "$order" | grep -n "compose-run-called" | head -1 | cut -d: -f1)
+	compose_pos=$(printf '%s' "$order" | grep -n "compose-exec-called" | head -1 | cut -d: -f1)
 	[ "$gc_pos" -lt "$disc_pos" ]
 	[ "$disc_pos" -lt "$seed_pos" ]
 	[ "$seed_pos" -lt "$compose_pos" ]
 
-	# compose run must receive --name with discriminator suffix.
-	[[ "$compose_log" == *"--name drydock-integ-proj-"*"-abcd"* ]]
+	# The session name must use the discriminator suffix.
+	[[ "$compose_log" == *"drydock-integ-proj-"*"-abcd"* ]]
 
 	# No stop or kill in docker calls.
 	[[ "$compose_log" != *" stop "* ]]
@@ -2877,4 +2881,200 @@ _setup_revoke_env() {
 	_setup_revoke_env
 	run cmd_revoke_token
 	[[ "$output" == *"claude.ai"* ]]
+}
+
+# ── T-4 RED: cmd_run detect + non-TTY + nested branches ──────────────────────
+# REQ-N2, REQ-N3, REQ-9-M, SR-10-M
+# Tests the new cmd_run behaviour: nested detect → ephemeral; non-nested no-session
+# → launch new (up-d + exec); non-nested ≥1 session + no-TTY → exit 2.
+
+# Helper: hermetic env for T-4 cmd_run tests.
+# Sets CMD_T4_PROJECT_DIR (global).
+_setup_cmd_run_t4() {
+	local fakehome="$BATS_TEST_TMPDIR/cmd-t4-home-$$"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+	export HOME="$fakehome"
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+
+	ensure_prereqs() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_image() { :; }
+	ensure_synced() { :; }
+
+	_fixed_disc_t4() { printf 'ab12'; }
+	export DRYDOCK_DISCRIMINATOR_FN=_fixed_disc_t4
+
+	# DOCKER seam: default returns empty ps (no live sessions).
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-t4-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	CMD_T4_PROJECT_DIR="$BATS_TEST_TMPDIR/cmd-t4-proj-$$"
+	mkdir -p "$CMD_T4_PROJECT_DIR"
+
+	# Unset mux/nested vars to start clean.
+	unset ZELLIJ TMUX STY DRYDOCK_NESTED
+}
+
+# ── Nested detect: $ZELLIJ set → ephemeral path (compose run --rm) ────────────
+
+@test "cmd_run: ZELLIJ set → ephemeral path (compose run --rm) (REQ-N2, SR-10-M)" {
+	_setup_cmd_run_t4
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	export ZELLIJ="zellij-session-1"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+}
+
+@test "cmd_run: TMUX set → ephemeral path (compose run --rm) (REQ-N2)" {
+	_setup_cmd_run_t4
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	export TMUX="/tmp/tmux-1000/default,12345,0"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+}
+
+@test "cmd_run: STY set → ephemeral path (compose run --rm) (REQ-N2)" {
+	_setup_cmd_run_t4
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	export STY="12345.pts-1.hostname"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+}
+
+@test "cmd_run: DRYDOCK_NESTED=1 → ephemeral path regardless of mux vars (SR-NEW-2)" {
+	_setup_cmd_run_t4
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	export DRYDOCK_NESTED=1
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+}
+
+@test "cmd_run: nested path does NOT use compose up -d (SR-10-M — ephemeral, no persistent)" {
+	_setup_cmd_run_t4
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	export ZELLIJ="zellij-session-1"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# Ephemeral path must NOT include "up" (which would start a persistent container).
+	[[ "$log" != *" up "* ]]
+}
+
+# ── Non-nested, 0 sessions → launch new (up-d + exec) ─────────────────────────
+
+@test "cmd_run: no-nested, no sessions → invokes 'compose ... up -d' (REQ-9-M)" {
+	_setup_cmd_run_t4
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	# Mock DOCKER ps returns nothing (no sessions) but up/exec succeed.
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# Must have "up" in the log (persistent launch path).
+	[[ "$log" == *" up "* ]]
+}
+
+@test "cmd_run: no-nested, no sessions → invokes 'compose ... exec' (REQ-9-M)" {
+	_setup_cmd_run_t4
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *" exec "* ]]
+}
+
+# ── Non-nested, ≥1 session, no-TTY → exit 2 ────────────────────────────────
+
+@test "cmd_run: non-nested, live session, no-TTY → exit 2 (REQ-9-M, REQ-N3)" {
+	_setup_cmd_run_t4
+
+	# Override DOCKER to return one live session for the project.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-run-live-$$"
+	mkdir -p "$stub_dir"
+	local proj_name
+	proj_name="$(basename "$CMD_T4_PROJECT_DIR")"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-${proj_name}-ab12cd34\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	# bats 'run' executes in a subshell with stdin not a TTY (non-interactive).
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 2 ]
+}
+
+@test "cmd_run: non-nested, live session, no-TTY → stderr contains session list (REQ-9-M)" {
+	_setup_cmd_run_t4
+
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-run-live2-$$"
+	mkdir -p "$stub_dir"
+	local proj_name
+	proj_name="$(basename "$CMD_T4_PROJECT_DIR")"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-${proj_name}-ab12cd34\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	[[ "$output" == *"drydock"* ]] || [[ "$output" == *"attach"* ]] || [[ "$output" == *"session"* ]]
+}
+
+@test "cmd_run: non-nested, live session, no-TTY → hints contain drydock attach (REQ-9-M)" {
+	_setup_cmd_run_t4
+
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-run-live3-$$"
+	mkdir -p "$stub_dir"
+	local proj_name
+	proj_name="$(basename "$CMD_T4_PROJECT_DIR")"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-${proj_name}-ab12cd34\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	[[ "$output" == *"drydock attach"* ]] || [[ "$output" == *"drydock new"* ]]
 }
