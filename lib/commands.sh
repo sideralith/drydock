@@ -372,6 +372,11 @@ pre_flight_notice() {
 
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]
+	# REQ-9-M, REQ-N2, REQ-N3, SR-10-M: Detect + Delegate model.
+	# - Nested (mux/DRYDOCK_NESTED=1) → ephemeral: compose run --rm -it ... claude
+	# - Non-nested, 0 sessions → _launch_new: compose up -d + exec -it ... claude
+	# - Non-nested, ≥1 sessions, TTY → prompt: a/n/s/q
+	# - Non-nested, ≥1 sessions, no-TTY → list + exit 2
 	local project_dir_arg=""
 	local -a passthrough=()
 	if [ $# -gt 0 ] && [ "$1" != "--" ]; then
@@ -389,20 +394,115 @@ cmd_run() {
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
-	note "Launching Claude in $project_dir"
-	export_compose_env "$project_dir"
+	# ── Nested detect (REQ-N2, SR-10-M) ──────────────────────────────────────
+	# Treat as nested if any multiplexer var is set OR DRYDOCK_NESTED=1.
+	if [ -n "${ZELLIJ:-}${TMUX:-}${STY:-}" ] || [ "${DRYDOCK_NESTED:-}" = "1" ]; then
+		note "Nested session detected — launching ephemeral Claude in $project_dir"
+		export_compose_env "$project_dir"
+		local compose_args=()
+		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+		local _name="$DRYDOCK_SESSION_NAME"
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
+		# exec replaces the process in production. return 0 is a test safety-net:
+		# if exec() is overridden by a test stub (which returns without replacing
+		# the process), return ensures we don't fall through to the non-nested path.
+		return 0
+	fi
 
-	local compose_args=()
-	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+	# ── Non-nested path ───────────────────────────────────────────────────────
+	local proj
+	proj="${PROJECT_NAME:-$(sanitize_project_name "$(basename "$project_dir")")}"
 
-	# Per-session container name: export_compose_env has already generated a
-	# unique DRYDOCK_SESSION_NAME (drydock-<project>-<disc>) via collision retry.
-	# No is_container_running guard needed — the discriminator guarantees each
-	# invocation gets its own unique name (R4: existing containers are never
-	# stopped or killed).
+	# Query live run sessions for this project (no -shell companions).
+	local live_sessions live_count
+	live_sessions="$("$DOCKER" ps \
+		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--format '{{.Names}}' 2>/dev/null |
+		grep -E "^drydock-${proj}-[0-9a-f]+$" || true)"
+	live_count="$(printf '%s\n' "$live_sessions" | grep -c . || true)"
+
+	if [ "$live_count" -eq 0 ]; then
+		# ── 0 sessions → launch new persistent container ─────────────────────
+		note "Launching Claude in $project_dir"
+		export_compose_env "$project_dir"
+		local compose_args=()
+		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+		_launch_new "$project_dir" compose_args "${passthrough[@]}"
+	elif [ -t 0 ]; then
+		# ── ≥1 sessions + TTY → interactive prompt ───────────────────────────
+		# REQ-N3: prompt attach (a) / new (n) / stop and new (s) / cancel (q)?
+		printf 'Existing session(s) for %s:\n' "$proj" >&2
+		printf '%s\n' "$live_sessions" >&2
+		printf 'attach (a) / new (n) / stop and new (s) / cancel (q)? [a]: ' >&2
+		local choice
+		read -r choice
+		case "${choice:-a}" in
+		[aA] | '')
+			# Attach: pick from menu if N>1, direct if N=1.
+			export_compose_env "$project_dir"
+			local compose_args=()
+			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			local target
+			if [ "$live_count" -gt 1 ]; then
+				target="$(_pick_session_menu "$live_sessions")"
+			else
+				target="$(printf '%s\n' "$live_sessions" | head -1)"
+			fi
+			note "Attaching to $target"
+			exec "$DOCKER" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+			;;
+		[nN])
+			# New: mint new disc, start alongside existing session.
+			note "Starting new session alongside existing in $project_dir"
+			export_compose_env "$project_dir"
+			local compose_args=()
+			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			_launch_new "$project_dir" compose_args "${passthrough[@]}"
+			;;
+		[sS])
+			# Stop and new: rm -f all existing sessions, then launch fresh.
+			note "Stopping existing sessions and starting new in $project_dir"
+			local sess
+			while IFS= read -r sess; do
+				[ -n "$sess" ] && "$DOCKER" rm -f "$sess" >/dev/null
+			done <<<"$live_sessions"
+			export_compose_env "$project_dir"
+			local compose_args=()
+			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			_launch_new "$project_dir" compose_args "${passthrough[@]}"
+			;;
+		[qQ])
+			return 130
+			;;
+		*)
+			err "invalid choice: $choice — expected a/n/s/q"
+			;;
+		esac
+	else
+		# ── ≥1 sessions + no-TTY → list + exit 2 ─────────────────────────────
+		# REQ-9-M: non-interactive callers get the list + hints on stderr.
+		printf 'Existing sessions for project %s:\n' "$proj" >&2
+		printf '%s\n' "$live_sessions" >&2
+		printf 'Use: drydock attach  — reconnect to a session\n' >&2
+		printf '     drydock new     — start a new session alongside\n' >&2
+		printf '     drydock stop    — stop a session\n' >&2
+		return 2
+	fi
+}
+
+# _launch_new project_dir compose_args_nameref [passthrough...]
+# Internal: mint-and-launch a fresh persistent container.
+# Calls compose up -d then exec -it claude. Used by cmd_run (0-sessions path,
+# prompt 'n', prompt 's') and cmd_new.
+_launch_new() {
+	local project_dir="$1"
+	local -n _ln_compose_args="$2"
+	shift 2
+	local -a passthrough=("$@")
+
 	local _name="$DRYDOCK_SESSION_NAME"
-	pre_flight_notice
-	exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
+	"$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" up -d
+	exec "$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
 }
 
 cmd_shell() {
