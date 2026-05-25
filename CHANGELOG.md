@@ -43,9 +43,12 @@ CLI gains explicit session management commands. See #64.
 ### Changed
 - **`drydock doctor` ACTIVE SESSIONS cheat-sheet** now shows `drydock attach
   <disc>` and `drydock list` instead of the old `docker exec -it … claude
-  --continue` and INV-2 caveat (REQ-8-M, REQ-N11). The INV-2 second-Claude
-  hazard no longer applies: the new `compose exec` model attaches to the
-  container's existing claude process rather than starting a second one.
+  --continue` and INV-2 caveat (REQ-8-M, REQ-N11). The new `compose exec`
+  model spawns a new `claude` process per attach. In normal use (terminal
+  close → reattach), the previous `claude` has already exited, so a single
+  writer exists at a time. Double-attach across two terminals can still
+  produce concurrent writers on the same per-session config; users are
+  responsible for one-attach-at-a-time discipline.
 - **Container PID 1 changed** from `drydock-wrapper.sh` to `sleep infinity`
   (T-2, REQ-1-M). CMD (not ENTRYPOINT) so `compose run drydock claude` still
   overrides it for the ephemeral nested path.

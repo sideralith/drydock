@@ -197,8 +197,8 @@ running. Re-running `drydock` for the same project opens an interactive
 selector (attach to existing / start new / stop+new / cancel) — the
 selector uses [`gum`](https://github.com/charmbracelet/gum) if installed,
 falls back to [`fzf`](https://github.com/junegunn/fzf), and finally to a
-built-in ANSI renderer. The container is torn down only when you call
-`drydock stop` (or run `/exit` inside Claude and let the process end).
+built-in ANSI renderer. The container keeps running after Claude exits — call
+`drydock stop` explicitly to remove it.
 
 drydock's safety policy is image-baked (`/etc/claude-code/managed-settings.d/`,
 INV-3) and applies to every project automatically. You don't need to "initialize"
