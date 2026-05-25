@@ -58,11 +58,13 @@ STUB
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {
 	# GIVEN a live container drydock-myproj-ab12cd34
-	# WHEN cmd_attach ab12cd34 is called
+	# WHEN cmd_attach ab12cd34 is called with a TTY
 	# THEN docker compose exec is called with claude --resume
 	local stub
 	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
 	export DOCKER="$stub"
+	# Simulate TTY presence — cmd_attach requires a TTY (FIX-5).
+	_drydock_has_tty() { return 0; }
 
 	run cmd_attach "ab12cd34"
 	[ "$status" -eq 0 ]
@@ -75,11 +77,25 @@ STUB
 	local stub
 	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
 	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
 
 	run cmd_attach "ab12cd34"
 	[ "$status" -eq 0 ]
 	# Must not show disambiguation menu
 	[[ "$output" != *"[1]"* ]]
+}
+
+# ── Scenario (a-no-tty): explicit disc + no TTY → exit 2 with friendly error ──
+
+@test "cmd_attach: explicit disc arg + no TTY → exits 2 with friendly error (FIX-5)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+	# Do NOT override _drydock_has_tty — tests run without a TTY by default.
+
+	run cmd_attach "ab12cd34" 2>&1
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"TTY"* ]] || [[ "$output" == *"terminal"* ]] || [[ "$output" == *"tty"* ]]
 }
 
 # ── Scenario (b): no arg + exactly 1 live session → direct attach ─────────────
@@ -88,6 +104,7 @@ STUB
 	local stub
 	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
 	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
 
 	run cmd_attach
 	[ "$status" -eq 0 ]
