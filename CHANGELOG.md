@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Zellij scaffolding (Slice 1 debt) removed** (#64). The nested-Zellij stealth
+  approach (Mode F) proved structurally impossible — the host Zellij intercepts
+  all keystrokes before they reach an inner Zellij, leaving the container
+  inaccessible regardless of mode config. The redesign replaces PID 1 with
+  `sleep infinity` and delegates multiplexer behavior to the user's host
+  environment. Removed: `templates/hooks/drydock-wrapper.sh`,
+  `templates/hooks/drydock-claude-shim.sh`,
+  `templates/zellij/config-nested.kdl`, `templates/zellij/layouts/drydock.kdl`,
+  `test/integration/sighup_survival.bats`,
+  `test/integration/nested_zellij_stealth.bats`. Zellij binary (~10-12 MB)
+  removed from image. Smoke CI steps for Zellij binary presence and stealth
+  config removed.
+
 ## [0.2.2] - 2026-05-23
 
 CI hygiene & infrastructure polish, plus a host-contamination fix for the
