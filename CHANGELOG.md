@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **New session subcommands** (`drydock new`, `drydock attach`, `drydock list`,
+  `drydock stop`) for the persistent-container lifecycle model (#64, #67).
+  `drydock new` starts a fresh container without prompting (coexists with any
+  live session). `drydock attach [disc]` reconnects via `compose exec … claude
+  --resume`. `drydock list` shows live sessions for the current project in
+  parseable format. `drydock stop [disc]` removes a container with `docker rm -f`.
+  All four support the disambiguation protocol: explicit name → direct action;
+  no arg + 1 session → direct; no arg + N>1 + TTY → numbered menu; no arg +
+  N>1 + no-TTY → list + exit 2.
+- **`drydock` default command now detects live sessions** (REQ-9-M): nested
+  (inside Zellij/tmux/screen or `DRYDOCK_NESTED=1`) → ephemeral `compose run
+  --rm`; non-nested + no sessions → `compose up -d` + `compose exec`; non-nested
+  + live sessions + TTY → prompt `attach / new / stop+new / cancel`; non-nested
+  + live sessions + no-TTY → list + exit 2.
+- Integration gate `test/integration/session_lifecycle_compose_exec.bats`
+  (assertions L-A..L-D) gated by `DRYDOCK_INTEGRATION=1` — verifies PID 1 =
+  `sleep`, SIGHUP survival of exec processes, re-exec to same container, and
+  `docker rm -f` cleanup.
+
+### Changed
+- **`drydock doctor` ACTIVE SESSIONS cheat-sheet** now shows `drydock attach
+  <disc>` and `drydock list` instead of the old `docker exec -it … claude
+  --continue` and INV-2 caveat (REQ-8-M, REQ-N11). The INV-2 second-Claude
+  hazard no longer applies: the new `compose exec` model attaches to the
+  container's existing claude process rather than starting a second one.
+- **Container PID 1 changed** from `drydock-wrapper.sh` to `sleep infinity`
+  (T-2, REQ-1-M). CMD (not ENTRYPOINT) so `compose run drydock claude` still
+  overrides it for the ephemeral nested path.
+
 ### Removed
 - **Zellij scaffolding (Slice 1 debt) removed** (#64). The nested-Zellij stealth
   approach (Mode F) proved structurally impossible — the host Zellij intercepts

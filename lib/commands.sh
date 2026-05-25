@@ -781,9 +781,9 @@ cmd_doctor() {
 	# ── ACTIVE SESSIONS ────────────────────────────────────────────────────────
 	# Lists running drydock containers scoped to the current project. Includes both
 	# run sessions (drydock-<proj>-<disc>) and shell companions (-<disc>-shell).
-	# Awareness signal for concurrent-sessions (INV-2) — never refuses, info-only.
+	# REQ-8-M, REQ-N11: cheat-sheet uses 'drydock attach <disc>' (not claude --continue).
 	_dr_section "ACTIVE SESSIONS" "this project"
-	local _proj_name _sess_lines _sess_name _sess_status
+	local _proj_name _sess_lines _sess_name _sess_status _sess_disc
 	_proj_name="$(_current_project_name)"
 	_sess_lines="$("$DOCKER" ps \
 		--filter "name=^drydock-${_proj_name}-[0-9a-f]+(-shell)?\$" \
@@ -791,31 +791,29 @@ cmd_doctor() {
 	# Some Docker versions don't fully honor anchored ERE in --filter; post-filter
 	# defensively so cross-project containers can never leak in.
 	_sess_lines="$(printf '%s\n' "$_sess_lines" | grep -E "^drydock-${_proj_name}-[0-9a-f]+(-shell)?\|" || true)"
+	# Discovery hint: always show 'drydock list' so users know how to see all sessions.
+	_dr_item "·" "discovery" "" "see all sessions: drydock list"
 	if [ -z "$_sess_lines" ]; then
 		_dr_item "·" "(none running)" ""
 	else
 		while IFS='|' read -r _sess_name _sess_status; do
 			[ -z "$_sess_name" ] && continue
 			_dr_item "✓" "$_sess_name" "$_sess_status"
-			# Resume cheat-sheet — the command to re-enter this LIVE container
-			# and recover the work. A -shell companion reattaches into bash; a
-			# run session reattaches Claude's conversation history via
-			# `claude --continue`. Both only work while the container is still
-			# running — this is not a way to revive a session whose container
-			# has already exited.
+			# Resume cheat-sheet — the command to re-enter this LIVE container.
+			# A -shell companion reattaches into bash; a run session reconnects
+			# via 'drydock attach <disc>' (compose exec ... claude --resume).
+			# REQ-N11: MUST NOT emit 'claude --continue' or Zellij references.
 			case "$_sess_name" in
 			*-shell)
 				_dr_item "·" "  re-enter" "docker exec -it $_sess_name bash"
 				;;
 			*)
-				_dr_item "·" "  resume" "docker exec -it $_sess_name claude --continue"
+				# Extract the 4-char disc suffix from the container name.
+				_sess_disc="${_sess_name##*-}"
+				_dr_item "·" "  resume" "drydock attach $_sess_disc"
 				;;
 			esac
 		done <<<"$_sess_lines"
-		# INV-2 caveat: exec'ing a second Claude into a live run session puts
-		# two writers on the same per-session config (~/.claude.json + the
-		# session JSONL). Surface the hazard here rather than hiding it.
-		_dr_item "⚠" "  caveat" "" "re-entering a live run starts a 2nd Claude on one config (INV-2)"
 	fi
 
 	# ── COMPOSE OVERLAYS ───────────────────────────────────────────────────────

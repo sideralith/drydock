@@ -1819,7 +1819,9 @@ _setup_ensure_synced() {
 	rm -rf "$tmpdir"
 }
 
-@test "cmd_doctor: active-sessions lists the resume command for a running run session" {
+@test "cmd_doctor: active-sessions lists 'drydock attach <disc>' for a running run session (REQ-8-M, T-7)" {
+	# REQ-8-M: cmd_doctor MUST emit 'drydock attach <disc>' (not 'claude --continue').
+	# REQ-N11: MUST NOT emit 'claude --continue' or INV-2 caveat.
 	setup_no_engram_on_path
 	setup_plain_linux_seams
 
@@ -1856,10 +1858,14 @@ STUB
 	run cmd_doctor
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"drydock-myproj-a1b2c3d4"* ]]
-	# Resume cheat-sheet: the exec command to re-enter this live session.
-	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4 claude --continue"* ]]
-	# INV-2 caveat must be surfaced, not hidden.
-	[[ "$output" == *"INV-2"* ]]
+	# T-7: cheat-sheet must use 'drydock attach <disc>' (REQ-8-M).
+	[[ "$output" == *"drydock attach a1b2c3d4"* ]]
+	# T-7: must show 'drydock list' discovery hint (OQ-T3).
+	[[ "$output" == *"drydock list"* ]]
+	# T-7: must NOT emit 'claude --continue' (REQ-N11).
+	[[ "$output" != *"--continue"* ]]
+	# T-7: INV-2 caveat removed (new model has no second-Claude-on-same-config risk).
+	[[ "$output" != *"INV-2"* ]]
 
 	cd - >/dev/null
 }
