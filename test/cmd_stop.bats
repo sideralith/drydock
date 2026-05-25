@@ -136,6 +136,48 @@ drydock-myproj-ef56ab78")"
 	[ "$status" -ne 0 ]
 }
 
+# ── Scenario (a): validation — cross-project / nonexistent name → error ──────
+
+@test "cmd_stop: explicit cross-project container name → exits non-zero (FIX-3)" {
+	# drydock-otherproject-abc1 does not belong to myproj; must be rejected.
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "drydock-otherproject-abc1"
+	[ "$status" -ne 0 ]
+}
+
+@test "cmd_stop: explicit cross-project container name → friendly error message (FIX-3)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "drydock-otherproject-abc1" 2>&1
+	[[ "$output" == *"no live session"* ]] || [[ "$output" == *"not found"* ]] || [[ "$output" == *"no"* ]]
+}
+
+@test "cmd_stop: explicit nonexistent disc → exits non-zero (FIX-3)" {
+	# No session with disc deadbeef.
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "deadbeef"
+	[ "$status" -ne 0 ]
+}
+
+@test "cmd_stop: explicit nonexistent disc → does NOT invoke docker rm -f (FIX-3)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop "deadbeef"
+	[ "$status" -ne 0 ]
+	# rm must NOT have been called since the target is not a live session.
+	! grep -q "^rm " "$DOCKER_CALL_LOG" || true
+}
+
 # ── Stop is docker rm -f, not docker stop ────────────────────────────────────
 
 @test "cmd_stop: uses 'rm' (docker rm -f), not 'stop' docker subcommand (REQ-N7)" {
