@@ -1716,7 +1716,7 @@ _select_choice_pure() {
 		# Read one byte; if it's ESC, read two more for arrow sequences.
 		IFS= read -rsn1 key 2>/dev/null || true
 		if [ "$key" = $'\e' ]; then
-			IFS= read -rsn2 seq 2>/dev/null || true
+			IFS= read -rsn2 -t 0.1 seq 2>/dev/null || seq=""
 			case "$seq" in
 			'[A') # ↑ arrow
 				((active > 0)) && active=$((active - 1))
@@ -1853,6 +1853,10 @@ cmd_attach() {
 		fi
 	fi
 
+	if ! _drydock_has_tty; then
+		printf 'drydock attach requires a TTY — not called from a terminal\n' >&2
+		return 2
+	fi
 	note "Attaching to $target_name"
 	exec "$DOCKER" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
 }
@@ -1868,7 +1872,7 @@ cmd_list() {
 	proj="${PROJECT_NAME:-$(_current_project_name)}"
 
 	local rows
-	rows="$("$DOCKER" ps \
+	rows="$("$DOCKER" ps --all \
 		--filter "name=^drydock-${proj}-" \
 		--format '{{.Names}}|{{.Status}}|{{.CreatedAt}}' 2>/dev/null || true)"
 	# Defensive post-filter: ensure only this project's containers are shown.
@@ -1909,6 +1913,12 @@ cmd_stop() {
 	if [ -n "$name_arg" ]; then
 		# Sub-scenario (a): explicit name.
 		target_name="$(_resolve_session_name "$name_arg" "$proj")"
+		# Verify the container is actually a live session for this project.
+		local live
+		live="$(_live_sessions "$proj")"
+		if ! printf '%s\n' "$live" | grep -qxF "$target_name"; then
+			err "no live session named '$name_arg' for project '$proj'"
+		fi
 	else
 		# Sub-scenarios (b/c/d): no name — query live sessions.
 		local live

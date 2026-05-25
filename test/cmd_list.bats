@@ -120,3 +120,22 @@ STUB
 	# The docker ps invocation must include the project name in the filter.
 	grep -q "myproj" "$call_log"
 }
+
+@test "cmd_list: passes --all to docker ps so exited containers are included (OQ-T5)" {
+	# Without --all, docker ps only shows running containers; exited sessions are invisible.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-all-$$"
+	mkdir -p "$stub_dir"
+	local call_log="$BATS_TEST_TMPDIR/docker-list-all.log"
+	touch "$call_log"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${call_log}"
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run cmd_list
+	# The docker ps invocation must include --all.
+	grep -q -- "--all" "$call_log"
+}
