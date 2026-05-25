@@ -25,6 +25,7 @@ _run_cmd_run() {
       export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
     }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
+    _drydock_has_tty()  { return 0; }
     DOCKER=echo
     cmd_run "$@"
   ' -- "$DRYDOCK_HOME" "$@"
@@ -65,6 +66,7 @@ _run_main() {
       export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
     }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
+    _drydock_has_tty()  { return 0; }
     DOCKER=echo
     main "$@"
   ' -- "$DRYDOCK_HOME" "$@"

@@ -513,6 +513,10 @@ cmd_run() {
 # Calls compose up -d then exec -it claude. Used by cmd_run (0-sessions path,
 # prompt 'n', prompt 's') and cmd_new.
 _launch_new() {
+	if ! _drydock_has_tty; then
+		printf 'drydock requires a TTY — not called from a terminal\n' >&2
+		return 2
+	fi
 	local project_dir="$1"
 	local -n _ln_compose_args="$2"
 	shift 2
@@ -1579,6 +1583,19 @@ _live_sessions() {
 		grep -E "^drydock-${proj}-[0-9a-f]+$" || true
 }
 
+# _all_sessions — list ALL run-session container names for PROJECT_NAME (running + exited).
+# Mirrors _live_sessions but passes --all to docker ps so Exited containers are included.
+# Used by cmd_stop's explicit-name validation so users can clean up Exited containers by name.
+# The no-arg disambiguation menu still uses _live_sessions (running only).
+# Usage: _all_sessions [project_name]  (default: $PROJECT_NAME or cwd-derived)
+_all_sessions() {
+	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
+	"$DOCKER" ps --all \
+		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--format '{{.Names}}' 2>/dev/null |
+		grep -E "^drydock-${proj}-[0-9a-f]+$" || true
+}
+
 # _resolve_session_name disc_or_full [project_name]
 # Normalises a 4-char disc or full container name → canonical drydock-<proj>-<disc>.
 # Outputs the canonical name on stdout. Exits 0 always (validation is the caller's job).
@@ -1771,6 +1788,10 @@ _pick_session_menu() {
 # Coexists with any existing live sessions (REQ-N4). Mints a new discriminator
 # via export_compose_env, runs compose up -d, then execs claude interactively.
 cmd_new() {
+	if ! _drydock_has_tty; then
+		printf 'drydock new requires a TTY — not called from a terminal\n' >&2
+		return 2
+	fi
 	local -a passthrough=()
 	if [ "${1:-}" = "--" ]; then
 		shift
@@ -1912,11 +1933,12 @@ cmd_stop() {
 	local target_name
 	if [ -n "$name_arg" ]; then
 		# Sub-scenario (a): explicit name.
+		# Targets running OR exited containers so users can clean up Exited sessions
+		# by name (cmd_attach's running-only validation remains correct and unchanged).
 		target_name="$(_resolve_session_name "$name_arg" "$proj")"
-		# Verify the container is actually a live session for this project.
-		local live
-		live="$(_live_sessions "$proj")"
-		if ! printf '%s\n' "$live" | grep -qxF "$target_name"; then
+		local all
+		all="$(_all_sessions "$proj")"
+		if ! printf '%s\n' "$all" | grep -qxF "$target_name"; then
 			err "no live session named '$name_arg' for project '$proj'"
 		fi
 	else

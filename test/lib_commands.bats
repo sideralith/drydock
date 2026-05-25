@@ -798,6 +798,7 @@ setup() {
 
 	# cmd_run does exec (or "$DOCKER" compose up -d) — capture all docker calls.
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	_drydock_has_tty() { return 0; }
 
 	run cmd_run "$project_dir"
 
@@ -902,6 +903,7 @@ _setup_cmd_concurrent() {
 	_setup_cmd_concurrent
 	# Even with MOCK_DOCKER_INSPECT_OUTPUT=true (container exists), cmd_run
 	# should NOT error — the discriminator ensures a unique name is used.
+	_drydock_has_tty() { return 0; }
 	export MOCK_DOCKER_INSPECT_OUTPUT=true
 	export MOCK_DOCKER_EXIT=0
 	local project_dir="$BATS_TEST_TMPDIR/cc-run/foo"
@@ -925,6 +927,7 @@ _setup_cmd_concurrent() {
 @test "cmd_run: container session uses discriminator-suffixed name (drydock-foo-<disc>)" {
 	# New persistent model: compose -p drydock-foo-<disc> up -d + exec -it.
 	_setup_cmd_concurrent
+	_drydock_has_tty() { return 0; }
 	export MOCK_DOCKER_EXIT=0
 	local project_dir="$BATS_TEST_TMPDIR/cc-name/foo"
 	mkdir -p "$project_dir"
@@ -2001,6 +2004,7 @@ _setup_cmd_name_test() {
 	# New persistent model: session name appears in compose -p flag, not --name.
 	_setup_cmd_name_test
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	_drydock_has_tty() { return 0; }
 	run cmd_run "$CMD_NAME_TEST_PROJECT_DIR"
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
@@ -2164,6 +2168,7 @@ STUB
 	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
 
 	exec() { echo "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	_drydock_has_tty() { return 0; }
 
 	local project_dir="$BATS_TEST_TMPDIR/pfn-run-proj-$$"
 	mkdir -p "$project_dir"
@@ -2271,6 +2276,7 @@ STUB
 		echo "$*" >> "$DOCKER_CALL_LOG"
 		return 0
 	}
+	_drydock_has_tty() { return 0; }
 
 	run cmd_run "$project_dir"
 	[ "$status" -eq 0 ]
@@ -2989,6 +2995,7 @@ _setup_cmd_run_t4() {
 @test "cmd_run: no-nested, no sessions → invokes 'compose ... up -d' (REQ-9-M)" {
 	_setup_cmd_run_t4
 	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	_drydock_has_tty() { return 0; }
 
 	# Mock DOCKER ps returns nothing (no sessions) but up/exec succeed.
 	run cmd_run "$CMD_T4_PROJECT_DIR"
@@ -3001,6 +3008,7 @@ _setup_cmd_run_t4() {
 @test "cmd_run: no-nested, no sessions → invokes 'compose ... exec' (REQ-9-M)" {
 	_setup_cmd_run_t4
 	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+	_drydock_has_tty() { return 0; }
 
 	run cmd_run "$CMD_T4_PROJECT_DIR"
 	local log
