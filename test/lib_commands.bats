@@ -3150,9 +3150,14 @@ STUB
 	_setup_cmd_run_t4
 	_drydock_has_tty() { return 1; }
 
+	# Regression net, NOT the #104 diagnostic. _launch_new's pre-existing TTY
+	# guard (FIX-3, 9a371c3) already prevented compose calls in this path
+	# before #104 — pre-fix and post-fix the log is empty here. This test
+	# locks that no-side-effect invariant so a future regression that moves
+	# the guard later in either layer (or removes _launch_new's defense in
+	# depth) cannot silently re-enable the compose call. The "does NOT emit
+	# 'Launching'" test above is the real RED→GREEN diagnostic for #104.
 	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
-	# No docker compose calls should have been logged — the guard returns 2
-	# before export_compose_env / compose_files / _launch_new run.
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log" != *" up "* ]]
