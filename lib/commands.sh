@@ -1939,7 +1939,7 @@ cmd_stop() {
 		local all
 		all="$(_all_sessions "$proj")"
 		if ! printf '%s\n' "$all" | grep -qxF "$target_name"; then
-			err "no live session named '$name_arg' for project '$proj'"
+			err "no session (running or exited) named '$name_arg' for project '$proj'"
 		fi
 	else
 		# Sub-scenarios (b/c/d): no name — query live sessions.

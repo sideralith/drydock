@@ -173,13 +173,16 @@ drydock-myproj-ef56ab78")"
 	[ "$status" -ne 0 ]
 }
 
-@test "cmd_stop: explicit cross-project container name → friendly error message (FIX-3)" {
+@test "cmd_stop: explicit cross-project container name → friendly error message (FIX-3, #102)" {
 	local stub
 	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
 	export DOCKER="$stub"
 
 	run cmd_stop "drydock-otherproject-abc1" 2>&1
-	[[ "$output" == *"no live session"* ]]
+	# #102: post-FIX-4 cmd_stop validates via _all_sessions (includes Exited containers).
+	# The error must reflect that scope — "no live" misled users who expected the
+	# message to mean "no running" and silently masked Exited containers.
+	[[ "$output" == *"no session (running or exited)"* ]]
 }
 
 @test "cmd_stop: explicit nonexistent disc → exits non-zero (FIX-3)" {
