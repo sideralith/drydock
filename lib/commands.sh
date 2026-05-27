@@ -138,7 +138,14 @@ cmd_setup() {
 
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
 		note "Copying $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)..."
-		cp -a "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
+		# -L dereferences symlinks so targets outside HOST_CLAUDE (e.g. plugin
+		# skills symlinked from ~/.agents/skills/ into ~/.claude/skills/) land
+		# in the prototype as real files. Without -L, those symlinks copy
+		# verbatim and break in the container where the external target tree
+		# isn't mounted. cmd_sync uses rsync --copy-unsafe-links for the same
+		# reason on the upgrade path. cmd_setup runs pre-image-build so it
+		# cannot use docker run; the host's cp is the only tool available.
+		cp -aL "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
 		# Purge immediately — closes the credential window between cp -a and the
 		# deferred unconditional purge below (which covers the upgrade path).
 		rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
@@ -238,12 +245,30 @@ cmd_sync() {
 	if ! engram_usable; then
 		_engram_exclude="--exclude=mcp/engram.json"
 	fi
+	# Stage HOST_CLAUDE with symlinks dereferenced on the host. The container-
+	# side rsync below only sees its own bind-mounts (/src and /dst), so a
+	# symlink under HOST_CLAUDE whose target escapes HOST_CLAUDE (e.g. plugin
+	# skills symlinked from ~/.agents/skills/handoff into ~/.claude/skills/)
+	# is unreadable from inside the container. --copy-unsafe-links alone is
+	# insufficient there: rsync errors with "symlink has no referent" and
+	# cancels --delete for safety, leaving the symlink broken in /dst. cp -aL
+	# on the host resolves every symlink at staging time because the host's
+	# filesystem view contains all targets. --copy-unsafe-links is retained
+	# below as belt-and-suspenders for any internal symlink that cp -aL might
+	# not fully dereference on edge filesystems.
+	local _staging
+	_staging="$(mktemp -d "${TMPDIR:-/tmp}/drydock-sync.XXXXXX")" ||
+		err "mktemp failed for sync staging dir"
+	if ! cp -aL "$HOST_CLAUDE/." "$_staging/"; then
+		rm -rf "$_staging"
+		err "failed to stage HOST_CLAUDE for sync (cp -aL exit $?)"
+	fi
 	"$DOCKER" run --rm \
-		-v "$HOST_CLAUDE":/src:ro \
+		-v "$_staging":/src:ro \
 		-v "$CONTAINER_CLAUDE":/dst:rw \
 		--user "$(id -u):$(id -g)" \
 		"$IMAGE" \
-		rsync -au --delete \
+		rsync -au --delete --copy-unsafe-links \
 		--exclude='sessions/' \
 		--exclude='projects/' \
 		--exclude='file-history/' \
@@ -266,7 +291,10 @@ cmd_sync() {
 		--exclude='themes/' \
 		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
-		/src/ /dst/ || return $?
+		/src/ /dst/
+	local _rsync_rc=$?
+	rm -rf "$_staging"
+	[ "$_rsync_rc" -ne 0 ] && return "$_rsync_rc"
 	# Purge any stale OAuth token from the container.  rsync --exclude prevents
 	# the file from being COPIED on new syncs, but --delete never removes excluded
 	# files from the destination — so an explicit purge is required to clean up
