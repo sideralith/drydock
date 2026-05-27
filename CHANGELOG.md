@@ -21,9 +21,10 @@ seven listed items.
   exactly 4. A manually created or stale `drydock-<proj>-<8char>`
   container would silently land in the session list and be subject to
   `list` / `stop` / `attach` actions. Tightened to `[0-9a-f]{4}` across
-  the five production sites — both `cmd_run` branches (nested + non-nested),
-  `_live_sessions`, `_all_sessions`, and the `doctor` ACTIVE SESSIONS
-  section. Swept the test fixtures (`test/cmd_list.bats`,
+  the five production sites — `pre_flight_notice` (the shell pre-flight),
+  `cmd_run`'s non-nested live-sessions probe, `_live_sessions`,
+  `_all_sessions`, and the `doctor` ACTIVE SESSIONS section. Swept the
+  test fixtures (`test/cmd_list.bats`,
   `test/cmd_stop.bats`, `test/cmd_attach.bats`, `test/cmd_new.bats`,
   `test/select_choice.bats`, `test/lib_commands.bats`) to use unambiguous
   4-char discriminators.
@@ -42,12 +43,15 @@ seven listed items.
   message ahead of the actual error. Added a caller-side TTY guard in
   `cmd_run` ahead of the `note()`, mirroring `_launch_new`'s existing
   guard as defense in depth.
-- **`drydock run` no longer fails on a freshly installed host without
-  `~/.config/gh`** (#109). `ensure_runtime_dirs` pre-creates the gh CLI's
-  config directory on the host so Docker doesn't have to auto-create the
-  bind-mount source as root on the first run after install, which would
-  leave a root-owned `~/.config/gh` the unprivileged user couldn't write
-  to later.
+- **`drydock run` no longer leaves a root-owned `~/.config/gh` on hosts
+  without `gh` installed** (#109). `docker-compose.yml` bind-mounts
+  `~/.config/gh` unconditionally; if the source directory doesn't exist,
+  the Docker daemon (running as root) auto-creates it `root:root`-owned.
+  `drydock run` itself worked fine, but a subsequent host-side
+  `gh auth login` would then fail with permission denied trying to write
+  into the user's own XDG config dir. `ensure_runtime_dirs` now
+  pre-creates the directory under the invoking user before any compose
+  call — same defensive class as the existing `~/.claude/hooks` mkdir.
 
 ### Tests
 - **`test/integration/session_lifecycle_compose_exec.bats` L-C now compares
