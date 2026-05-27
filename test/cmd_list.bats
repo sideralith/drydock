@@ -48,17 +48,17 @@ STUB
 
 @test "cmd_list: outputs the container name for a live session (REQ-N6)" {
 	local stub
-	stub="$(make_docker_ps_stub "drydock-myproj-ab12cd34|Up 5 minutes|2026-05-25 10:00:00")"
+	stub="$(make_docker_ps_stub "drydock-myproj-ab12|Up 5 minutes|2026-05-25 10:00:00")"
 	export DOCKER="$stub"
 
 	run cmd_list
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"drydock-myproj-ab12cd34"* ]]
+	[[ "$output" == *"drydock-myproj-ab12"* ]]
 }
 
 @test "cmd_list: outputs status for a live session (REQ-N6)" {
 	local stub
-	stub="$(make_docker_ps_stub "drydock-myproj-ab12cd34|Up 5 minutes|2026-05-25 10:00:00")"
+	stub="$(make_docker_ps_stub "drydock-myproj-ab12|Up 5 minutes|2026-05-25 10:00:00")"
 	export DOCKER="$stub"
 
 	run cmd_list
@@ -77,14 +77,14 @@ STUB
 
 @test "cmd_list: lists multiple sessions (REQ-N6 — parseable multi-row)" {
 	local stub
-	stub="$(make_docker_ps_stub "drydock-myproj-ab12cd34|Up 5 minutes|2026-05-25 10:00:00
-drydock-myproj-ef56ab78|Up 2 minutes|2026-05-25 10:03:00")"
+	stub="$(make_docker_ps_stub "drydock-myproj-ab12|Up 5 minutes|2026-05-25 10:00:00
+drydock-myproj-ef56|Up 2 minutes|2026-05-25 10:03:00")"
 	export DOCKER="$stub"
 
 	run cmd_list
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"drydock-myproj-ab12cd34"* ]]
-	[[ "$output" == *"drydock-myproj-ef56ab78"* ]]
+	[[ "$output" == *"drydock-myproj-ab12"* ]]
+	[[ "$output" == *"drydock-myproj-ef56"* ]]
 }
 
 # ── [Exited] marker (OQ-T5) ──────────────────────────────────────────────────
@@ -92,7 +92,7 @@ drydock-myproj-ef56ab78|Up 2 minutes|2026-05-25 10:03:00")"
 @test "cmd_list: shows [Exited] marker for an exited session (OQ-T5)" {
 	# An exited container should be displayed with a distinct marker.
 	local stub
-	stub="$(make_docker_ps_stub "drydock-myproj-ab12cd34|Exited (0) 2 minutes ago|2026-05-25 09:58:00")"
+	stub="$(make_docker_ps_stub "drydock-myproj-ab12|Exited (0) 2 minutes ago|2026-05-25 09:58:00")"
 	export DOCKER="$stub"
 
 	run cmd_list

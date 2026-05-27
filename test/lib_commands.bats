@@ -151,6 +151,41 @@ setup() {
 	[ -d "$CONTAINER_CLAUDE/hooks" ]
 }
 
+@test "#109 ensure_runtime_dirs: creates \$HOME/.config/gh/ as defense-in-depth (host without gh)" {
+	# On a host without gh installed, ~/.config/gh/ does not exist. The
+	# docker-compose.yml mount `${HOME}/.config/gh:${HOME}/.config/gh:rw` causes
+	# the Docker daemon (root) to auto-create the source as root-owned, which
+	# later breaks `gh auth login` on host if gh is installed afterwards. Same
+	# class of bug as #71 (hooks subdir). The fix is a single idempotent
+	# mkdir -p in ensure_runtime_dirs that pre-creates the source as the user.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Pre-existing prototype so _needs_setup stays 0 and the test isolates
+	# the gh-dir mkdir behavior from cmd_setup.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	# Precondition: fresh host with no gh config.
+	rm -rf "$HOME/.config/gh"
+	[ ! -d "$HOME/.config/gh" ]
+
+	cmd_setup() { :; }
+
+	ensure_runtime_dirs
+
+	[ -d "$HOME/.config/gh" ]
+}
+
 @test "ensure_runtime_dirs: engram usable + isolated + missing CONTAINER_ENGRAM — DOES trigger cmd_setup" {
 	setup_engram_on_path
 	setup_plain_linux_seams
@@ -1847,7 +1882,7 @@ _setup_ensure_synced() {
 	cat >"$stub_dir/docker" <<'STUB'
 #!/usr/bin/env bash
 if [ "${1:-}" = "ps" ]; then
-	printf 'drydock-myproj-a1b2c3d4|Up 5 minutes\n'
+	printf 'drydock-myproj-a1b2|Up 5 minutes\n'
 fi
 exit 0
 STUB
@@ -1860,9 +1895,9 @@ STUB
 
 	run cmd_doctor
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"drydock-myproj-a1b2c3d4"* ]]
+	[[ "$output" == *"drydock-myproj-a1b2"* ]]
 	# T-7: cheat-sheet must use 'drydock attach <disc>' (REQ-8-M).
-	[[ "$output" == *"drydock attach a1b2c3d4"* ]]
+	[[ "$output" == *"drydock attach a1b2"* ]]
 	# T-7: must show 'drydock list' discovery hint (OQ-T3).
 	[[ "$output" == *"drydock list"* ]]
 	# T-7: must NOT emit 'claude --continue' (REQ-N11).
@@ -1896,7 +1931,7 @@ STUB
 	cat >"$stub_dir/docker" <<'STUB'
 #!/usr/bin/env bash
 if [ "${1:-}" = "ps" ]; then
-	printf 'drydock-myproj-a1b2c3d4-shell|Up 2 minutes\n'
+	printf 'drydock-myproj-a1b2-shell|Up 2 minutes\n'
 fi
 exit 0
 STUB
@@ -1909,9 +1944,9 @@ STUB
 
 	run cmd_doctor
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"drydock-myproj-a1b2c3d4-shell"* ]]
+	[[ "$output" == *"drydock-myproj-a1b2-shell"* ]]
 	# A -shell companion reattaches into an interactive bash, not claude.
-	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4-shell bash"* ]]
+	[[ "$output" == *"docker exec -it drydock-myproj-a1b2-shell bash"* ]]
 
 	cd - >/dev/null
 }
@@ -3030,7 +3065,7 @@ _setup_cmd_run_t4() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -3054,7 +3089,7 @@ STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -3076,7 +3111,7 @@ STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -3085,4 +3120,96 @@ STUB
 
 	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
 	[[ "$output" == *"drydock attach"* ]] || [[ "$output" == *"drydock new"* ]]
+}
+
+# ── #104: cmd_run 0-session path must TTY-guard before emitting note() ──────
+# Pre-fix: cmd_run printed `note "Launching Claude in ..."` before calling
+# _launch_new, whose TTY guard then returned 2. Scripted callers saw a
+# misleading "Launching..." line followed by the error — looked like the
+# launch had started. The fix moves the TTY guard ahead of the note().
+
+@test "cmd_run: non-nested, 0 sessions, no-TTY → exit 2 (#104)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 1; }
+
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	[ "$status" -eq 2 ]
+}
+
+@test "cmd_run: non-nested, 0 sessions, no-TTY → does NOT emit 'Launching' (#104)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 1; }
+
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	# The TTY guard must fire BEFORE the optimistic 'Launching Claude' note,
+	# so scripted callers see only the error — no misleading progress line.
+	[[ "$output" != *"Launching"* ]]
+}
+
+@test "cmd_run: non-nested, 0 sessions, no-TTY → does NOT invoke docker compose (#104)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 1; }
+
+	# Regression net, NOT the #104 diagnostic. _launch_new's pre-existing TTY
+	# guard (FIX-3, 9a371c3) already prevented compose calls in this path
+	# before #104 — pre-fix and post-fix the log contains only the live-session
+	# discovery `ps --filter ...` probes, never a `compose up` or `compose run`
+	# entry. This test locks that no-compose-side-effect invariant so a future
+	# regression that moves the guard later in either layer (or removes
+	# _launch_new's defense in depth) cannot silently re-enable the compose
+	# call. The "does NOT emit 'Launching'" test above is the real RED→GREEN
+	# diagnostic for #104.
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" != *" up "* ]]
+	[[ "$log" != *"compose"* ]]
+}
+
+# ── #103: regex tightening — reject discriminators with length != 4 ──────────
+# _gen_discriminator (lib/paths.sh:18) produces exactly 4 hex chars via
+# `printf '%04x' "$(((RANDOM << 8 ^ RANDOM) & 0xffff))"` — the `& 0xffff` clamp
+# guarantees ≤ 16 bits → exactly 4 chars. The session-name regex must reject
+# anything else so containers created manually with a non-standard suffix do
+# not silently land in _live_sessions / _all_sessions output.
+
+@test "_live_sessions: rejects discs with length != 4 hex chars (#103)" {
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-103-live-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-abc\n'
+	printf 'drydock-myproj-ab12\n'
+	printf 'drydock-myproj-deadbeef\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run _live_sessions "myproj"
+	[ "$status" -eq 0 ]
+	# Only the 4-char disc passes the anchored {4} post-filter grep.
+	[ "$output" = "drydock-myproj-ab12" ]
+}
+
+@test "_all_sessions: rejects discs with length != 4 hex chars (#103)" {
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-103-all-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-abc\n'
+	printf 'drydock-myproj-ab12\n'
+	printf 'drydock-myproj-deadbeef\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run _all_sessions "myproj"
+	[ "$status" -eq 0 ]
+	[ "$output" = "drydock-myproj-ab12" ]
 }
