@@ -113,6 +113,21 @@ STUB
 	[[ "$output" != *"[1]"* ]]
 }
 
+# ── Scenario (b-no-tty): no arg + 1 live session + no TTY → exit 2 ────────────
+
+@test "cmd_attach: no arg + 1 live session + no TTY → exits 2 without invoking compose exec (FIX-5)" {
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	# Do NOT override _drydock_has_tty — tests run without a TTY by default.
+
+	run cmd_attach 2>&1
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"TTY"* ]] || [[ "$output" == *"terminal"* ]] || [[ "$output" == *"tty"* ]]
+	# The TTY guard MUST fire before compose exec is invoked.
+	! grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
+}
+
 # ── Scenario (d): no arg + N>1 + no-TTY → list + exit 2 ──────────────────────
 
 @test "cmd_attach: no arg + N>1 sessions + no-TTY → exit 2 (REQ-7-M sub-scenario d)" {
