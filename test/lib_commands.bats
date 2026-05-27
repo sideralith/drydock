@@ -300,6 +300,74 @@ setup() {
 	[ -f "$CONTAINER_ENGRAM/engram.db" ]
 }
 
+# ── cmd_setup / cmd_sync: symlink dereferencing (issue: skills handoff) ──────
+# Host ~/.claude/skills/ commonly contains symlinks to plugin skills living
+# outside the .claude/ tree (e.g. ../../.agents/skills/handoff). Without
+# dereferencing, those symlinks land in the container prototype with their
+# host-side relative target, which does NOT exist in the container — the
+# skill becomes a broken symlink and Claude Code cannot load it.
+# cmd_setup uses cp -aL (host, pre-image-build); cmd_sync uses rsync
+# --copy-unsafe-links (container, via docker run).
+
+@test "cmd_setup: external symlink in HOST_CLAUDE/skills/ is dereferenced into CONTAINER_CLAUDE" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# External skill tree outside HOST_CLAUDE (mirrors host ~/.agents/skills/).
+	local external_tree="$BATS_TEST_TMPDIR/agents/skills/handoff"
+	mkdir -p "$external_tree"
+	printf 'real skill content\n' >"$external_tree/SKILL.md"
+
+	# Symlink inside HOST_CLAUDE/skills/ pointing to the external tree.
+	mkdir -p "$HOST_CLAUDE/skills"
+	ln -s "$external_tree" "$HOST_CLAUDE/skills/handoff"
+
+	rm -rf "$CONTAINER_CLAUDE"
+	run cmd_setup
+	[ "$status" -eq 0 ]
+
+	# After cp -aL, the destination MUST be a real directory (not a symlink)
+	# with the original content preserved. A symlink would be a regression.
+	[ -d "$CONTAINER_CLAUDE/skills/handoff" ]
+	[ ! -L "$CONTAINER_CLAUDE/skills/handoff" ]
+	[ -f "$CONTAINER_CLAUDE/skills/handoff/SKILL.md" ]
+	[ "$(cat "$CONTAINER_CLAUDE/skills/handoff/SKILL.md")" = "real skill content" ]
+}
+
+@test "cmd_sync: rsync args include --copy-unsafe-links" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+
+	# The docker invocation must carry --copy-unsafe-links so symlinks whose
+	# target escapes the source tree are materialized in the destination.
+	grep -q -- '--copy-unsafe-links' "$DOCKER_CALL_LOG"
+}
+
 # ── cmd_status: 2-state engram reporting ─────────────────────────────────────
 
 @test "cmd_status: engram not usable — output contains 'not detected (opt-in)'" {

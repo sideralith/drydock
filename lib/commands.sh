@@ -138,7 +138,14 @@ cmd_setup() {
 
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
 		note "Copying $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)..."
-		cp -a "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
+		# -L dereferences symlinks so targets outside HOST_CLAUDE (e.g. plugin
+		# skills symlinked from ~/.agents/skills/ into ~/.claude/skills/) land
+		# in the prototype as real files. Without -L, those symlinks copy
+		# verbatim and break in the container where the external target tree
+		# isn't mounted. cmd_sync uses rsync --copy-unsafe-links for the same
+		# reason on the upgrade path. cmd_setup runs pre-image-build so it
+		# cannot use docker run; the host's cp is the only tool available.
+		cp -aL "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
 		# Purge immediately — closes the credential window between cp -a and the
 		# deferred unconditional purge below (which covers the upgrade path).
 		rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
@@ -243,7 +250,7 @@ cmd_sync() {
 		-v "$CONTAINER_CLAUDE":/dst:rw \
 		--user "$(id -u):$(id -g)" \
 		"$IMAGE" \
-		rsync -au --delete \
+		rsync -au --delete --copy-unsafe-links \
 		--exclude='sessions/' \
 		--exclude='projects/' \
 		--exclude='file-history/' \
