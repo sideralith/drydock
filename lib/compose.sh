@@ -1057,6 +1057,10 @@ ensure_runtime_dirs() {
 	# breaking perms. Idempotent mkdir -p closes that gap cheaply on every
 	# invocation.
 	mkdir -p "$CONTAINER_CLAUDE/hooks"
+	# Same class of defense for the ~/.config/gh bind-mount source (#109). On
+	# hosts without gh installed, the source path is absent; the daemon would
+	# auto-create it as root-owned, later breaking `gh auth login` on host.
+	mkdir -p "$HOME/.config/gh"
 	# One-time consolidation of pre-upgrade scattered per-session projects/ trees
 	# into the shared store (issue #68). Sentinel-gated; no-op after first run.
 	migrate_projects_to_shared_store

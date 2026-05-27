@@ -151,6 +151,41 @@ setup() {
 	[ -d "$CONTAINER_CLAUDE/hooks" ]
 }
 
+@test "#109 ensure_runtime_dirs: creates \$HOME/.config/gh/ as defense-in-depth (host without gh)" {
+	# On a host without gh installed, ~/.config/gh/ does not exist. The
+	# docker-compose.yml mount `${HOME}/.config/gh:${HOME}/.config/gh:rw` causes
+	# the Docker daemon (root) to auto-create the source as root-owned, which
+	# later breaks `gh auth login` on host if gh is installed afterwards. Same
+	# class of bug as #71 (hooks subdir). The fix is a single idempotent
+	# mkdir -p in ensure_runtime_dirs that pre-creates the source as the user.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Pre-existing prototype so _needs_setup stays 0 and the test isolates
+	# the gh-dir mkdir behavior from cmd_setup.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	# Precondition: fresh host with no gh config.
+	rm -rf "$HOME/.config/gh"
+	[ ! -d "$HOME/.config/gh" ]
+
+	cmd_setup() { :; }
+
+	ensure_runtime_dirs
+
+	[ -d "$HOME/.config/gh" ]
+}
+
 @test "ensure_runtime_dirs: engram usable + isolated + missing CONTAINER_ENGRAM — DOES trigger cmd_setup" {
 	setup_engram_on_path
 	setup_plain_linux_seams
