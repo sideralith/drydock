@@ -169,12 +169,17 @@ drydock() {
 @test "drydock stop: dispatched (not 'unknown command') (REQ-N7, T-5)" {
   run bash -c '"$1" stop 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" != *"unknown command"* ]]
-  # Regression guard (#112): cmd_stop MUST NOT issue a destructive call
+  # Regression guard (#112): cmd_stop MUST NOT issue "docker rm -f"
   # against any container. The mock logs every invocation's args (without
-  # the "docker" prefix), so a future refactor that moves docker rm -f
+  # the "docker" prefix), so a future refactor that moves the rm -f call
   # ahead of the live-session count check would leave "rm -f ..." in the
   # log and fail this assertion. cli_surface.bats setup() routes DOCKER
   # through mock-docker, so a real-daemon call never reaches the host.
+  #
+  # Narrow by design: matches today's only destructive idiom in cmd_stop
+  # (lib/commands.sh:1972). If cmd_stop ever adopts other destructive verbs
+  # (docker kill, docker stop, docker rm without -f), the guard must be
+  # widened accordingly.
   ! grep -qE '^rm -f' "$DOCKER_CALL_LOG"
 }
 
