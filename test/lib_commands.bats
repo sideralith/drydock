@@ -363,9 +363,58 @@ setup() {
 	run cmd_sync
 	[ "$status" -eq 0 ]
 
-	# The docker invocation must carry --copy-unsafe-links so symlinks whose
-	# target escapes the source tree are materialized in the destination.
+	# The docker invocation must carry --copy-unsafe-links as belt-and-
+	# suspenders for symlinks that escape the source tree (even though the
+	# staging step on the host already dereferences them; see next test).
 	grep -q -- '--copy-unsafe-links' "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_sync: docker source mount points at host staging dir, not HOST_CLAUDE" {
+	# Regression guard for the "symlink has no referent" rsync failure: the
+	# container-side rsync only sees its bind-mounts, so symlinks whose target
+	# escapes HOST_CLAUDE (e.g. plugin skills symlinked from ~/.agents/skills/)
+	# must be dereferenced on the host BEFORE the docker run. The contract is:
+	# /src must mount the staging dir created under $TMPDIR, NOT HOST_CLAUDE
+	# directly. Without this, cp -aL on the host never runs and the original
+	# symlink-no-referent error returns.
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Place an external symlink under HOST_CLAUDE/skills/ — the exact pattern
+	# the bug reproduces (plugin skills under ~/.agents/skills/).
+	local external="$BATS_TEST_TMPDIR/agents/skills/handoff"
+	mkdir -p "$external"
+	printf 'real skill\n' >"$external/SKILL.md"
+	mkdir -p "$HOST_CLAUDE/skills"
+	ln -s "$external" "$HOST_CLAUDE/skills/handoff"
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	# Use a known TMPDIR so we can assert the staging path pattern.
+	export TMPDIR="$BATS_TEST_TMPDIR/stage"
+	mkdir -p "$TMPDIR"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+
+	# /src must mount the staging dir under TMPDIR, matching the mktemp -d
+	# pattern drydock-sync.XXXXXX.
+	grep -qE -- "-v ${TMPDIR}/drydock-sync\.[A-Za-z0-9]+:/src:ro" "$DOCKER_CALL_LOG"
+	# /src must NOT mount HOST_CLAUDE directly — that's the broken path.
+	! grep -qE -- "-v ${HOST_CLAUDE}:/src:ro" "$DOCKER_CALL_LOG"
+	# Staging dir must be cleaned up after cmd_sync returns (no leak).
+	[ -z "$(find "$TMPDIR" -maxdepth 1 -name 'drydock-sync.*' -print -quit)" ]
 }
 
 # ── cmd_status: 2-state engram reporting ─────────────────────────────────────
