@@ -35,6 +35,14 @@ services:
 
     stdin_open: true
     tty: true
+    # Tini as PID 1 (#112). Reaps zombies + forwards signals correctly. NOT a
+    # full fix on its own — the kernel still tears down the PID namespace when
+    # tini exits with its main child. The actual fix for #112 is the supervisor
+    # model used by cmd_run / _launch_new (sleep infinity as the main child of
+    # tini, claude attached via `compose exec`); see lib/commands.sh nested
+    # path. Tini is complementary: zombie reaping under either model + cleaner
+    # exit logs when claude does crash.
+    init: true
     working_dir: "${PROJECT_DIR}"
 
     # ── Env passthrough ──────────────────────────────────────────────────────

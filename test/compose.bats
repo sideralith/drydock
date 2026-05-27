@@ -242,3 +242,12 @@ STUB
   ! grep -E '^\s+-\s+"\$\{HOME\}/\.claude-container:' \
     "$DRYDOCK_HOME/docker-compose.yml"
 }
+
+@test "docker-compose.yml: drydock service has init: true (#112)" {
+  # #112: tini-as-PID-1 reaps zombies + forwards signals. Complementary to the
+  # supervisor model in cmd_run / _launch_new (sleep infinity as PID 1's main
+  # child). Without init: true the drydock image's claude-as-PID-1 nested
+  # invocations leak <defunct> zombies and have surprising signal semantics.
+  grep -qE '^[[:space:]]+init:[[:space:]]+true[[:space:]]*$' \
+    "$DRYDOCK_HOME/docker-compose.yml"
+}

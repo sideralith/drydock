@@ -389,7 +389,10 @@ pre_flight_notice() {
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]
 	# REQ-9-M, REQ-N2, REQ-N3, SR-10-M: Detect + Delegate model.
-	# - Nested (mux/DRYDOCK_NESTED=1) → ephemeral: compose run --rm -it ... claude
+	# - Nested (mux/DRYDOCK_NESTED=1) → ephemeral supervisor: compose up -d +
+	#   exec -it ... claude + auto-cleanup (down --remove-orphans). Same
+	#   PID-1 model as the non-nested path; ephemeral lifecycle preserved via
+	#   the down call after exec returns. See #112.
 	# - Non-nested, 0 sessions → _launch_new: compose up -d + exec -it ... claude
 	# - Non-nested, ≥1 sessions, TTY → prompt: a/n/s/q
 	# - Non-nested, ≥1 sessions, no-TTY → list + exit 2
@@ -410,19 +413,41 @@ cmd_run() {
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
 
-	# ── Nested detect (REQ-N2, SR-10-M) ──────────────────────────────────────
+	# ── Nested detect (REQ-N2, SR-10-M, #112) ─────────────────────────────────
 	# Treat as nested if any multiplexer var is set OR DRYDOCK_NESTED=1.
+	#
+	# Issue #112: previously this path used `compose run --rm drydock claude`,
+	# making claude PID 1's main child. When claude crashes (heavy CPU load
+	# from e.g. `scripts/test.sh` exceeds V8's event loop), PID 1 exits → the
+	# kernel SIGKILLs the entire PID namespace → any detached children die
+	# with it. The supervisor model below mirrors `_launch_new` (non-nested
+	# path): `up -d` brings the container up with the Dockerfile's `sleep
+	# infinity` as PID 1's main child; `exec -it ... claude` attaches claude
+	# as a transient child of PID 1. When claude exits (clean or crash), the
+	# container stays alive — descendant processes can finish flushing — and
+	# the explicit `down --remove-orphans` after exec returns preserves the
+	# ephemeral lifecycle promised to nested callers.
 	if [ -n "${ZELLIJ:-}${TMUX:-}${STY:-}" ] || [ "${DRYDOCK_NESTED:-}" = "1" ]; then
 		note "Nested session detected — launching ephemeral Claude in $project_dir"
 		export_compose_env "$project_dir"
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		local _name="$DRYDOCK_SESSION_NAME"
-		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
-		# exec replaces the process in production. return 0 is a test safety-net:
-		# if exec() is overridden by a test stub (which returns without replacing
-		# the process), return ensures we don't fall through to the non-nested path.
-		return 0
+		"$DOCKER" compose "${compose_args[@]}" -p "$_name" up -d
+		# SIGINT/SIGTERM trap: if the user kills the drydock process itself,
+		# still tear down the container so we do not leak an "ephemeral"
+		# session. Cleanup is idempotent (compose down on a stopped project
+		# is a no-op). String form so the trap evaluates the variables at
+		# fire time, in this function's scope.
+		# shellcheck disable=SC2064
+		trap "\"$DOCKER\" compose ${compose_args[*]} -p \"$_name\" down --remove-orphans >/dev/null 2>&1 || true; exit 130" INT TERM
+		local rc=0
+		# `|| rc=$?` keeps `set -e` from skipping the cleanup when claude
+		# exits non-zero (Ctrl-C inside claude returns 130).
+		"$DOCKER" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}" || rc=$?
+		trap - INT TERM
+		"$DOCKER" compose "${compose_args[@]}" -p "$_name" down --remove-orphans >/dev/null 2>&1 || true
+		return "$rc"
 	fi
 
 	# ── Non-nested path ───────────────────────────────────────────────────────

@@ -2928,66 +2928,113 @@ _setup_cmd_run_t4() {
 	unset ZELLIJ TMUX STY DRYDOCK_NESTED
 }
 
-# ── Nested detect: $ZELLIJ set → ephemeral path (compose run --rm) ────────────
+# ── Nested detect: supervisor model (REQ-N2, SR-10-M, #112) ───────────────────
+# #112 rewrote the nested path from `compose run --rm drydock claude` (claude
+# as PID 1's main child — namespace tears down on crash, killing detached
+# children) to the supervisor model used by _launch_new: `compose up -d`
+# brings the container up with the Dockerfile's `sleep infinity` as PID 1's
+# main child; `compose exec -it drydock claude` attaches claude as a transient
+# child. Ephemeral lifecycle preserved via `compose down --remove-orphans`
+# after exec returns.
 
-@test "cmd_run: ZELLIJ set → ephemeral path (compose run --rm) (REQ-N2, SR-10-M)" {
+@test "cmd_run: ZELLIJ set → supervisor path (up + exec + down) (REQ-N2, SR-10-M, #112)" {
 	_setup_cmd_run_t4
-	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 	export ZELLIJ="zellij-session-1"
 
 	run cmd_run "$CMD_T4_PROJECT_DIR"
 	[ "$status" -eq 0 ]
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+	[[ "$log" == *"up -d"* ]]
+	[[ "$log" == *"exec -it drydock claude"* ]]
+	[[ "$log" == *"down --remove-orphans"* ]]
 }
 
-@test "cmd_run: TMUX set → ephemeral path (compose run --rm) (REQ-N2)" {
+@test "cmd_run: TMUX set → supervisor path (up + exec + down) (REQ-N2, #112)" {
 	_setup_cmd_run_t4
-	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 	export TMUX="/tmp/tmux-1000/default,12345,0"
 
 	run cmd_run "$CMD_T4_PROJECT_DIR"
 	[ "$status" -eq 0 ]
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+	[[ "$log" == *"up -d"* ]]
+	[[ "$log" == *"exec -it drydock claude"* ]]
+	[[ "$log" == *"down --remove-orphans"* ]]
 }
 
-@test "cmd_run: STY set → ephemeral path (compose run --rm) (REQ-N2)" {
+@test "cmd_run: STY set → supervisor path (up + exec + down) (REQ-N2, #112)" {
 	_setup_cmd_run_t4
-	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 	export STY="12345.pts-1.hostname"
 
 	run cmd_run "$CMD_T4_PROJECT_DIR"
 	[ "$status" -eq 0 ]
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+	[[ "$log" == *"up -d"* ]]
+	[[ "$log" == *"exec -it drydock claude"* ]]
+	[[ "$log" == *"down --remove-orphans"* ]]
 }
 
-@test "cmd_run: DRYDOCK_NESTED=1 → ephemeral path regardless of mux vars (SR-NEW-2)" {
+@test "cmd_run: DRYDOCK_NESTED=1 → supervisor path regardless of mux vars (SR-NEW-2, #112)" {
 	_setup_cmd_run_t4
-	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 	export DRYDOCK_NESTED=1
 
 	run cmd_run "$CMD_T4_PROJECT_DIR"
 	[ "$status" -eq 0 ]
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	[[ "$log" == *"run"* ]] && [[ "$log" == *"--rm"* ]]
+	[[ "$log" == *"up -d"* ]]
+	[[ "$log" == *"exec -it drydock claude"* ]]
+	[[ "$log" == *"down --remove-orphans"* ]]
 }
 
-@test "cmd_run: nested path does NOT use compose up -d (SR-10-M — ephemeral, no persistent)" {
+@test "cmd_run: nested path does NOT use 'compose run --rm' (#112 regression guard)" {
 	_setup_cmd_run_t4
-	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
 	export ZELLIJ="zellij-session-1"
 
 	run cmd_run "$CMD_T4_PROJECT_DIR"
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
-	# Ephemeral path must NOT include "up" (which would start a persistent container).
-	[[ "$log" != *" up "* ]]
+	# Old code (#112) used `compose ... run --rm ... drydock claude`, making
+	# claude PID 1's main child. Under heavy load that tears down the PID
+	# namespace and kills detached children. Guard: supervisor model must
+	# not regress to that pattern.
+	[[ "$log" != *"run --rm"* ]]
+}
+
+@test "cmd_run: nested path cleanup runs even when claude exits non-zero (#112 — set -e guard)" {
+	_setup_cmd_run_t4
+	export ZELLIJ="zellij-session-1"
+	# Per-subcommand stub: up returns 0, exec (claude) returns non-zero
+	# (simulates a crash mid-session), down returns 0. The `|| rc=$?`
+	# pattern in cmd_run must keep `set -e` from skipping cleanup, and the
+	# non-zero rc from exec must propagate to cmd_run's return code.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-exec-fail-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${DOCKER_CALL_LOG}"
+# Find which compose subcommand this is.
+for arg in "$@"; do
+  case "$arg" in
+    up)   exit 0 ;;
+    exec) exit 1 ;;  # simulate claude crash
+    down) exit 0 ;;
+  esac
+done
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	# Cleanup MUST have run despite exec failing.
+	[[ "$log" == *"down --remove-orphans"* ]]
+	# Non-zero rc from exec is propagated to cmd_run.
+	[ "$status" -ne 0 ]
 }
 
 # ── Non-nested, 0 sessions → launch new (up-d + exec) ─────────────────────────
