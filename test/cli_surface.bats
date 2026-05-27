@@ -159,8 +159,9 @@ drydock() {
 }
 
 @test "drydock list: dispatched and exits 0 without container (REQ-N6, T-5)" {
-  # mock-docker returns empty for 'docker ps' → no live sessions → may exit
-  # non-zero. The assertion is only: must NOT say "unknown command".
+  # mock-docker returns empty for 'docker ps' → cmd_list returns 0 with no
+  # rows (lib/commands.sh:1902-1904). The assertion is only: must NOT say
+  # "unknown command".
   run bash -c 'cd "$1" && "$2" list 2>&1' -- "$DRYDOCK_HOME" "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" != *"unknown command"* ]]
 }
@@ -168,6 +169,13 @@ drydock() {
 @test "drydock stop: dispatched (not 'unknown command') (REQ-N7, T-5)" {
   run bash -c '"$1" stop 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" != *"unknown command"* ]]
+  # Regression guard (#112): cmd_stop MUST NOT issue a destructive call
+  # against any container. The mock logs every invocation's args (without
+  # the "docker" prefix), so a future refactor that moves docker rm -f
+  # ahead of the live-session count check would leave "rm -f ..." in the
+  # log and fail this assertion. cli_surface.bats setup() routes DOCKER
+  # through mock-docker, so a real-daemon call never reaches the host.
+  ! grep -qE '^rm -f' "$DOCKER_CALL_LOG"
 }
 
 @test "drydock help output mentions 'new' (T-5 usage surface)" {
