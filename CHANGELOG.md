@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.1] - 2026-05-27
 
 Session-persistence polish. Seven small fixes and test improvements layered on
-top of v0.3.0; all production changes are bounded to `lib/commands.sh`, the
-rest is test surface. No behavior change beyond the seven listed items.
+top of v0.3.0; production changes are bounded to `lib/commands.sh` and
+`lib/compose.sh`, the rest is test surface. No behavior change beyond the
+seven listed items.
 
 ### Fixed
 - **`drydock list` and `drydock stop` now reject substring matches in the
@@ -20,22 +21,26 @@ rest is test surface. No behavior change beyond the seven listed items.
   hypothetical 5+ character `<proj>-abcde` as a 4-char `<proj>-abcd` match.
   Tightened to `[0-9a-f]{4}` so only the documented 4-char discriminator is
   accepted, and swept the test fixtures (`test/cmd_list.bats`,
-  `test/cmd_stop.bats`, `test/cmd_attach.bats`, `test/select_choice.bats`,
-  `test/lib_commands.bats`) to use unambiguous 4-char discriminators. The
-  failure mode was theoretical (no production caller produced a longer
-  discriminator) — the fix forecloses it before it could become real.
+  `test/cmd_stop.bats`, `test/cmd_attach.bats`, `test/cmd_new.bats`,
+  `test/select_choice.bats`, `test/lib_commands.bats`) to use unambiguous
+  4-char discriminators. The failure mode was theoretical (no production
+  caller produced a longer discriminator) — the fix forecloses it before
+  it could become real.
 - **`drydock stop` error message no longer says "no live session" for an
-  Exited container** (#102). The matcher checked only live sessions and
-  reported the live-only wording even when an Exited container of the same
-  name existed. Reworded to distinguish "no session by that name" from
-  "session exists but is already stopped".
+  Exited container** (#102). The matcher already validated against both
+  running and exited sessions (so a user could stop an Exited container by
+  disc), but the not-found error still said "no live session" — misleading
+  for someone trying to remove a stopped session by name. Reworded to
+  "no session (running or exited) named …" so the message reflects what
+  the matcher actually checks.
 - **`drydock` with 0 sessions in a non-TTY shell no longer prints an
   `[info] Starting new container…` line before the TTY guard rejects the
-  invocation** (#104). `cmd_run` emitted `note()` before delegating to
-  `_launch_new`, which then fired its own TTY guard and exited 2. Moved the
-  `note()` after the guard so scripted callers see the friendly
-  "requires a TTY" stderr without a misleading progress message preceding
-  the exit.
+  invocation** (#104). `cmd_run`'s 0-session branch emitted `note()` before
+  delegating to `_launch_new`, which then fired its own TTY guard and
+  exited 2 — leaving the scripted caller with a misleading progress
+  message ahead of the actual error. Added a caller-side TTY guard in
+  `cmd_run` ahead of the `note()`, mirroring `_launch_new`'s existing
+  guard as defense in depth.
 - **`drydock run` no longer fails on a freshly installed host without
   `~/.config/gh`** (#109). `ensure_runtime_dirs` pre-creates the gh CLI's
   config directory on the host so Docker doesn't have to auto-create the
