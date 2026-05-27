@@ -3152,11 +3152,13 @@ STUB
 
 	# Regression net, NOT the #104 diagnostic. _launch_new's pre-existing TTY
 	# guard (FIX-3, 9a371c3) already prevented compose calls in this path
-	# before #104 — pre-fix and post-fix the log is empty here. This test
-	# locks that no-side-effect invariant so a future regression that moves
-	# the guard later in either layer (or removes _launch_new's defense in
-	# depth) cannot silently re-enable the compose call. The "does NOT emit
-	# 'Launching'" test above is the real RED→GREEN diagnostic for #104.
+	# before #104 — pre-fix and post-fix the log contains only the live-session
+	# discovery `ps --filter ...` probes, never a `compose up` or `compose run`
+	# entry. This test locks that no-compose-side-effect invariant so a future
+	# regression that moves the guard later in either layer (or removes
+	# _launch_new's defense in depth) cannot silently re-enable the compose
+	# call. The "does NOT emit 'Launching'" test above is the real RED→GREEN
+	# diagnostic for #104.
 	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
