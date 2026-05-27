@@ -82,45 +82,45 @@ STUB
 
 @test "cmd_stop: explicit disc arg → invokes docker rm -f on the container (REQ-N7)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
-	run cmd_stop "ab12cd34"
+	run cmd_stop "ab12"
 	[ "$status" -eq 0 ]
 	grep -q "rm" "$DOCKER_CALL_LOG"
 }
 
 @test "cmd_stop: explicit disc arg → rm -f uses the full container name (REQ-N7)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
-	run cmd_stop "ab12cd34"
+	run cmd_stop "ab12"
 	[ "$status" -eq 0 ]
-	grep -q "drydock-myproj-ab12cd34" "$DOCKER_CALL_LOG"
+	grep -q "drydock-myproj-ab12" "$DOCKER_CALL_LOG"
 }
 
 @test "cmd_stop: explicit full container name also works (REQ-N7 — _resolve_session_name)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
-	run cmd_stop "drydock-myproj-ab12cd34"
+	run cmd_stop "drydock-myproj-ab12"
 	[ "$status" -eq 0 ]
-	grep -q "drydock-myproj-ab12cd34" "$DOCKER_CALL_LOG"
+	grep -q "drydock-myproj-ab12" "$DOCKER_CALL_LOG"
 }
 
 # ── Scenario (b): no arg + exactly 1 live session → direct stop ──────────────
 
 @test "cmd_stop: no arg + 1 live session → stops it directly without menu (REQ-7-M sub-scenario b)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
 	run cmd_stop
 	[ "$status" -eq 0 ]
 	grep -q "rm" "$DOCKER_CALL_LOG"
-	grep -q "drydock-myproj-ab12cd34" "$DOCKER_CALL_LOG"
+	grep -q "drydock-myproj-ab12" "$DOCKER_CALL_LOG"
 	# No menu shown
 	[[ "$output" != *"[1]"* ]]
 }
@@ -129,8 +129,8 @@ STUB
 
 @test "cmd_stop: no arg + N>1 sessions + no-TTY → exit 2 (REQ-7-M sub-scenario d)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34
-drydock-myproj-ef56ab78")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12
+drydock-myproj-ef56")"
 	export DOCKER="$stub"
 
 	run cmd_stop
@@ -139,8 +139,8 @@ drydock-myproj-ef56ab78")"
 
 @test "cmd_stop: no arg + N>1 sessions + no-TTY → does NOT invoke rm -f (REQ-7-M sub-scenario d)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34
-drydock-myproj-ef56ab78")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12
+drydock-myproj-ef56")"
 	export DOCKER="$stub"
 
 	run cmd_stop
@@ -166,7 +166,7 @@ drydock-myproj-ef56ab78")"
 @test "cmd_stop: explicit cross-project container name → exits non-zero (FIX-3)" {
 	# drydock-otherproject-abc1 does not belong to myproj; must be rejected.
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
 	run cmd_stop "drydock-otherproject-abc1"
@@ -175,7 +175,7 @@ drydock-myproj-ef56ab78")"
 
 @test "cmd_stop: explicit cross-project container name → friendly error message (FIX-3, #102)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
 	run cmd_stop "drydock-otherproject-abc1" 2>&1
@@ -188,7 +188,7 @@ drydock-myproj-ef56ab78")"
 @test "cmd_stop: explicit nonexistent disc → exits non-zero (FIX-3)" {
 	# No session with disc deadbeef.
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
 	run cmd_stop "deadbeef"
@@ -197,7 +197,7 @@ drydock-myproj-ef56ab78")"
 
 @test "cmd_stop: explicit nonexistent disc → does NOT invoke docker rm -f (FIX-3)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
 	run cmd_stop "deadbeef"
@@ -211,10 +211,10 @@ drydock-myproj-ef56ab78")"
 @test "cmd_stop: uses 'rm' (docker rm -f), not 'stop' docker subcommand (REQ-N7)" {
 	# The spec says docker rm -f, not docker stop.
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
-	run cmd_stop "ab12cd34"
+	run cmd_stop "ab12"
 	[ "$status" -eq 0 ]
 	# Must have 'rm' in the log
 	grep -q "rm" "$DOCKER_CALL_LOG"
@@ -228,20 +228,20 @@ drydock-myproj-ef56ab78")"
 	# drydock list shows [Exited] sessions; users must be able to stop them by name.
 	# Split stub: ps (running) returns nothing; ps --all returns the Exited container.
 	local stub
-	stub="$(make_docker_stub_split "" "drydock-myproj-dead1234")"
+	stub="$(make_docker_stub_split "" "drydock-myproj-dead")"
 	export DOCKER="$stub"
 
-	run cmd_stop "dead1234"
+	run cmd_stop "dead"
 	[ "$status" -eq 0 ]
-	grep -q "drydock-myproj-dead1234" "$DOCKER_CALL_LOG"
+	grep -q "drydock-myproj-dead" "$DOCKER_CALL_LOG"
 }
 
 @test "cmd_stop: explicit disc of Exited container → invokes docker rm -f (FIX-4)" {
 	local stub
-	stub="$(make_docker_stub_split "" "drydock-myproj-dead1234")"
+	stub="$(make_docker_stub_split "" "drydock-myproj-dead")"
 	export DOCKER="$stub"
 
-	run cmd_stop "dead1234"
+	run cmd_stop "dead"
 	[ "$status" -eq 0 ]
 	grep -q "rm" "$DOCKER_CALL_LOG"
 }
@@ -249,7 +249,7 @@ drydock-myproj-ef56ab78")"
 @test "cmd_stop: explicit disc not in running or exited → still rejected (FIX-4)" {
 	# Existing rejection behaviour must hold: a name absent from ALL containers is an error.
 	local stub
-	stub="$(make_docker_stub_split "drydock-myproj-ab12cd34" "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_split "drydock-myproj-ab12" "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 
 	run cmd_stop "deadbeef"

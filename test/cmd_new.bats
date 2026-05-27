@@ -28,9 +28,9 @@ setup() {
 	# Stub export_compose_env to set the vars cmd_new needs, without Docker calls.
 	export_compose_env() {
 		export PROJECT_NAME="myproj"
-		export DRYDOCK_DISCRIMINATOR="ab12cd34"
-		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12cd34"
-		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12cd34"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12"
+		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12"
 	}
 
 	# Stub compose_files to return an empty list (no overlays needed for unit tests).
@@ -97,9 +97,9 @@ setup() {
 	_drydock_has_tty() { return 0; }
 	run cmd_new
 	[ "$status" -eq 0 ]
-	# The compose project name (drydock-myproj-ab12cd34) or session name must appear
+	# The compose project name (drydock-myproj-ab12) or session name must appear
 	# in one of the docker compose calls.
-	grep -q "drydock-myproj-ab12cd34\|drydock myproj" "$DOCKER_CALL_LOG" || \
+	grep -q "drydock-myproj-ab12\|drydock myproj" "$DOCKER_CALL_LOG" || \
 		grep -q "compose" "$DOCKER_CALL_LOG"
 }
 

@@ -1882,7 +1882,7 @@ _setup_ensure_synced() {
 	cat >"$stub_dir/docker" <<'STUB'
 #!/usr/bin/env bash
 if [ "${1:-}" = "ps" ]; then
-	printf 'drydock-myproj-a1b2c3d4|Up 5 minutes\n'
+	printf 'drydock-myproj-a1b2|Up 5 minutes\n'
 fi
 exit 0
 STUB
@@ -1895,9 +1895,9 @@ STUB
 
 	run cmd_doctor
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"drydock-myproj-a1b2c3d4"* ]]
+	[[ "$output" == *"drydock-myproj-a1b2"* ]]
 	# T-7: cheat-sheet must use 'drydock attach <disc>' (REQ-8-M).
-	[[ "$output" == *"drydock attach a1b2c3d4"* ]]
+	[[ "$output" == *"drydock attach a1b2"* ]]
 	# T-7: must show 'drydock list' discovery hint (OQ-T3).
 	[[ "$output" == *"drydock list"* ]]
 	# T-7: must NOT emit 'claude --continue' (REQ-N11).
@@ -1931,7 +1931,7 @@ STUB
 	cat >"$stub_dir/docker" <<'STUB'
 #!/usr/bin/env bash
 if [ "${1:-}" = "ps" ]; then
-	printf 'drydock-myproj-a1b2c3d4-shell|Up 2 minutes\n'
+	printf 'drydock-myproj-a1b2-shell|Up 2 minutes\n'
 fi
 exit 0
 STUB
@@ -1944,9 +1944,9 @@ STUB
 
 	run cmd_doctor
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"drydock-myproj-a1b2c3d4-shell"* ]]
+	[[ "$output" == *"drydock-myproj-a1b2-shell"* ]]
 	# A -shell companion reattaches into an interactive bash, not claude.
-	[[ "$output" == *"docker exec -it drydock-myproj-a1b2c3d4-shell bash"* ]]
+	[[ "$output" == *"docker exec -it drydock-myproj-a1b2-shell bash"* ]]
 
 	cd - >/dev/null
 }
@@ -3065,7 +3065,7 @@ _setup_cmd_run_t4() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -3089,7 +3089,7 @@ STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -3111,7 +3111,7 @@ STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -3120,4 +3120,52 @@ STUB
 
 	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
 	[[ "$output" == *"drydock attach"* ]] || [[ "$output" == *"drydock new"* ]]
+}
+
+# ── #103: regex tightening — reject discriminators with length != 4 ──────────
+# _gen_discriminator (lib/paths.sh:18) produces exactly 4 hex chars via
+# `printf '%04x' "$(((RANDOM << 8 ^ RANDOM) & 0xffff))"` — the `& 0xffff` clamp
+# guarantees ≤ 16 bits → exactly 4 chars. The session-name regex must reject
+# anything else so containers created manually with a non-standard suffix do
+# not silently land in _live_sessions / _all_sessions output.
+
+@test "_live_sessions: rejects discs with length != 4 hex chars (#103)" {
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-103-live-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-abc\n'
+	printf 'drydock-myproj-ab12\n'
+	printf 'drydock-myproj-deadbeef\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run _live_sessions "myproj"
+	[ "$status" -eq 0 ]
+	# Only the 4-char disc passes the anchored {4} post-filter grep.
+	[ "$output" = "drydock-myproj-ab12" ]
+}
+
+@test "_all_sessions: rejects discs with length != 4 hex chars (#103)" {
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-103-all-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "ps" ]; then
+	printf 'drydock-myproj-abc\n'
+	printf 'drydock-myproj-ab12\n'
+	printf 'drydock-myproj-deadbeef\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	run _all_sessions "myproj"
+	[ "$status" -eq 0 ]
+	[ "$output" = "drydock-myproj-ab12" ]
 }

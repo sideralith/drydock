@@ -378,9 +378,9 @@ pre_flight_notice() {
 	# filter passed through that don't strictly match (e.g. -shell variants when
 	# the Docker daemon applies the regex less strictly than POSIX ERE).
 	existing="$("$DOCKER" ps \
-		--filter "name=^drydock-${PROJECT_NAME}-[0-9a-f]+$" \
+		--filter "name=^drydock-${PROJECT_NAME}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
-		grep -E "^drydock-${PROJECT_NAME}-[0-9a-f]+$" || true)"
+		grep -E "^drydock-${PROJECT_NAME}-[0-9a-f]{4}$" || true)"
 	count="$(printf '%s' "$existing" | grep -c . || true)"
 	[ "$count" -gt 0 ] && note "drydock: $count existing drydock-${PROJECT_NAME}-* session(s) running; starting another."
 	return 0
@@ -432,9 +432,9 @@ cmd_run() {
 	# Query live run sessions for this project (no -shell companions).
 	local live_sessions live_count
 	live_sessions="$("$DOCKER" ps \
-		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--filter "name=^drydock-${proj}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
-		grep -E "^drydock-${proj}-[0-9a-f]+$" || true)"
+		grep -E "^drydock-${proj}-[0-9a-f]{4}$" || true)"
 	live_count="$(printf '%s\n' "$live_sessions" | grep -c . || true)"
 
 	if [ "$live_count" -eq 0 ]; then
@@ -840,11 +840,11 @@ cmd_doctor() {
 	local _proj_name _sess_lines _sess_name _sess_status _sess_disc
 	_proj_name="$(_current_project_name)"
 	_sess_lines="$("$DOCKER" ps \
-		--filter "name=^drydock-${_proj_name}-[0-9a-f]+(-shell)?\$" \
+		--filter "name=^drydock-${_proj_name}-[0-9a-f]{4}(-shell)?\$" \
 		--format '{{.Names}}|{{.Status}}' 2>/dev/null || true)"
 	# Some Docker versions don't fully honor anchored ERE in --filter; post-filter
 	# defensively so cross-project containers can never leak in.
-	_sess_lines="$(printf '%s\n' "$_sess_lines" | grep -E "^drydock-${_proj_name}-[0-9a-f]+(-shell)?\|" || true)"
+	_sess_lines="$(printf '%s\n' "$_sess_lines" | grep -E "^drydock-${_proj_name}-[0-9a-f]{4}(-shell)?\|" || true)"
 	# Discovery hint: always show 'drydock list' so users know how to see all sessions.
 	_dr_item "·" "discovery" "" "see all sessions: drydock list"
 	if [ -z "$_sess_lines" ]; then
@@ -1578,9 +1578,9 @@ cmd_unlink() {
 _live_sessions() {
 	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
 	"$DOCKER" ps \
-		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--filter "name=^drydock-${proj}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
-		grep -E "^drydock-${proj}-[0-9a-f]+$" || true
+		grep -E "^drydock-${proj}-[0-9a-f]{4}$" || true
 }
 
 # _all_sessions — list ALL run-session container names for PROJECT_NAME (running + exited).
@@ -1591,9 +1591,9 @@ _live_sessions() {
 _all_sessions() {
 	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
 	"$DOCKER" ps --all \
-		--filter "name=^drydock-${proj}-[0-9a-f]+$" \
+		--filter "name=^drydock-${proj}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
-		grep -E "^drydock-${proj}-[0-9a-f]+$" || true
+		grep -E "^drydock-${proj}-[0-9a-f]{4}$" || true
 }
 
 # _resolve_session_name disc_or_full [project_name]

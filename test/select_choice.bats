@@ -411,7 +411,7 @@ _setup_cmd_run_sc() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -434,7 +434,7 @@ STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
-	printf 'drydock-${proj_name}-ab12cd34\n'
+	printf 'drydock-${proj_name}-ab12\n'
 fi
 exit 0
 STUB
@@ -496,8 +496,8 @@ STUB
 	export GUM="$stub_path"
 	unset DRYDOCK_DISABLE_GUM
 
-	local sessions="drydock-myproj-ab12cd34
-drydock-myproj-ef56ab78"
+	local sessions="drydock-myproj-ab12
+drydock-myproj-ef56"
 
 	run _pick_session_menu "$sessions"
 	[ "$status" -eq 0 ]
@@ -511,8 +511,8 @@ drydock-myproj-ef56ab78"
 	export GUM="$stub"
 	unset DRYDOCK_DISABLE_GUM
 
-	local sessions="drydock-myproj-ab12cd34
-drydock-myproj-ef56ab78"
+	local sessions="drydock-myproj-ab12
+drydock-myproj-ef56"
 
 	run _pick_session_menu "$sessions"
 	[ "$status" -eq 130 ]
@@ -527,8 +527,8 @@ drydock-myproj-ef56ab78"
 	export DRYDOCK_DISABLE_GUM=1
 	unset DRYDOCK_DISABLE_FZF
 
-	local sessions="drydock-myproj-ab12cd34
-drydock-myproj-ef56ab78"
+	local sessions="drydock-myproj-ab12
+drydock-myproj-ef56"
 
 	run _pick_session_menu "$sessions"
 	[ "$status" -eq 0 ]

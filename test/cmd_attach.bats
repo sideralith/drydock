@@ -57,16 +57,16 @@ STUB
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {
-	# GIVEN a live container drydock-myproj-ab12cd34
-	# WHEN cmd_attach ab12cd34 is called with a TTY
+	# GIVEN a live container drydock-myproj-ab12
+	# WHEN cmd_attach ab12 is called with a TTY
 	# THEN docker compose exec is called with claude --resume
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 	# Simulate TTY presence — cmd_attach requires a TTY (FIX-5).
 	_drydock_has_tty() { return 0; }
 
-	run cmd_attach "ab12cd34"
+	run cmd_attach "ab12"
 	[ "$status" -eq 0 ]
 	# Log format: "compose <args> exec -it drydock claude --resume"
 	grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
@@ -75,11 +75,11 @@ STUB
 
 @test "cmd_attach: explicit disc arg → NO menu shown (REQ-7-M sub-scenario a)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 	_drydock_has_tty() { return 0; }
 
-	run cmd_attach "ab12cd34"
+	run cmd_attach "ab12"
 	[ "$status" -eq 0 ]
 	# Must not show disambiguation menu
 	[[ "$output" != *"[1]"* ]]
@@ -89,11 +89,11 @@ STUB
 
 @test "cmd_attach: explicit disc arg + no TTY → exits 2 with friendly error (FIX-5)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 	# Do NOT override _drydock_has_tty — tests run without a TTY by default.
 
-	run cmd_attach "ab12cd34" 2>&1
+	run cmd_attach "ab12" 2>&1
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"TTY"* ]] || [[ "$output" == *"terminal"* ]] || [[ "$output" == *"tty"* ]]
 }
@@ -102,7 +102,7 @@ STUB
 
 @test "cmd_attach: no arg + 1 live session → attach directly without menu (REQ-7-M sub-scenario b)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
 	_drydock_has_tty() { return 0; }
 
@@ -118,8 +118,8 @@ STUB
 @test "cmd_attach: no arg + N>1 sessions + no-TTY → exit 2 (REQ-7-M sub-scenario d)" {
 	# Two live sessions; stdin is not a TTY when run via 'run cmd_attach'.
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34
-drydock-myproj-ef56ab78")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12
+drydock-myproj-ef56")"
 	export DOCKER="$stub"
 
 	run cmd_attach
@@ -128,8 +128,8 @@ drydock-myproj-ef56ab78")"
 
 @test "cmd_attach: no arg + N>1 sessions + no-TTY → stderr lists sessions (REQ-7-M sub-scenario d)" {
 	local stub
-	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12cd34
-drydock-myproj-ef56ab78")"
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12
+drydock-myproj-ef56")"
 	export DOCKER="$stub"
 
 	run cmd_attach 2>&1
@@ -175,7 +175,7 @@ drydock-myproj-ef56ab78")"
 	# A container from a different project should not match.
 	local stub
 	# Return a container from a different project only
-	stub="$(make_docker_stub_with_sessions "drydock-otherproject-ab12cd34")"
+	stub="$(make_docker_stub_with_sessions "drydock-otherproject-ab12")"
 	export DOCKER="$stub"
 
 	# With no arg and only a different project's container, should exit non-zero
