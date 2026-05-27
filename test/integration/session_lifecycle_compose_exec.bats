@@ -9,7 +9,7 @@
 #
 #   L-A: compose up -d → container Up; /proc/1/cmdline contains "sleep" (REQ-1-M).
 #   L-B: SIGHUP to host-side compose exec PID → container PID 1 survives (REQ-1-M).
-#   L-C: Second compose exec connects to the same container (same PID 1) (SR-1-M).
+#   L-C: Second compose exec connects to the same container (same container ID) (SR-1-M).
 #   L-D: compose down → container absent; new compose up -d starts clean (REQ-N7).
 #
 # REQUIRES: DRYDOCK_INTEGRATION=1 (env var) to run.
@@ -132,26 +132,36 @@ get_compose_args() {
 	[ "$state_after" = "running" ]
 }
 
-# ── L-C: Second exec connects to the same container (same PID 1) ────────────
+# ── L-C: Second exec connects to the same container (same container ID) ─────
 
-@test "L-C: second compose exec connects to the same container — same PID 1 (SR-1-M)" {
+@test "L-C: second compose exec connects to the same container — same container ID (SR-1-M)" {
 	local -a compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(get_compose_args)
 
 	docker compose "${compose_args[@]}" -p "$INTEGRATION_SESSION_NAME" up -d
 
-	# First exec: capture PID 1.
-	local pid1_first
-	pid1_first="$(docker compose "${compose_args[@]}" -p "$INTEGRATION_SESSION_NAME" \
-		exec drydock cat /proc/1/stat | awk '{print $1}')"
+	# Capture the container's identity FROM INSIDE the container.
+	# /etc/hostname is set by Docker to the container's short ID by default;
+	# two exec calls landing in DIFFERENT containers would return DIFFERENT
+	# hostnames. (The prior assertion compared the first field of /proc/1/stat,
+	# which is always "1" in any container's PID namespace — trivially true.)
+	local hostname_first
+	hostname_first="$(docker compose "${compose_args[@]}" -p "$INTEGRATION_SESSION_NAME" \
+		exec -T drydock cat /etc/hostname | tr -d '[:space:]')"
 
-	# Second exec: capture PID 1 again.
-	local pid1_second
-	pid1_second="$(docker compose "${compose_args[@]}" -p "$INTEGRATION_SESSION_NAME" \
-		exec drydock cat /proc/1/stat | awk '{print $1}')"
+	local hostname_second
+	hostname_second="$(docker compose "${compose_args[@]}" -p "$INTEGRATION_SESSION_NAME" \
+		exec -T drydock cat /etc/hostname | tr -d '[:space:]')"
 
-	# Same PID 1 — same container, same process.
-	[ "$pid1_first" = "$pid1_second" ]
+	# Cross-check against the host-side compose-project view to confirm both
+	# exec calls landed in the container compose tracks for this project.
+	local cid_short
+	cid_short="$(docker compose -p "$INTEGRATION_SESSION_NAME" ps -q drydock 2>/dev/null \
+		| head -1 | cut -c1-12)"
+
+	[ -n "$hostname_first" ]
+	[ "$hostname_first" = "$hostname_second" ]
+	[ "$hostname_first" = "$cid_short" ]
 }
 
 # ── L-D: compose down → absent; new compose up -d starts clean ──────────────
