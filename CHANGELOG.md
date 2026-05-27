@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-27
+
+Session-persistence polish. Seven small fixes and test improvements layered on
+top of v0.3.0; all production changes are bounded to `lib/commands.sh`, the
+rest is test surface. No behavior change beyond the seven listed items.
+
+### Fixed
+- **`drydock list` and `drydock stop` now reject substring matches in the
+  session discriminator** (#103). `_live_sessions` and `_all_sessions` used
+  `[0-9a-f]+` to filter container names, which would have admitted a
+  hypothetical 5+ character `<proj>-abcde` as a 4-char `<proj>-abcd` match.
+  Tightened to `[0-9a-f]{4}` so only the documented 4-char discriminator is
+  accepted, and swept the test fixtures (`test/cmd_list.bats`,
+  `test/cmd_stop.bats`, `test/cmd_attach.bats`, `test/select_choice.bats`,
+  `test/lib_commands.bats`) to use unambiguous 4-char discriminators. The
+  failure mode was theoretical (no production caller produced a longer
+  discriminator) — the fix forecloses it before it could become real.
+- **`drydock stop` error message no longer says "no live session" for an
+  Exited container** (#102). The matcher checked only live sessions and
+  reported the live-only wording even when an Exited container of the same
+  name existed. Reworded to distinguish "no session by that name" from
+  "session exists but is already stopped".
+- **`drydock` with 0 sessions in a non-TTY shell no longer prints an
+  `[info] Starting new container…` line before the TTY guard rejects the
+  invocation** (#104). `cmd_run` emitted `note()` before delegating to
+  `_launch_new`, which then fired its own TTY guard and exited 2. Moved the
+  `note()` after the guard so scripted callers see the friendly
+  "requires a TTY" stderr without a misleading progress message preceding
+  the exit.
+- **`drydock run` no longer fails on a freshly installed host without
+  `~/.config/gh`** (#109). `ensure_runtime_dirs` pre-creates the gh CLI's
+  config directory on the host so Docker doesn't have to auto-create the
+  bind-mount source as root on the first run after install, which would
+  leave a root-owned `~/.config/gh` the unprivileged user couldn't write
+  to later.
+
+### Tests
+- **`test/integration/session_lifecycle_compose_exec.bats` L-C now compares
+  container identity, not `/proc/1/stat`** (#105). The old assertion compared
+  the first field of `/proc/1/stat` — always `1` in any container's PID
+  namespace, so two execs landing in DIFFERENT containers would still have
+  passed. Now captures `/etc/hostname` (Docker default = container short ID)
+  from inside each exec and cross-checks against `compose ps -q drydock`, so
+  the failure mode L-C exists to detect is actually falsified.
+- **`test/cli_surface.bats` no longer risks killing a live container during
+  test runs** (#112). The CLI-surface smoke tests invoked the real
+  `bin/drydock` via subprocess for unrelated path coverage; if a developer
+  happened to have a live `drydock-<proj>-<disc>` container while the suite
+  ran, certain code paths would call `docker rm -f` against it. Added a
+  `DOCKER` env-var seam so the tests redirect docker invocations to a stub
+  by default, and the live-container kill path is structurally unreachable
+  from the test process.
+- **`test/cmd_attach.bats` covers the no-arg + 1 session + no-TTY case**
+  (#106). With the v0.3.0 `cmd_attach` TTY guard in place, every other
+  sub-scenario was asserted (explicit name + no-TTY, no-arg + N>1 + no-TTY,
+  with-TTY paths) except this one. Added a test that asserts status 2 AND
+  that the TTY guard fires before `docker compose exec` is invoked.
+
 ## [0.3.0] - 2026-05-25
 
 Session persistence and multi-session UX. The container moves from
