@@ -15,17 +15,18 @@ top of v0.3.0; production changes are bounded to `lib/commands.sh` and
 seven listed items.
 
 ### Fixed
-- **`drydock list` and `drydock stop` now reject substring matches in the
-  session discriminator** (#103). `_live_sessions` and `_all_sessions` used
-  `[0-9a-f]+` to filter container names, which would have admitted a
-  hypothetical 5+ character `<proj>-abcde` as a 4-char `<proj>-abcd` match.
-  Tightened to `[0-9a-f]{4}` so only the documented 4-char discriminator is
-  accepted, and swept the test fixtures (`test/cmd_list.bats`,
+- **Session-discovery regex now matches exactly 4 hex chars** (#103). The
+  session-name filters used `[0-9a-f]+` (one or more hex), which would
+  admit any hex length even though `_gen_discriminator` always emits
+  exactly 4. A manually created or stale `drydock-<proj>-<8char>`
+  container would silently land in the session list and be subject to
+  `list` / `stop` / `attach` actions. Tightened to `[0-9a-f]{4}` across
+  the five production sites — both `cmd_run` branches (nested + non-nested),
+  `_live_sessions`, `_all_sessions`, and the `doctor` ACTIVE SESSIONS
+  section. Swept the test fixtures (`test/cmd_list.bats`,
   `test/cmd_stop.bats`, `test/cmd_attach.bats`, `test/cmd_new.bats`,
   `test/select_choice.bats`, `test/lib_commands.bats`) to use unambiguous
-  4-char discriminators. The failure mode was theoretical (no production
-  caller produced a longer discriminator) — the fix forecloses it before
-  it could become real.
+  4-char discriminators.
 - **`drydock stop` error message no longer says "no live session" for an
   Exited container** (#102). The matcher already validated against both
   running and exited sessions (so a user could stop an Exited container by
@@ -33,11 +34,11 @@ seven listed items.
   for someone trying to remove a stopped session by name. Reworded to
   "no session (running or exited) named …" so the message reflects what
   the matcher actually checks.
-- **`drydock` with 0 sessions in a non-TTY shell no longer prints an
-  `[info] Starting new container…` line before the TTY guard rejects the
-  invocation** (#104). `cmd_run`'s 0-session branch emitted `note()` before
-  delegating to `_launch_new`, which then fired its own TTY guard and
-  exited 2 — leaving the scripted caller with a misleading progress
+- **`drydock` with 0 sessions in a non-TTY shell no longer prints a
+  `Launching Claude in …` progress line before the TTY guard rejects the
+  invocation** (#104). `cmd_run`'s 0-session branch emitted `note()`
+  before delegating to `_launch_new`, which then fired its own TTY guard
+  and exited 2 — leaving the scripted caller with a misleading progress
   message ahead of the actual error. Added a caller-side TTY guard in
   `cmd_run` ahead of the `note()`, mirroring `_launch_new`'s existing
   guard as defense in depth.
