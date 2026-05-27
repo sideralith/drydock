@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # test/helpers/mock-docker — fake docker binary for tests
+set -euo pipefail
 #
 # Usage in a test's setup():
 #   export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls.log"
