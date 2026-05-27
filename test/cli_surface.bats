@@ -9,6 +9,15 @@
 
 load "helpers/load"
 
+setup() {
+  # Guard: prevent subprocess tests from calling the real docker binary.
+  # Without this, 'drydock stop' finds the live drydock container (project
+  # name = "drydock") and calls 'docker rm -f', killing the session.
+  export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls.log"
+  touch "$DOCKER_CALL_LOG"
+  export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+}
+
 # Run drydock as a subprocess. Redirects stderr to stdout so 'output'
 # captures both — err() and warn() write to stderr.
 drydock() {
@@ -150,8 +159,8 @@ drydock() {
 }
 
 @test "drydock list: dispatched and exits 0 without container (REQ-N6, T-5)" {
-  # drydock list just calls docker ps — with no DOCKER override it may fail,
-  # but the key is: it must NOT be "unknown command".
+  # mock-docker returns empty for 'docker ps' → no live sessions → may exit
+  # non-zero. The assertion is only: must NOT say "unknown command".
   run bash -c 'cd "$1" && "$2" list 2>&1' -- "$DRYDOCK_HOME" "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" != *"unknown command"* ]]
 }
