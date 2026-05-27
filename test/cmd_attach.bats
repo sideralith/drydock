@@ -95,7 +95,9 @@ STUB
 
 	run cmd_attach "ab12" 2>&1
 	[ "$status" -eq 2 ]
-	[[ "$output" == *"TTY"* ]] || [[ "$output" == *"terminal"* ]] || [[ "$output" == *"tty"* ]]
+	[[ "$output" == *"requires a TTY"* ]]
+	# The TTY guard MUST fire before compose exec is invoked.
+	! grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
 }
 
 # ── Scenario (b): no arg + exactly 1 live session → direct attach ─────────────
@@ -123,7 +125,7 @@ STUB
 
 	run cmd_attach 2>&1
 	[ "$status" -eq 2 ]
-	[[ "$output" == *"TTY"* ]] || [[ "$output" == *"terminal"* ]] || [[ "$output" == *"tty"* ]]
+	[[ "$output" == *"requires a TTY"* ]]
 	# The TTY guard MUST fire before compose exec is invoked.
 	! grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
 }

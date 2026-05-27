@@ -145,6 +145,11 @@ get_compose_args() {
 	# two exec calls landing in DIFFERENT containers would return DIFFERENT
 	# hostnames. (The prior assertion compared the first field of /proc/1/stat,
 	# which is always "1" in any container's PID namespace — trivially true.)
+	#
+	# Dependency: no compose overlay in this repo sets a `hostname:` override;
+	# if one is added, /etc/hostname will no longer equal the container short ID
+	# and the host/in-container cross-check on the last line will need a different
+	# identity source (e.g., docker inspect --format '{{.Id}}').
 	local hostname_first
 	hostname_first="$(docker compose "${compose_args[@]}" -p "$INTEGRATION_SESSION_NAME" \
 		exec -T drydock cat /etc/hostname | tr -d '[:space:]')"
@@ -160,6 +165,7 @@ get_compose_args() {
 		| head -1 | cut -c1-12)"
 
 	[ -n "$hostname_first" ]
+	[ -n "$cid_short" ]
 	[ "$hostname_first" = "$hostname_second" ]
 	[ "$hostname_first" = "$cid_short" ]
 }
