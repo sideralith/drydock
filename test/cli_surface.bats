@@ -9,6 +9,15 @@
 
 load "helpers/load"
 
+setup() {
+  # Guard: prevent subprocess tests from calling the real docker binary.
+  # Without this, 'drydock stop' finds the live drydock container (project
+  # name = "drydock") and calls 'docker rm -f', killing the session.
+  export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls.log"
+  touch "$DOCKER_CALL_LOG"
+  export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+}
+
 # Run drydock as a subprocess. Redirects stderr to stdout so 'output'
 # captures both — err() and warn() write to stderr.
 drydock() {
@@ -150,8 +159,9 @@ drydock() {
 }
 
 @test "drydock list: dispatched and exits 0 without container (REQ-N6, T-5)" {
-  # drydock list just calls docker ps — with no DOCKER override it may fail,
-  # but the key is: it must NOT be "unknown command".
+  # mock-docker returns empty for 'docker ps' → cmd_list returns 0 with no
+  # rows (lib/commands.sh:1902-1904). The assertion is only: must NOT say
+  # "unknown command".
   run bash -c 'cd "$1" && "$2" list 2>&1' -- "$DRYDOCK_HOME" "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" != *"unknown command"* ]]
 }
@@ -159,6 +169,18 @@ drydock() {
 @test "drydock stop: dispatched (not 'unknown command') (REQ-N7, T-5)" {
   run bash -c '"$1" stop 2>&1' -- "$DRYDOCK_HOME/bin/drydock"
   [[ "$output" != *"unknown command"* ]]
+  # Regression guard (#112): cmd_stop MUST NOT issue "docker rm -f"
+  # against any container. The mock logs every invocation's args (without
+  # the "docker" prefix), so a future refactor that moves the rm -f call
+  # ahead of the live-session count check would leave "rm -f ..." in the
+  # log and fail this assertion. cli_surface.bats setup() routes DOCKER
+  # through mock-docker, so a real-daemon call never reaches the host.
+  #
+  # Narrow by design: matches today's only destructive idiom in cmd_stop
+  # (lib/commands.sh:1972). If cmd_stop ever adopts other destructive verbs
+  # (docker kill, docker stop, docker rm without -f), the guard must be
+  # widened accordingly.
+  ! grep -qE '^rm -f' "$DOCKER_CALL_LOG"
 }
 
 @test "drydock help output mentions 'new' (T-5 usage surface)" {
