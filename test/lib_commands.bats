@@ -3122,6 +3122,43 @@ STUB
 	[[ "$output" == *"drydock attach"* ]] || [[ "$output" == *"drydock new"* ]]
 }
 
+# ── #104: cmd_run 0-session path must TTY-guard before emitting note() ──────
+# Pre-fix: cmd_run printed `note "Launching Claude in ..."` before calling
+# _launch_new, whose TTY guard then returned 2. Scripted callers saw a
+# misleading "Launching..." line followed by the error — looked like the
+# launch had started. The fix moves the TTY guard ahead of the note().
+
+@test "cmd_run: non-nested, 0 sessions, no-TTY → exit 2 (#104)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 1; }
+
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	[ "$status" -eq 2 ]
+}
+
+@test "cmd_run: non-nested, 0 sessions, no-TTY → does NOT emit 'Launching' (#104)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 1; }
+
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	# The TTY guard must fire BEFORE the optimistic 'Launching Claude' note,
+	# so scripted callers see only the error — no misleading progress line.
+	[[ "$output" != *"Launching"* ]]
+}
+
+@test "cmd_run: non-nested, 0 sessions, no-TTY → does NOT invoke docker compose (#104)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 1; }
+
+	run cmd_run "$CMD_T4_PROJECT_DIR" 2>&1
+	# No docker compose calls should have been logged — the guard returns 2
+	# before export_compose_env / compose_files / _launch_new run.
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" != *" up "* ]]
+	[[ "$log" != *"compose"* ]]
+}
+
 # ── #103: regex tightening — reject discriminators with length != 4 ──────────
 # _gen_discriminator (lib/paths.sh:18) produces exactly 4 hex chars via
 # `printf '%04x' "$(((RANDOM << 8 ^ RANDOM) & 0xffff))"` — the `& 0xffff` clamp

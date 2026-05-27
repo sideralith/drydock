@@ -439,6 +439,13 @@ cmd_run() {
 
 	if [ "$live_count" -eq 0 ]; then
 		# ── 0 sessions → launch new persistent container ─────────────────────
+		# TTY guard FIRST: a scripted (no-TTY) caller must see only the error,
+		# not an optimistic 'Launching Claude' note ahead of the error. The
+		# same guard runs in _launch_new (FIX-3, 9a371c3) as defense in depth.
+		if ! _drydock_has_tty; then
+			printf 'drydock requires a TTY — not called from a terminal\n' >&2
+			return 2
+		fi
 		note "Launching Claude in $project_dir"
 		export_compose_env "$project_dir"
 		local compose_args=()
