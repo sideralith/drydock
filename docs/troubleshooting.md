@@ -513,7 +513,7 @@ directory shows up in `ls -la` but Claude Code reports it as unavailable, and
 
 **Cause.** The symlink points to an absolute host path *outside* the project
 tree (e.g. a shared skill repo: `.claude/skills/playwright →
-/home/you/git/skills/playwright`). drydock mounts your project at `/workspace`,
+/home/user/git/skills/playwright`). drydock mounts your project at `/workspace`,
 but it does not mount arbitrary external paths — so the symlink resolves on the
 host but dangles inside the container.
 
@@ -521,14 +521,14 @@ host but dangles inside the container.
 the exact fix (one warning per target parent directory):
 
 ```
-warn:  skill 'playwright' → '/home/you/git/skills/playwright' is outside the project and not linked
-       fix: drydock link --mirror /home/you/git/skills
+warn:  skill 'playwright' → '/home/user/git/skills/playwright' is outside the project and not linked
+       fix: drydock link --mirror /home/user/git/skills
 ```
 
 **Fix.** Run the suggested command, then relaunch:
 
 ```bash
-drydock link --mirror /home/you/git/skills
+drydock link --mirror /home/user/git/skills
 ```
 
 `--mirror` mounts the external tree at the **same absolute path** inside the

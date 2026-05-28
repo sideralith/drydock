@@ -529,8 +529,8 @@ The underlying mechanism needs no special target handling: `home` is
 intentionally **not** in the system-directory reject list in `lib/commands.sh`.
 Targets under `$HOME` (e.g. `/home/<user>/git/foo`) are valid; only `$HOME`
 itself and its ancestors are rejected. `--mirror <path>` is the user-facing
-shorthand over this — it expands to the explicit two-arg form *before* any path
-validation runs, so every guard applies identically. See
+shorthand over this — it expands to the explicit two-arg form *before* all
+downstream path-rejection guards run, so every guard applies identically. See
 [docs/links.md](links.md#the-host-path-mirror-pattern) for the full pattern guide.
 
 **INV-3 and the link guard.** The hooks RO overlay covers two paths: the
