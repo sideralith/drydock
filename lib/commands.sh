@@ -71,6 +71,7 @@ usage() {
 	_dr_help_row "drydock link ~/git/shared-lib" "mount sibling read-only"
 	_dr_help_row "drydock link --rw ~/git/shared-lib" "RW + per-sibling deploy key"
 	_dr_help_row "drydock link ~/git/shared-lib /opt/lib" "mount at custom path"
+	_dr_help_row "drydock link ~/git/skills ~/git/skills" "host-path mirror — fixes in-project symlinks to host paths"
 	_dr_help_row "drydock unlink ~/git/shared-lib" "remove sibling"
 	_dr_help_row "drydock links" "list current project's siblings"
 	_dr_help_row "drydock new" "start a fresh session alongside any existing ones"
