@@ -639,11 +639,11 @@ _links_setup() {
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sibling_dir"
 
-	# A target UNDER $HOME (e.g. /home/<user>/git/sibling) must be accepted —
+	# A target UNDER $HOME (e.g. /home/<user>/projects/sibling) must be accepted —
 	# this is the host-path-mirror use case the maintainer explicitly requires.
 	(
 		cd "$PROJECT_DIR"
-		run cmd_link "$sibling_dir" "$FAKE_HOME/git/sibling"
+		run cmd_link "$sibling_dir" "$FAKE_HOME/projects/sibling"
 		[ "$status" -eq 0 ]
 	)
 }

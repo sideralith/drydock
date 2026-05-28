@@ -21,7 +21,7 @@
 # strong and unconditional.
 #
 # Setup (one-time, per repo) — see docs/links.md:
-#   drydock link --rw ~/git/mysibling   # generates key, prints pubkey + instructions
+#   drydock link --rw ~/projects/mysibling   # generates key, prints pubkey + instructions
 #   # Then add the pubkey to GitHub as a deploy key on the sibling repo.
 #
 # For primary project push (no RW siblings), the existing setup still applies:

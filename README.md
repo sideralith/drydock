@@ -178,7 +178,7 @@ call `drydock setup` directly unless you want to.
 
 ```bash
 # In any project — drydock works out of the box, no per-project setup needed:
-cd ~/git/myproject && drydock
+cd ~/projects/myproject && drydock
 
 # Other commands:
 drydock shell [DIR]      # bash inside the container — for debugging
@@ -236,10 +236,10 @@ Some projects have sub-directories that are separate filesystem mounts — for
 example, an Obsidian vault bind-mounted via WSL2's 9P drvfs layer:
 
 ```bash
-# Example: ~/git/myproject/docs is a drvfs bind from Windows
-ls ~/git/myproject/docs   # works on host — files visible
+# Example: ~/projects/myproject/docs is a drvfs bind from Windows
+ls ~/projects/myproject/docs   # works on host — files visible
 drydock shell
-ls ~/git/myproject/docs  # empty without sub-mount propagation!
+ls ~/projects/myproject/docs  # empty without sub-mount propagation!
 ```
 
 drydock automatically detects sub-mounts under `${PROJECT_DIR}` and generates
@@ -247,10 +247,10 @@ a temporary compose overlay that propagates them into the container. Run
 `drydock doctor` to see what was detected:
 
 ```
-── sub-mounts under /home/you/git/myproject ──
-  ✓ /home/you/git/myproject/docs → /mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject (drvfs auto-translated)
-  ✓ /home/you/git/myproject/data → /data/foo (Linux-native bind)
-  ⚠ /home/you/git/myproject/nfsmount → server:/export (nfs, may not propagate)
+── sub-mounts under /home/you/projects/myproject ──
+  ✓ /home/you/projects/myproject/docs → /mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject (drvfs auto-translated)
+  ✓ /home/you/projects/myproject/data → /data/foo (Linux-native bind)
+  ⚠ /home/you/projects/myproject/nfsmount → server:/export (nfs, may not propagate)
 ```
 
 Three classes of sub-mount:
@@ -258,7 +258,7 @@ Three classes of sub-mount:
 | Class | Example | Behaviour |
 |---|---|---|
 | **drvfs** (WSL2 9P) | Obsidian vault, OneDrive folder | Auto-translated to `/mnt/<drive>/...` — Docker Desktop reads it |
-| **Linux-native** | `mount --bind /data/src ~/git/proj/bind` | Source path translated via `/proc/self/mountinfo` lookup |
+| **Linux-native** | `mount --bind /data/src ~/projects/proj/bind` | Source path translated via `/proc/self/mountinfo` lookup |
 | **Exotic** (nfs, cifs, fuse, tmpfs) | NFS share, SSHFS mount | Passed through with a warning — propagation not guaranteed |
 
 If a sub-mount does not appear inside the container, see

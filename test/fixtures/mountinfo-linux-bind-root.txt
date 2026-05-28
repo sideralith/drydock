@@ -1,2 +1,2 @@
 24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
-500 24 8:1 /tmp/linux-bind-src /home/rai/git/proj/bind rw,relatime - ext4 /dev/sda1 rw
+500 24 8:1 /tmp/linux-bind-src /home/you/projects/proj/bind rw,relatime - ext4 /dev/sda1 rw

@@ -15,7 +15,7 @@ brew install sideralith/tap/drydock
 drydock build       # ~5 min, one-off
 
 # Use it in any project:
-cd ~/git/myproject && drydock
+cd ~/projects/myproject && drydock
 ```
 
 Requirements (handled by brew except Docker itself):

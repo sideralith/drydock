@@ -310,11 +310,11 @@ drydock automatically detects sub-mounts under `$PROJECT_DIR` and propagates
 them. Run `drydock doctor` to see the current detection:
 
 ```bash
-cd ~/git/yourproject && drydock doctor
+cd ~/projects/yourproject && drydock doctor
 # Look for the "sub-mounts under ..." section:
-#   ✓ /home/rai/git/yourproject/docs → /mnt/c/.../docs (drvfs auto-translated)
-#   ✓ /home/rai/git/yourproject/data → /data/src (Linux-native bind)
-#   ⚠ /home/rai/git/yourproject/nfs → server:/share (nfs, may not propagate)
+#   ✓ /home/you/projects/yourproject/docs → /mnt/c/.../docs (drvfs auto-translated)
+#   ✓ /home/you/projects/yourproject/data → /data/src (Linux-native bind)
+#   ⚠ /home/you/projects/yourproject/nfs → server:/share (nfs, may not propagate)
 #   (none detected)
 ```
 
@@ -491,7 +491,7 @@ The detection happens in `lib/compose.sh:compose_files()` — runs on every
 are active for your current session, inspect:
 
 ```bash
-cd ~/git/yourproject
+cd ~/projects/yourproject
 # As-if-invoked compose command (does not actually run docker):
 DRYDOCK_HOME=~/.local/share/drydock bash -c '
   source $DRYDOCK_HOME/lib/common.sh
@@ -513,7 +513,7 @@ directory shows up in `ls -la` but Claude Code reports it as unavailable, and
 
 **Cause.** The symlink points to an absolute host path *outside* the project
 tree (e.g. a shared skill repo: `.claude/skills/playwright →
-/home/user/git/skills/playwright`). drydock mounts your project at `/workspace`,
+/home/you/projects/skills/playwright`). drydock mounts your project at `/workspace`,
 but it does not mount arbitrary external paths — so the symlink resolves on the
 host but dangles inside the container.
 
@@ -521,14 +521,14 @@ host but dangles inside the container.
 the exact fix (one warning per target parent directory):
 
 ```
-warn:  skill 'playwright' → '/home/user/git/skills/playwright' is outside the project and not linked
-       fix: drydock link --mirror /home/user/git/skills
+warn:  skill 'playwright' → '/home/you/projects/skills/playwright' is outside the project and not linked
+       fix: drydock link --mirror /home/you/projects/skills
 ```
 
 **Fix.** Run the suggested command, then relaunch:
 
 ```bash
-drydock link --mirror /home/user/git/skills
+drydock link --mirror /home/you/projects/skills
 ```
 
 `--mirror` mounts the external tree at the **same absolute path** inside the
@@ -547,12 +547,12 @@ below maps each rejection class to a cause and a fix.
 
 | Rejection class | Example trigger | Resolution |
 |---|---|---|
-| 1. Path does not exist or is not a directory | `drydock link ~/git/file.txt` | The host path must exist and be a directory. Symlinks to directories are followed (via `realpath`). |
+| 1. Path does not exist or is not a directory | `drydock link ~/projects/file.txt` | The host path must exist and be a directory. Symlinks to directories are followed (via `realpath`). |
 | 2. Path contains metacharacters | Host path with `\|`, `:`, `"`, `\`, newline, or tab | These break the pipe-delimited list file, the Docker Compose volume spec, or the YAML overlay. Rename or use a path without these characters. |
 | 3. Path is `$HOME` itself or an ancestor of `$HOME` | `drydock link ~` or `drydock link /home` or `drydock link /` | Mounting `$HOME` or its ancestors would expose everything under `~/` to the container — defeating credential isolation entirely. |
 | 4. Path is a credential directory (or any subdirectory) | `drydock link ~/.ssh`, `drydock link ~/.aws/my-profile` | Separator-anchored guard: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker` and anything strictly under them are rejected. Defense-in-depth for [INV-1](../CLAUDE.md). Note: `~/.ssh-backup` is **not** rejected — the guard is anchored at the directory boundary, not prefix-only. |
 | 5. Path is drydock or Claude state | `drydock link ~/.claude`, `drydock link ~/.engram-container` | `~/.claude*`, `~/.engram*`, and `~/.config/drydock` (including per-session `~/.claude-container-<disc>/` dirs) are rejected. These are load-bearing wildcards for [INV-2](../CLAUDE.md). |
-| 6. Path is the current project directory | `drydock link ~/git/current-project` | The project directory is already mounted at `/workspace`. Linking it again would shadow it. |
+| 6. Path is the current project directory | `drydock link ~/projects/current-project` | The project directory is already mounted at `/workspace`. Linking it again would shadow it. |
 
 ### Custom container target rejections
 
@@ -561,13 +561,13 @@ These fire only when you supply an explicit container path as the second argumen
 
 | Rejection class | Example trigger | Resolution |
 |---|---|---|
-| 7a. custom target: not absolute | `drydock link ~/git/foo relative/path` | Container targets must begin with `/`. |
-| 7b. custom target: filesystem root | `drydock link ~/git/foo /` | Mounting over `/` would replace the container's root filesystem. |
-| 7c. custom target: starts with `//` | `drydock link ~/git/foo //etc/foo` | The kernel normalizes `//foo` to `/foo` at mount time, which would bypass all single-slash guards (e.g. let `//etc/foo` mount at `/etc/foo`). |
-| 7d. custom target: contains `..` or `.` components | `drydock link ~/git/foo /workspace-siblings/../etc` | Docker normalizes path components at mount time. `/../etc` → `/etc`, bypassing the system-dir guard. |
-| 7e. custom target: shadows `/opt/drydock/hooks` | `drydock link ~/git/foo /opt/drydock/hooks` | This is the hooks RO bind-mount ([INV-3](../CLAUDE.md)). A sibling mount over it would silently remove the read-only guardrail. See [security.md](security.md) and [docs/architecture.md](architecture.md). |
-| 7f. custom target: under a system directory | `drydock link ~/git/foo /etc/myapp`, `/bin/...`, `/usr/...` | First path component must not be `etc`, `bin`, `sbin`, `usr`, `lib`, `lib32`, `lib64`, `boot`, `root`, `opt`, `proc`, `sys`, `dev`, `run`, `var`, or `tmp`. Note: `home` is intentionally **not** in this list — `/home/<user>/git/foo` is the [host-path-mirror pattern](links.md#the-host-path-mirror-pattern). |
-| 7g. custom target: shadows `/workspace`, `/workspace-siblings`, `$HOME`, or drydock state | `drydock link ~/git/foo /workspace/sub`, `/workspace-siblings` | These targets would shadow the primary project mount, the siblings parent directory, `$HOME`, or container state dirs (`~/.claude*`, `~/.engram*`, `~/.config/drydock`). |
+| 7a. custom target: not absolute | `drydock link ~/projects/foo relative/path` | Container targets must begin with `/`. |
+| 7b. custom target: filesystem root | `drydock link ~/projects/foo /` | Mounting over `/` would replace the container's root filesystem. |
+| 7c. custom target: starts with `//` | `drydock link ~/projects/foo //etc/foo` | The kernel normalizes `//foo` to `/foo` at mount time, which would bypass all single-slash guards (e.g. let `//etc/foo` mount at `/etc/foo`). |
+| 7d. custom target: contains `..` or `.` components | `drydock link ~/projects/foo /workspace-siblings/../etc` | Docker normalizes path components at mount time. `/../etc` → `/etc`, bypassing the system-dir guard. |
+| 7e. custom target: shadows `/opt/drydock/hooks` | `drydock link ~/projects/foo /opt/drydock/hooks` | This is the hooks RO bind-mount ([INV-3](../CLAUDE.md)). A sibling mount over it would silently remove the read-only guardrail. See [security.md](security.md) and [docs/architecture.md](architecture.md). |
+| 7f. custom target: under a system directory | `drydock link ~/projects/foo /etc/myapp`, `/bin/...`, `/usr/...` | First path component must not be `etc`, `bin`, `sbin`, `usr`, `lib`, `lib32`, `lib64`, `boot`, `root`, `opt`, `proc`, `sys`, `dev`, `run`, `var`, or `tmp`. Note: `home` is intentionally **not** in this list — `/home/<user>/projects/foo` is the [host-path-mirror pattern](links.md#the-host-path-mirror-pattern). |
+| 7g. custom target: shadows `/workspace`, `/workspace-siblings`, `$HOME`, or drydock state | `drydock link ~/projects/foo /workspace/sub`, `/workspace-siblings` | These targets would shadow the primary project mount, the siblings parent directory, `$HOME`, or container state dirs (`~/.claude*`, `~/.engram*`, `~/.config/drydock`). |
 | 8. Basename collision | Two different paths with the same `basename` | The default container target is `/workspace-siblings/<basename>`. Two siblings with the same basename would collide. Supply an explicit `<container-target>` for one of them, or use `drydock unlink` on the conflicting entry first. |
 | 8. Container target collision | Two entries share the same custom target | Docker Compose would silently keep only one mount. Assign distinct container targets. |
 
@@ -583,7 +583,7 @@ standard link flow. The table below covers error classes specific to RW mode.
 | Error class | Symptom / message | Resolution |
 |---|---|---|
 | **Deploy key missing** | A previously generated key was deleted from `~/.config/drydock/keys/` and the sibling was already unlinked | Re-run `drydock link --rw <path>`. A new ed25519 key pair is generated; you will need to add the new public key as a deploy key on GitHub for that repo. |
-| **Basename collision (cross-project)** | `drydock link --rw` exits with "basename '<name>' is already used as an RW sibling in project '<other>'" | Two projects are trying to link siblings with the same basename (e.g. both link `~/git/shared-lib`). Deploy keys are scoped by basename; sharing would create a key conflict. Use an explicit `<container-target>` with a unique basename for one of them, e.g. `drydock link --rw ~/git/shared-lib /workspace-siblings/shared-lib-projectB`. |
+| **Basename collision (cross-project)** | `drydock link --rw` exits with "basename '<name>' is already used as an RW sibling in project '<other>'" | Two projects are trying to link siblings with the same basename (e.g. both link `~/projects/shared-lib`). Deploy keys are scoped by basename; sharing would create a key conflict. Use an explicit `<container-target>` with a unique basename for one of them, e.g. `drydock link --rw ~/projects/shared-lib /workspace-siblings/shared-lib-projectB`. |
 | **Non-canonical remote URL** | `drydock link --rw` exits with "only canonical 'git@github.com:owner/repo[.git]' SSH URLs supported (HTTPS / non-GitHub remotes are out of scope)" | drydock routes the sibling's `remote.origin.url` through its managed SSH alias via container-only `url.insteadOf` (issue #89). Only `git@github.com:owner/repo[.git]` SSH URLs can be expressed in the rewritten form. HTTPS remotes (`https://github.com/…`) and non-GitHub hosts (GitLab, Bitbucket, self-hosted) are explicitly rejected. Use RO mode (`drydock link` without `--rw`) for siblings with unsupported remote URLs. |
 | **Already linked as a different mode** | `drydock link --rw <path>` on a path already in the list with `flags=` (RO) | Remove the existing entry first: `drydock unlink <path>`, then re-link with `--rw`. Upgrading from RO to RW in-place is not supported. |
 | **Partial-state self-heal** | Previous `drydock link --rw` was interrupted after key generation but before the list file was updated | Re-run `drydock link --rw <path>`. The key generation step is idempotent (existing key is reused); the list-write and SSH-config regen steps will complete. |
