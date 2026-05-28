@@ -1,3 +1,3 @@
 24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
-800 24 8:1 /tmp/sub1 /home/rai/git/proj/docs rw,relatime - ext4 /dev/sda1 rw
-801 800 8:1 /tmp/sub2 /home/rai/git/proj/docs/sub rw,relatime - ext4 /dev/sda1 rw
+800 24 8:1 /tmp/sub1 /home/you/projects/proj/docs rw,relatime - ext4 /dev/sda1 rw
+801 800 8:1 /tmp/sub2 /home/you/projects/proj/docs/sub rw,relatime - ext4 /dev/sda1 rw

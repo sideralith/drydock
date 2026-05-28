@@ -92,12 +92,12 @@ STUB
 @test "generate_submount_overlay: writes valid YAML when sub-mounts detected" {
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
 	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount.yml"
-	generate_submount_overlay "/home/rai/git/serendipilink"
+	generate_submount_overlay "/home/you/projects/myproject"
 	[ -f "$SUBMOUNT_OVERLAY" ]
 	grep -q '^services:' "$SUBMOUNT_OVERLAY"
 	grep -q '^  drydock:' "$SUBMOUNT_OVERLAY"
 	grep -q '^    volumes:' "$SUBMOUNT_OVERLAY"
-	grep -q '/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink:/home/rai/git/serendipilink/docs:rw' "$SUBMOUNT_OVERLAY"
+	grep -q '/mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject:/home/you/projects/myproject/docs:rw' "$SUBMOUNT_OVERLAY"
 	# The overlay must also declare an environment: block with KEY-only entries
 	# so docker compose inherits the DRYDOCK_SUBMOUNT_*_HOST_PATH vars from the
 	# CLI shell into the container drydock (DooD passthrough).
@@ -108,7 +108,7 @@ STUB
 @test "generate_submount_overlay: nested sub-mounts → distinct environment entries" {
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-nested.txt"
 	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/submount-nested.yml"
-	generate_submount_overlay "/home/rai/git/proj"
+	generate_submount_overlay "/home/you/projects/proj"
 	[ -f "$SUBMOUNT_OVERLAY" ]
 	grep -q '^      - DRYDOCK_SUBMOUNT_DOCS_HOST_PATH$' "$SUBMOUNT_OVERLAY"
 	grep -q '^      - DRYDOCK_SUBMOUNT_DOCS_SUB_HOST_PATH$' "$SUBMOUNT_OVERLAY"
@@ -641,20 +641,20 @@ _setup_pr2_engram_and_linux() {
 # ── DRYDOCK_SUBMOUNT_*_HOST_PATH passthrough (DooD gap) ──────────────────────
 
 @test "export_compose_env: drvfs sub-mount → DRYDOCK_SUBMOUNT_<NAME>_HOST_PATH exported" {
-	# Use the drvfs-c fixture (mount_point = /home/rai/git/serendipilink/docs).
-	# project_dir basename is "serendipilink", sub-mount relpath is "docs" → DOCS.
+	# Use the drvfs-c fixture (mount_point = /home/you/projects/myproject/docs).
+	# project_dir basename is "myproject", sub-mount relpath is "docs" → DOCS.
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
 	# Use the fixture's project root path so the prefix filter matches.
-	mkdir -p "$BATS_TEST_TMPDIR/serendipilink"
-	export_compose_env "/home/rai/git/serendipilink"
-	[ "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" = "/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink" ]
+	mkdir -p "$BATS_TEST_TMPDIR/myproject"
+	export_compose_env "/home/you/projects/myproject"
+	[ "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" = "/mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject" ]
 }
 
 @test "export_compose_env: nested sub-mount → distinct env var with relpath name" {
 	# Use the nested fixture (mount points docs/ and docs/sub).
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-nested.txt"
 	mkdir -p "$BATS_TEST_TMPDIR/proj"
-	export_compose_env "/home/rai/git/proj"
+	export_compose_env "/home/you/projects/proj"
 	# Both env vars must be set. Nested 'docs/sub' relative to project_dir
 	# becomes DOCS_SUB after upper+non-alnum→_.
 	[ -n "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" ]
@@ -673,9 +673,9 @@ _setup_pr2_engram_and_linux() {
 
 @test "export_compose_env: duplicate drvfs mounts → single env var (dedup applied)" {
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-duplicate-drvfs.txt"
-	export_compose_env "/home/rai/git/serendipilink"
+	export_compose_env "/home/you/projects/myproject"
 	# Only ONE env var, set to the first (post-sort) docker-source.
-	[ "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" = "/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink" ]
+	[ "${DRYDOCK_SUBMOUNT_DOCS_HOST_PATH:-}" = "/mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject" ]
 }
 
 # ── sync_submount_env_file (auto-maintain ${PROJECT_DIR}/.env) ───────────────
@@ -696,13 +696,13 @@ _setup_pr2_engram_and_linux() {
 	local tmp_mi="$BATS_TEST_TMPDIR/mi-noenv.txt"
 	cat >"$tmp_mi" <<MI
 24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
-686 80 0:67 /Users/Rai/Documents/Obsidian/Vaults/Serendipilink $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+686 80 0:67 /Users/You/Documents/Obsidian/Vaults/MyProject $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
 MI
 	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
 	[ -f "$proj/.env" ]
 	grep -qF '# >>> drydock managed' "$proj/.env"
 	grep -qF '# <<< end drydock managed' "$proj/.env"
-	grep -qF 'DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/Rai/Documents/Obsidian/Vaults/Serendipilink' "$proj/.env"
+	grep -qF 'DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject' "$proj/.env"
 }
 
 @test "sync_submount_env_file: .env present + no marker + sub-mounts → marker block appended, user content intact" {
