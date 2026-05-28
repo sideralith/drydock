@@ -121,11 +121,76 @@ IFS=$'\x01' read -ra _segments <<<"$norm"
 # - Mismatched quotes (e.g. quoted opening with no closing): bash rejects the
 #   command at parse time before execution. The hook receives the raw string
 #   but bash never runs it destructively. Acceptable under threat model A.
+#
+# ADR-9 — mask-first conditional flatten (issue #133):
+# The old unconditional flatten exposed rm tokens inside quoted DATA arguments
+# (e.g. `git commit -m "rm -rf /"`) as false positives. The new approach
+# uses a two-step gate:
+#   1. Compute masked = s with every "…"/'…' run replaced by spaces (quoted
+#      content GONE — no phantom tokens injected into rule matching).
+#   2. If masked reveals a command word that a downstream per-segment rule
+#      inspects, FLATTEN the ORIGINAL s (existing two-sed behavior: expose
+#      content so rules can inspect the real arguments).
+#   3. Otherwise return masked (data-quote drop: the content is gone, no
+#      phantom rm token reaches the rules).
+#
+# The flatten-trigger set is CLOSED (ADR-9 standing decision):
+#   - rm command word (C1-residue / C17 / C18)
+#   - Shell exec introducers: {bash, sh, dash, zsh} — bare or path-qualified
+#     (e.g. /bin/sh), optionally sudo-prefixed — WITH a -c flag present
+#     anywhere in the segment (need not be adjacent)
+#   - eval, optionally sudo-prefixed
+#   - ssh (A1), kubectl/helm (A2), psql/mysql/mongo/mongosh/redis-cli (A3),
+#     terraform (A4), chmod (C7-residue): per-segment rules that rely on
+#     quoted flag VALUES (e.g. --context="prod", --host="prod-db") being
+#     exposed — those values are part of the real command, not data quotes
+#
+# Only segments whose leading token is not in this set (git, gh, echo, rg,
+# and similar data-passing tools) receive the DROP treatment.
+# This reopens ADR-6 narrowly (ADR-9 standing decision). Rule loops
+# C1-residue / C17 / C18 are UNCHANGED.
 _strip_quotes() {
 	local s="$1"
-	s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
-	s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
-	printf '%s' "$s"
+	# Step 1: compute masked — replace each quoted run with a single space.
+	# Use separate sed passes (same as flatten) but replace group with space only.
+	local masked
+	masked="$(printf '%s' "$s" | sed -E 's/"[^"]*"/ /g')"
+	masked="$(printf '%s' "$masked" | sed -E "s/'[^']*'/ /g")"
+
+	# Step 2: gate — decide FLATTEN vs. DROP based on masked content.
+	# rm-arm (FIX 1): rm command word visible (no visible-flag requirement).
+	if [[ "$masked" =~ (^|[[:space:]])rm[[:space:]] ]]; then
+		# FLATTEN: expose original quoted content for C1-residue / C17 / C18.
+		s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+		s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+		printf '%s' "$s"
+		return
+	fi
+	# executor-arm (FIX 2 + FIX 3):
+	# Part A — shell introducer present (bare or path-qualified, optional sudo).
+	# Part B — a -c-bearing flag token present anywhere in the segment.
+	# eval arm — eval introducer present (optional sudo).
+	if { [[ "$masked" =~ (^|[[:space:]/])(sudo[[:space:]]+)?(bash|sh|dash|zsh)([[:space:]]|$) ]] &&
+		[[ "$masked" =~ [[:space:]]-[A-Za-z]*c([[:space:]]|$) ]]; } ||
+		[[ "$masked" =~ (^|[[:space:]])(sudo[[:space:]]+)?eval([[:space:]]|$) ]]; then
+		# FLATTEN: expose original quoted content so C1-residue catches the payload.
+		s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+		s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+		printf '%s' "$s"
+		return
+	fi
+	# per-segment rule introducers: flatten so the rules can see the real argument
+	# VALUES that may be quoted (--context="prod", --host="prod-db", etc.).
+	# A1 (ssh), A2 (kubectl/helm), A3 (psql/mysql/mongo/mongosh/redis-cli),
+	# A4 (terraform), C7-residue (chmod with sudo).
+	if [[ "$masked" =~ (^|[[:space:]])(sudo[[:space:]]+)?(ssh|kubectl|helm|psql|mysql|mongo|mongosh|redis-cli|terraform|chmod)[[:space:]] ]]; then
+		s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+		s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+		printf '%s' "$s"
+		return
+	fi
+	# else: data-quote DROP — return masked (content gone, no phantom rm token).
+	printf '%s' "$masked"
 }
 
 for _i in "${!_segments[@]}"; do
