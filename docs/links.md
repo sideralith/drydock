@@ -182,8 +182,9 @@ warn:  skill 'playwright' → '/home/user/git/skills/playwright' is outside the 
        fix: drydock link --mirror /home/user/git/skills
 ```
 
-This is informational only — it never mounts anything and never edits the link
-list; you must still opt in by running the suggested command.
+This is informational and non-blocking: the session launches normally. drydock
+never mounts the path implicitly or edits the link list — you opt in by running
+the suggested command (threat model A, [INV-7](../CLAUDE.md)).
 
 ## List-file format and persistence
 

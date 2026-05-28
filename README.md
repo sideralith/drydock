@@ -220,7 +220,7 @@ scripts, a justfile) runs the same way.
 | `drydock stop [NAME]` | Stop a session (force-removes the container). With no arg and N>1 sessions, prompts. |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
 | `drydock link [--rw] [--mirror] <PATH> [CONTAINER-PATH]` | Mount a sibling project inside the container at `/workspace-siblings/<name>` (or a custom path). Without `--rw`: read-only mount, no key needed. With `--rw`: read-write mount; generates a per-sibling deploy key and managed SSH config so the agent can `git push` from the sibling without exposing `~/.ssh/`. With `--mirror`: mount at the same host path inside the container (host-path-mirror — fixes in-project skill symlinks to external paths). |
-| `drydock unlink PATH` | Remove a sibling mount from the current project's list (`--mirror` accepted and ignored) |
+| `drydock unlink [--rw\|--mirror] PATH` | Remove a sibling mount from the current project's list (`--rw` and `--mirror` are accepted and ignored — the entry is keyed by host path) |
 | `drydock links` | Show all sibling mounts configured for the current project |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host — runs automatically when the container copy is stale (set `DRYDOCK_SKIP_AUTOSYNC=1` to disable) |
 | `drydock build` | Build/rebuild `drydock:latest` |
