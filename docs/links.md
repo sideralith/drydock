@@ -9,8 +9,8 @@ the sibling via a per-sibling deploy key.
 
 | Command | What it does |
 |---|---|
-| `drydock link [--rw] <host-path> [container-target]` | Mount `<host-path>` inside the container. Default target: `/workspace-siblings/<basename>`. Without `--rw`: read-only (`:ro`). With `--rw`: read-write (`:rw`) with per-sibling SSH credentials. Config is persistent — re-applied on every subsequent `drydock` invocation for this project. |
-| `drydock unlink [--rw] <host-path>` | Remove the sibling mount. The `--rw` flag is accepted and ignored — the list entry's `flags` field is authoritative for cleanup behavior. |
+| `drydock link [--rw] [--mirror] <host-path> [container-target]` | Mount `<host-path>` inside the container. Default target: `/workspace-siblings/<basename>`. Without `--rw`: read-only (`:ro`). With `--rw`: read-write (`:rw`) with per-sibling SSH credentials. With `--mirror`: target equals the host path ([host-path-mirror](#the-host-path-mirror-pattern)). Config is persistent — re-applied on every subsequent `drydock` invocation for this project. |
+| `drydock unlink [--rw\|--mirror] <host-path>` | Remove the sibling mount. The `--rw` and `--mirror` flags are accepted and ignored — the list entry's `flags` field is authoritative for cleanup behavior. |
 | `drydock links` | Show all configured sibling mounts for the current project, with mount mode `(ro)` or `(rw)` per entry. |
 
 ## RO links (default)
