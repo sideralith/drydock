@@ -1963,6 +1963,19 @@ _make_git_sibling() {
 @test "cmd_link: #122 --mirror stores the host source path as the container target" {
 	_links_setup
 
+	# Mirror target == host source path. When $BATS_TEST_TMPDIR is under a
+	# system-denylisted first component (CI runs `bats` directly with TMPDIR
+	# under /tmp), block (c) rejects the target before the mount succeeds.
+	# scripts/test.sh redirects TMPDIR to a /home-rooted path where this runs.
+	# `skip` must be called inline (not via a helper) to return from the test.
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
+
 	local sib="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sib"
 
@@ -1980,6 +1993,16 @@ _make_git_sibling() {
 
 @test "cmd_link: #122 --mirror is equivalent to the two-arg same-path form" {
 	_links_setup
+
+	# See the guard note above: skip when the mirror target lands under a
+	# system-denylisted first component (direct `bats` run with TMPDIR=/tmp).
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
 
 	local sib="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sib"
@@ -2036,6 +2059,16 @@ _make_git_sibling() {
 
 @test "cmd_unlink: #122 --mirror is accepted as an alias and removes the entry" {
 	_links_setup
+
+	# See the guard note above: the link step uses --mirror, so skip when the
+	# mirror target lands under a system-denylisted first component.
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
 
 	local sib="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sib"
