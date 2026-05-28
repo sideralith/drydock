@@ -415,6 +415,67 @@ pre_flight_notice() {
 	return 0
 }
 
+# warn_unlinked_skill_symlinks — pre-flight, informational only (issue #123).
+# Scans <project>/.claude/skills/ for symlinks whose resolved target is an
+# absolute host path OUTSIDE the project tree AND not covered by any existing
+# drydock link. Such symlinks resolve on the host but land broken inside the
+# container (the path is not mounted there), so Claude Code cannot load the
+# skill. Emits ONE grouped warning per target parent directory, each carrying
+# the exact `drydock link --mirror` fix command.
+#
+# Strictly informational: it NEVER mounts anything and NEVER mutates the link
+# list. That preserves the threat-model-A explicit-opt-in boundary (proposal
+# #2422 OQ-1.4 — the operator MUST opt in via `drydock link`). Non-blocking:
+# always returns 0, so it can never refuse a launch.
+warn_unlinked_skill_symlinks() {
+	local project_dir="$1"
+	local skills_dir="$project_dir/.claude/skills"
+	[ -d "$skills_dir" ] || return 0
+
+	local proj_name list_file proj_canon
+	proj_name="$(sanitize_project_name "$(basename "$project_dir")")"
+	list_file="$HOME/.config/drydock/links/${proj_name}.list"
+	proj_canon="$(realpath -m -- "$project_dir")"
+
+	# Group by the target's parent dir: N symlinks into one tree → one warning.
+	declare -A _seen_parents
+	local link name abs covered _h _t _f _tn parent
+	while IFS= read -r -d '' link; do
+		name="$(basename "$link")"
+		abs="$(realpath -m -- "$link")"
+
+		# Inside the project tree → available via /workspace, never broken.
+		[ "$abs" = "$proj_canon" ] && continue
+		[[ "$abs/" == "$proj_canon/"* ]] && continue
+
+		# Covered when an existing link's container TARGET equals abs or is an
+		# ancestor of abs. A host-path-mirror entry has target==host path, so it
+		# covers absolute symlinks into that tree; a default /workspace-siblings
+		# target does not — which is exactly the unlinked case we surface here.
+		covered=0
+		if [ -f "$list_file" ]; then
+			while IFS='|' read -r _h _t _f; do
+				[ -z "$_t" ] && continue
+				_tn="${_t%/}"
+				if [ "$abs" = "$_tn" ] || [[ "$abs/" == "$_tn/"* ]]; then
+					covered=1
+					break
+				fi
+			done <"$list_file"
+		fi
+		[ "$covered" -eq 1 ] && continue
+
+		parent="$(dirname "$abs")"
+		[ -n "${_seen_parents[$parent]:-}" ] && continue
+		_seen_parents["$parent"]=1
+
+		warn "skill '$name' → '$abs' is outside the project and not linked"
+		printf '       fix: drydock link --mirror %s\n' "$parent" >&2
+	done < <(find "$skills_dir" -maxdepth 1 -type l -print0 2>/dev/null)
+
+	return 0
+}
+
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]
 	# REQ-9-M, REQ-N2, REQ-N3, SR-10-M: Detect + Delegate model.
@@ -438,6 +499,11 @@ cmd_run() {
 	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
+
+	# Pre-flight, informational only (#123): flag in-project skill symlinks that
+	# point outside the project and are not linked, so they don't land broken in
+	# the container. Never mounts or mutates anything.
+	warn_unlinked_skill_symlinks "$project_dir"
 
 	# ── Nested detect (REQ-N2, SR-10-M) ──────────────────────────────────────
 	# Treat as nested if any multiplexer var is set OR DRYDOCK_NESTED=1.
@@ -581,6 +647,10 @@ cmd_shell() {
 	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
+
+	# Pre-flight, informational only (#123): same broken-skill-symlink check as
+	# cmd_run, before the container starts.
+	warn_unlinked_skill_symlinks "$project_dir"
 
 	note "Bash shell in container, mounted at $project_dir"
 	export_compose_env "$project_dir"
