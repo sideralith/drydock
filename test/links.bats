@@ -1957,3 +1957,131 @@ _make_git_sibling() {
 	[ "$before" = "$after" ]
 	[ "$after" = "git@github.com:owner/repo.git" ]
 }
+
+# ── #122: --mirror flag (host-path-mirror syntactic sugar) ────────────────────
+
+@test "cmd_link: #122 --mirror stores the host source path as the container target" {
+	_links_setup
+
+	# Mirror target == host source path. When $BATS_TEST_TMPDIR is under a
+	# system-denylisted first component (CI runs `bats` directly with TMPDIR
+	# under /tmp), block (c) rejects the target before the mount succeeds.
+	# scripts/test.sh redirects TMPDIR to a /home-rooted path where this runs.
+	# `skip` must be called inline (not via a helper) to return from the test.
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+
+	# Mirror entry: realpath(host)|<host source path>| (RO → empty flags).
+	grep -qF "$(realpath "$sib")|$sib|" "$list_file"
+}
+
+@test "cmd_link: #122 --mirror is equivalent to the two-arg same-path form" {
+	_links_setup
+
+	# See the guard note above: skip when the mirror target lands under a
+	# system-denylisted first component (direct `bats` run with TMPDIR=/tmp).
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+	local mirror_line
+	mirror_line="$(grep . "$list_file")"
+
+	rm -f "$list_file"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sib" "$sib"
+		[ "$status" -eq 0 ]
+	)
+	local twoarg_line
+	twoarg_line="$(grep . "$list_file")"
+
+	[ "$mirror_line" = "$twoarg_line" ]
+}
+
+@test "cmd_link: #122 --mirror rejects an explicit container target (conflict)" {
+	_links_setup
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib" "/custom/mount"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"--mirror"* ]]
+	)
+}
+
+@test "cmd_link: #122 --mirror still applies host-source rejection guards (INV-1)" {
+	_links_setup
+
+	mkdir -p "$FAKE_HOME/.ssh"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$FAKE_HOME/.ssh"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"protected path"* ]]
+	)
+}
+
+@test "cmd_unlink: #122 --mirror is accepted as an alias and removes the entry" {
+	_links_setup
+
+	# See the guard note above: the link step uses --mirror, so skip when the
+	# mirror target lands under a system-denylisted first component.
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --mirror "$sib"
+		run cmd_unlink --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+
+	# Entry removed (file may be empty after removing the last entry).
+	! grep -qF "$(realpath "$sib")|" "$list_file"
+}

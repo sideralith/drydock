@@ -151,6 +151,17 @@ The optional `<container-target>` argument lets you mount a sibling at the
 drydock link ~/git/shared-lib /home/user/git/shared-lib
 ```
 
+Because repeating the path is verbose and easy to get wrong, `--mirror` is
+shorthand for the same mount — the container target is implied to equal the
+host source:
+
+```bash
+drydock link --mirror ~/git/shared-lib
+```
+
+`drydock unlink --mirror <path>` is accepted as an alias of the plain
+`drydock unlink <path>` (the entry is keyed by its host path either way).
+
 Useful whenever a tool embeds absolute paths into its output: stack traces,
 language-server configs (TypeScript project references, Go workspaces, Python
 path roots), build-tool output (source maps, debug info). Matching the host
