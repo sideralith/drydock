@@ -167,6 +167,24 @@ language-server configs (TypeScript project references, Go workspaces, Python
 path roots), build-tool output (source maps, debug info). Matching the host
 path keeps tooling portable between host and container.
 
+### Pre-flight detection of broken skill symlinks
+
+A common case for this pattern is a shared skill tree symlinked into a
+project's `.claude/skills/` via an absolute host path. Such a symlink resolves
+on the host but lands broken inside the container unless the target is linked,
+so Claude Code cannot load the skill. On every `drydock run` / `drydock shell`,
+a non-blocking pre-flight scans `<project>/.claude/skills/` and warns about any
+top-level symlink whose target is an absolute host path outside the project and
+not covered by a link, naming the exact fix (grouped by parent directory):
+
+```
+warn:  skill 'playwright' → '/home/user/git/skills/playwright' is outside the project and not linked
+       fix: drydock link --mirror /home/user/git/skills
+```
+
+This is informational only — it never mounts anything and never edits the link
+list; you must still opt in by running the suggested command.
+
 ## List-file format and persistence
 
 Link configuration is stored per-project in:
