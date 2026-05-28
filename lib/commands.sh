@@ -71,7 +71,7 @@ usage() {
 	_dr_help_row "drydock link ~/git/shared-lib" "mount sibling read-only"
 	_dr_help_row "drydock link --rw ~/git/shared-lib" "RW + per-sibling deploy key"
 	_dr_help_row "drydock link ~/git/shared-lib /opt/lib" "mount at custom path"
-	_dr_help_row "drydock link ~/git/skills ~/git/skills" "host-path mirror — fixes in-project symlinks to host paths"
+	_dr_help_row "drydock link --mirror ~/git/skills" "identical path in container — resolves external symlinks"
 	_dr_help_row "drydock unlink ~/git/shared-lib" "remove sibling"
 	_dr_help_row "drydock links" "list current project's siblings"
 	_dr_help_row "drydock new" "start a fresh session alongside any existing ones"
@@ -1180,14 +1180,18 @@ cmd_revoke_token() {
 # Validates and appends a sibling entry to the project list file.
 # RO-only this slice; --rw is parsed and rejected with a stub error.
 cmd_link() {
-	local rw=0
+	local rw=0 mirror=0
 	local src="" target_arg=""
 
-	# Parse args: --rw flag, then 1-2 positional args
+	# Parse args: --rw / --mirror flags, then 1-2 positional args
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 		--rw)
 			rw=1
+			shift
+			;;
+		--mirror)
+			mirror=1
 			shift
 			;;
 		-*)
@@ -1206,7 +1210,17 @@ cmd_link() {
 		esac
 	done
 
-	[ -n "$src" ] || err "usage: drydock link <host-path> [container-target]"
+	[ -n "$src" ] || err "usage: drydock link [--rw] [--mirror] <host-path> [container-target]"
+
+	# --mirror: syntactic sugar for the host-path-mirror form, i.e. the container
+	# target equals the host source path. An in-project symlink to an absolute
+	# host path (e.g. .claude/skills/X -> /abs/path) then resolves identically
+	# inside the container. Expands to the two-arg form so EVERY downstream
+	# path-rejection guard (host source AND container target) still runs.
+	if [ "$mirror" -eq 1 ]; then
+		[ -z "$target_arg" ] || err "rejected: --mirror takes no explicit container target (it mirrors the host source path)"
+		target_arg="$src"
+	fi
 
 	# D7: canonicalize BEFORE all guards
 	local canonical
@@ -1516,13 +1530,19 @@ cmd_link() {
 # for determining cleanup behavior (SR-6).
 # Exits non-zero when the path is not found in the list.
 cmd_unlink() {
-	# Parse --rw flag (accepted and ignored per SR-6)
-	case "${1:-}" in
-	--rw) shift ;;
-	esac
+	# Parse leading flags. --rw is accepted and ignored per SR-6 (the .list
+	# entry's flags field is authoritative). --mirror is accepted as an alias of
+	# the plain form: a mirror entry is keyed by its host path like any other, so
+	# skipping the flag is all that is required.
+	while :; do
+		case "${1:-}" in
+		--rw | --mirror) shift ;;
+		*) break ;;
+		esac
+	done
 
 	local src="${1:-}"
-	[ -n "$src" ] || err "usage: drydock unlink <host-path>"
+	[ -n "$src" ] || err "usage: drydock unlink [--mirror] <host-path>"
 
 	# Canonicalize input for consistent comparison
 	local canonical

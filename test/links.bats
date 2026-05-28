@@ -1957,3 +1957,98 @@ _make_git_sibling() {
 	[ "$before" = "$after" ]
 	[ "$after" = "git@github.com:owner/repo.git" ]
 }
+
+# ── #122: --mirror flag (host-path-mirror syntactic sugar) ────────────────────
+
+@test "cmd_link: #122 --mirror stores the host source path as the container target" {
+	_links_setup
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+
+	# Mirror entry: realpath(host)|<host source path>| (RO → empty flags).
+	grep -qF "$(realpath "$sib")|$sib|" "$list_file"
+}
+
+@test "cmd_link: #122 --mirror is equivalent to the two-arg same-path form" {
+	_links_setup
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+	local mirror_line
+	mirror_line="$(grep . "$list_file")"
+
+	rm -f "$list_file"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sib" "$sib"
+		[ "$status" -eq 0 ]
+	)
+	local twoarg_line
+	twoarg_line="$(grep . "$list_file")"
+
+	[ "$mirror_line" = "$twoarg_line" ]
+}
+
+@test "cmd_link: #122 --mirror rejects an explicit container target (conflict)" {
+	_links_setup
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib" "/custom/mount"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"--mirror"* ]]
+	)
+}
+
+@test "cmd_link: #122 --mirror still applies host-source rejection guards (INV-1)" {
+	_links_setup
+
+	mkdir -p "$FAKE_HOME/.ssh"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$FAKE_HOME/.ssh"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"protected path"* ]]
+	)
+}
+
+@test "cmd_unlink: #122 --mirror is accepted as an alias and removes the entry" {
+	_links_setup
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --mirror "$sib"
+		run cmd_unlink --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+
+	# Entry removed (file may be empty after removing the last entry).
+	! grep -qF "$(realpath "$sib")|" "$list_file"
+}
