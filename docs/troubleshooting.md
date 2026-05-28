@@ -505,6 +505,38 @@ DRYDOCK_HOME=~/.local/share/drydock bash -c '
 # don't use the corresponding tool).
 ```
 
+## A skill in `.claude/skills/` isn't loading inside the container
+
+**Symptom.** A skill you symlinked into your project's `.claude/skills/`
+directory shows up in `ls -la` but Claude Code reports it as unavailable, and
+`cd` into it inside the container fails with `No such file or directory`.
+
+**Cause.** The symlink points to an absolute host path *outside* the project
+tree (e.g. a shared skill repo: `.claude/skills/playwright →
+/home/you/git/skills/playwright`). drydock mounts your project at `/workspace`,
+but it does not mount arbitrary external paths — so the symlink resolves on the
+host but dangles inside the container.
+
+**You'll see a pre-flight warning** on `drydock run` / `drydock shell` naming
+the exact fix (one warning per target parent directory):
+
+```
+warn:  skill 'playwright' → '/home/you/git/skills/playwright' is outside the project and not linked
+       fix: drydock link --mirror /home/you/git/skills
+```
+
+**Fix.** Run the suggested command, then relaunch:
+
+```bash
+drydock link --mirror /home/you/git/skills
+```
+
+`--mirror` mounts the external tree at the **same absolute path** inside the
+container, so the symlink resolves identically on both sides. This is the
+[host-path-mirror pattern](links.md#the-host-path-mirror-pattern). The warning
+is informational only — drydock never mounts the path implicitly; you opt in by
+running the command (threat model A, [INV-7](../CLAUDE.md)).
+
 ## `drydock link` rejected my path
 
 `drydock link` validates both the host source path and the optional custom
