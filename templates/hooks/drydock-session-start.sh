@@ -60,15 +60,27 @@ The Docker socket is bind-mounted from the host. Any process with socket access 
 drydock defends against agent accidents (typos, runaway loops), not adversaries.
 Do not treat this container as an adversarial sandbox.
 
-### GPG commit signing
-GPG commit signing is disabled by default inside the container (GIT_CONFIG_VALUE_0=false).
-The optional GPG overlay (docker-compose.gpg.yml) enables signing with a sandbox key.
-
 ### GitHub CLI cache workaround
 The gh CLI needs a writable cache directory. Use XDG_CACHE_HOME=/tmp/ghcache before
 gh commands if you see cache-related errors:
   XDG_CACHE_HOME=/tmp/ghcache gh <command>
 STATIC
+
+# ── GPG signing state (conditional) ───────────────────────────────────────────
+# The image default is commit.gpgsign=false; the optional GPG overlay
+# (docker-compose.gpg.yml) flips it by exporting GNUPGHOME and
+# GIT_CONFIG_VALUE_0=true. Report the LIVE state so the block never tells the
+# agent signing is off while the overlay is actively signing its commits.
+echo ""
+echo "### GPG commit signing"
+if [ -n "${GNUPGHOME:-}" ] && [ "${GIT_CONFIG_VALUE_0:-}" = "true" ]; then
+	echo "GPG commit signing is ENABLED in this session via the optional GPG overlay,"
+	echo "using a drydock sandbox key (account-revocable, separate from your real ~/.gnupg)."
+	echo "Your commits are signed and show as Verified — do not pass --no-gpg-sign."
+else
+	echo "GPG commit signing is disabled by default inside the container."
+	echo "The optional GPG overlay (docker-compose.gpg.yml) enables signing with a sandbox key."
+fi
 
 # ── LIVE BLOCK ────────────────────────────────────────────────────────────────
 # Dynamic probes emitted after the static block.

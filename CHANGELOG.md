@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-28
+
+Link and skills polish. Sharpens cross-project linking for the host-path-mirror
+case, hardens project-skill symlink handling, and corrects the SessionStart
+awareness hook. Production changes touch `lib/commands.sh` and
+`templates/hooks/drydock-session-start.sh`.
+
+### Added
+- **`drydock link --mirror <path>`** (#126). Syntactic sugar for the
+  host-path-mirror mount (the `drydock link <path> <path>` double-path form),
+  which mounts a sibling at its original host path so absolute symlinks under
+  the project — e.g. `.claude/skills/*` pointing to an external host path —
+  resolve inside the container. The double-path form was the only way to get a
+  mirror mount before, and its discoverability was poor.
+- **Pre-flight warning for broken project skill symlinks** (#127). Before
+  launch, drydock detects symlinks under the project's `.claude/skills/` that
+  point to host paths the container will not have and prints the exact
+  `drydock link --mirror` command to fix each one. Non-blocking.
+
+### Fixed
+- **The SessionStart awareness hook now reports the live GPG signing state.**
+  The hook stated signing was "disabled by default" unconditionally, which was
+  wrong whenever the GPG overlay was active and signing commits with a sandbox
+  key. The GPG section is now conditional on the live overlay environment
+  (`GNUPGHOME` set and `commit.gpgsign=true`), so the agent is told signing is
+  ENABLED when it actually is.
+- **External symlinks are dereferenced during the host→container config seed**
+  (#120). A symlink under `~/.claude/` pointing outside the seeded tree was
+  copied as a dangling link inside the container; it is now dereferenced so the
+  target content is seeded.
+- **`drydock unlink` usage string includes `--rw`** (#129). The usage line
+  omitted the `--rw` flag that the matching `link` command accepts.
+
+### Documentation
+- Host-path-mirror example added to the `drydock link` help output (#124).
+- User-facing docs cover the link/skills polish (#128) and personal path
+  placeholders are replaced in the public examples (#130).
+
 ## [0.3.1] - 2026-05-27
 
 Session-persistence polish. Seven small fixes and test improvements layered on

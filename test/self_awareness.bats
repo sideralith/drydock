@@ -237,3 +237,45 @@ MOUNTINFO
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"bats"* ]]
 }
+
+# ── Scenario 5 — GPG signing state is conditional on the live overlay env ─────
+# The GPG overlay (docker-compose.gpg.yml) flips the image default by setting
+# GNUPGHOME and GIT_CONFIG_VALUE_0=true. The hook MUST report the live state,
+# not a static "disabled by default" line that lies when signing is active.
+
+# 5a — overlay active → stdout says signing is ENABLED, never "disabled by default".
+@test "hook: GPG overlay active (GNUPGHOME + gpgsign=true) → stdout says signing ENABLED" {
+	run env \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		GNUPGHOME="$BATS_TEST_TMPDIR/signing" \
+		GIT_CONFIG_VALUE_0="true" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"GPG commit signing is ENABLED"* ]]
+	[[ "$output" != *"disabled by default"* ]]
+}
+
+# 5b — overlay absent (env hermetic) → stdout keeps the "disabled by default" line.
+@test "hook: GPG overlay absent → stdout says signing disabled by default" {
+	run env -u GNUPGHOME -u GIT_CONFIG_VALUE_0 \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"GPG commit signing is disabled by default"* ]]
+	[[ "$output" != *"is ENABLED"* ]]
+}
+
+# 5c — image default has GIT_CONFIG_VALUE_0=false set (not unset) and no GNUPGHOME
+#      → still the disabled branch (mirrors the real default container env).
+@test "hook: gpgsign=false with no GNUPGHOME → stdout says signing disabled by default" {
+	run env -u GNUPGHOME \
+		DRYDOCK_RELEASE_FILE="$RELEASE_FIXTURE" \
+		MOUNTINFO_FILE="$MOUNTINFO_EXEC" \
+		GIT_CONFIG_VALUE_0="false" \
+		bash "$HOOK_SCRIPT"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"GPG commit signing is disabled by default"* ]]
+	[[ "$output" != *"is ENABLED"* ]]
+}
