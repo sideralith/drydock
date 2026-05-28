@@ -1594,10 +1594,10 @@ cmd_link() {
 
 # ── cmd_unlink ────────────────────────────────────────────────────────────────
 
-# cmd_unlink [--rw] <host-path>
+# cmd_unlink [--rw] [--mirror] <host-path>
 # Removes the matching entry from the project list file.
-# --rw is accepted and ignored; the .list entry's flags field is authoritative
-# for determining cleanup behavior (SR-6).
+# --rw and --mirror are accepted and ignored; the .list entry's flags field is
+# authoritative for determining cleanup behavior (SR-6).
 # Exits non-zero when the path is not found in the list.
 cmd_unlink() {
 	# Parse leading flags. --rw is accepted and ignored per SR-6 (the .list
@@ -1612,7 +1612,7 @@ cmd_unlink() {
 	done
 
 	local src="${1:-}"
-	[ -n "$src" ] || err "usage: drydock unlink [--mirror] <host-path>"
+	[ -n "$src" ] || err "usage: drydock unlink [--rw] [--mirror] <host-path>"
 
 	# Canonicalize input for consistent comparison
 	local canonical
