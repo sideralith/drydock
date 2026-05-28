@@ -64,14 +64,15 @@ usage() {
 	# ── EXAMPLES ──
 	_dr_section "EXAMPLES"
 	_DR_LABEL_WIDTH=42
-	_dr_help_row "cd ~/git/myproject && drydock" "launch claude there"
-	_dr_help_row "drydock run ~/git/otherproject" "explicit dir"
+	_dr_help_row "cd ~/projects/myproject && drydock" "launch claude there"
+	_dr_help_row "drydock run ~/projects/otherproject" "explicit dir"
 	_dr_help_row 'drydock run -- --resume "my-session"' "resume a session"
 	_dr_help_row "drydock build" "rebuild image"
-	_dr_help_row "drydock link ~/git/shared-lib" "mount sibling read-only"
-	_dr_help_row "drydock link --rw ~/git/shared-lib" "RW + per-sibling deploy key"
-	_dr_help_row "drydock link ~/git/shared-lib /opt/lib" "mount at custom path"
-	_dr_help_row "drydock unlink ~/git/shared-lib" "remove sibling"
+	_dr_help_row "drydock link ~/projects/shared-lib" "mount sibling read-only"
+	_dr_help_row "drydock link --rw ~/projects/shared-lib" "RW + per-sibling deploy key"
+	_dr_help_row "drydock link ~/projects/shared-lib /opt/lib" "mount at custom path"
+	_dr_help_row "drydock link --mirror ~/projects/skills" "identical path in container — resolves external symlinks"
+	_dr_help_row "drydock unlink ~/projects/shared-lib" "remove sibling"
 	_dr_help_row "drydock links" "list current project's siblings"
 	_dr_help_row "drydock new" "start a fresh session alongside any existing ones"
 	_dr_help_row "drydock attach ab12" "reconnect to session with discriminator ab12"
@@ -138,7 +139,14 @@ cmd_setup() {
 
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
 		note "Copying $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)..."
-		cp -a "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
+		# -L dereferences symlinks so targets outside HOST_CLAUDE (e.g. plugin
+		# skills symlinked from ~/.agents/skills/ into ~/.claude/skills/) land
+		# in the prototype as real files. Without -L, those symlinks copy
+		# verbatim and break in the container where the external target tree
+		# isn't mounted. cmd_sync uses rsync --copy-unsafe-links for the same
+		# reason on the upgrade path. cmd_setup runs pre-image-build so it
+		# cannot use docker run; the host's cp is the only tool available.
+		cp -aL "$HOST_CLAUDE" "$CONTAINER_CLAUDE"
 		# Purge immediately — closes the credential window between cp -a and the
 		# deferred unconditional purge below (which covers the upgrade path).
 		rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
@@ -238,12 +246,30 @@ cmd_sync() {
 	if ! engram_usable; then
 		_engram_exclude="--exclude=mcp/engram.json"
 	fi
+	# Stage HOST_CLAUDE with symlinks dereferenced on the host. The container-
+	# side rsync below only sees its own bind-mounts (/src and /dst), so a
+	# symlink under HOST_CLAUDE whose target escapes HOST_CLAUDE (e.g. plugin
+	# skills symlinked from ~/.agents/skills/handoff into ~/.claude/skills/)
+	# is unreadable from inside the container. --copy-unsafe-links alone is
+	# insufficient there: rsync errors with "symlink has no referent" and
+	# cancels --delete for safety, leaving the symlink broken in /dst. cp -aL
+	# on the host resolves every symlink at staging time because the host's
+	# filesystem view contains all targets. --copy-unsafe-links is retained
+	# below as belt-and-suspenders for any internal symlink that cp -aL might
+	# not fully dereference on edge filesystems.
+	local _staging
+	_staging="$(mktemp -d "${TMPDIR:-/tmp}/drydock-sync.XXXXXX")" ||
+		err "mktemp failed for sync staging dir"
+	if ! cp -aL "$HOST_CLAUDE/." "$_staging/"; then
+		rm -rf "$_staging"
+		err "failed to stage HOST_CLAUDE for sync (cp -aL exit $?)"
+	fi
 	"$DOCKER" run --rm \
-		-v "$HOST_CLAUDE":/src:ro \
+		-v "$_staging":/src:ro \
 		-v "$CONTAINER_CLAUDE":/dst:rw \
 		--user "$(id -u):$(id -g)" \
 		"$IMAGE" \
-		rsync -au --delete \
+		rsync -au --delete --copy-unsafe-links \
 		--exclude='sessions/' \
 		--exclude='projects/' \
 		--exclude='file-history/' \
@@ -266,7 +292,10 @@ cmd_sync() {
 		--exclude='themes/' \
 		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
-		/src/ /dst/ || return $?
+		/src/ /dst/
+	local _rsync_rc=$?
+	rm -rf "$_staging"
+	[ "$_rsync_rc" -ne 0 ] && return "$_rsync_rc"
 	# Purge any stale OAuth token from the container.  rsync --exclude prevents
 	# the file from being COPIED on new syncs, but --delete never removes excluded
 	# files from the destination — so an explicit purge is required to clean up
@@ -386,6 +415,67 @@ pre_flight_notice() {
 	return 0
 }
 
+# warn_unlinked_skill_symlinks — pre-flight, informational only (issue #123).
+# Scans <project>/.claude/skills/ for symlinks whose resolved target is an
+# absolute host path OUTSIDE the project tree AND not covered by any existing
+# drydock link. Such symlinks resolve on the host but land broken inside the
+# container (the path is not mounted there), so Claude Code cannot load the
+# skill. Emits ONE grouped warning per target parent directory, each carrying
+# the exact `drydock link --mirror` fix command.
+#
+# Strictly informational: it NEVER mounts anything and NEVER mutates the link
+# list. That preserves the threat-model-A explicit-opt-in boundary (proposal
+# #2422 OQ-1.4 — the operator MUST opt in via `drydock link`). Non-blocking:
+# always returns 0, so it can never refuse a launch.
+warn_unlinked_skill_symlinks() {
+	local project_dir="$1"
+	local skills_dir="$project_dir/.claude/skills"
+	[ -d "$skills_dir" ] || return 0
+
+	local proj_name list_file proj_canon
+	proj_name="$(sanitize_project_name "$(basename "$project_dir")")"
+	list_file="$HOME/.config/drydock/links/${proj_name}.list"
+	proj_canon="$(realpath -m -- "$project_dir")"
+
+	# Group by the target's parent dir: N symlinks into one tree → one warning.
+	declare -A _seen_parents
+	local link name abs covered _h _t _f _tn parent
+	while IFS= read -r -d '' link; do
+		name="$(basename "$link")"
+		abs="$(realpath -m -- "$link")"
+
+		# Inside the project tree → available via /workspace, never broken.
+		[ "$abs" = "$proj_canon" ] && continue
+		[[ "$abs/" == "$proj_canon/"* ]] && continue
+
+		# Covered when an existing link's container TARGET equals abs or is an
+		# ancestor of abs. A host-path-mirror entry has target==host path, so it
+		# covers absolute symlinks into that tree; a default /workspace-siblings
+		# target does not — which is exactly the unlinked case we surface here.
+		covered=0
+		if [ -f "$list_file" ]; then
+			while IFS='|' read -r _h _t _f; do
+				[ -z "$_t" ] && continue
+				_tn="${_t%/}"
+				if [ "$abs" = "$_tn" ] || [[ "$abs/" == "$_tn/"* ]]; then
+					covered=1
+					break
+				fi
+			done <"$list_file"
+		fi
+		[ "$covered" -eq 1 ] && continue
+
+		parent="$(dirname "$abs")"
+		[ -n "${_seen_parents[$parent]:-}" ] && continue
+		_seen_parents["$parent"]=1
+
+		warn "skill '$name' → '$abs' is outside the project and not linked"
+		printf '       fix: drydock link --mirror %s\n' "$parent" >&2
+	done < <(find "$skills_dir" -maxdepth 1 -type l -print0 2>/dev/null)
+
+	return 0
+}
+
 cmd_run() {
 	# drydock run [DIR] [-- CLAUDE_ARGS...]
 	# REQ-9-M, REQ-N2, REQ-N3, SR-10-M: Detect + Delegate model.
@@ -409,6 +499,11 @@ cmd_run() {
 	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
+
+	# Pre-flight, informational only (#123): flag in-project skill symlinks that
+	# point outside the project and are not linked, so they don't land broken in
+	# the container. Never mounts or mutates anything.
+	warn_unlinked_skill_symlinks "$project_dir"
 
 	# ── Nested detect (REQ-N2, SR-10-M) ──────────────────────────────────────
 	# Treat as nested if any multiplexer var is set OR DRYDOCK_NESTED=1.
@@ -552,6 +647,10 @@ cmd_shell() {
 	ensure_synced
 	local project_dir
 	project_dir="$(resolve_project_dir "$project_dir_arg")"
+
+	# Pre-flight, informational only (#123): same broken-skill-symlink check as
+	# cmd_run, before the container starts.
+	warn_unlinked_skill_symlinks "$project_dir"
 
 	note "Bash shell in container, mounted at $project_dir"
 	export_compose_env "$project_dir"
@@ -1151,14 +1250,18 @@ cmd_revoke_token() {
 # Validates and appends a sibling entry to the project list file.
 # RO-only this slice; --rw is parsed and rejected with a stub error.
 cmd_link() {
-	local rw=0
+	local rw=0 mirror=0
 	local src="" target_arg=""
 
-	# Parse args: --rw flag, then 1-2 positional args
+	# Parse args: --rw / --mirror flags, then 1-2 positional args
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 		--rw)
 			rw=1
+			shift
+			;;
+		--mirror)
+			mirror=1
 			shift
 			;;
 		-*)
@@ -1177,7 +1280,17 @@ cmd_link() {
 		esac
 	done
 
-	[ -n "$src" ] || err "usage: drydock link <host-path> [container-target]"
+	[ -n "$src" ] || err "usage: drydock link [--rw] [--mirror] <host-path> [container-target]"
+
+	# --mirror: syntactic sugar for the host-path-mirror form, i.e. the container
+	# target equals the host source path. An in-project symlink to an absolute
+	# host path (e.g. .claude/skills/X -> /abs/path) then resolves identically
+	# inside the container. Expands to the two-arg form so EVERY downstream
+	# path-rejection guard (host source AND container target) still runs.
+	if [ "$mirror" -eq 1 ]; then
+		[ -z "$target_arg" ] || err "rejected: --mirror takes no explicit container target (it mirrors the host source path)"
+		target_arg="$src"
+	fi
 
 	# D7: canonicalize BEFORE all guards
 	local canonical
@@ -1301,7 +1414,7 @@ cmd_link() {
 			err "rejected: container target '$container_target' shadows the drydock hooks RO mount (INV-3)"
 		fi
 		# (c) Reject targets whose first path component is a system directory.
-		# NOTE: 'home' is intentionally NOT in this list — /home/<user>/git/foo is
+		# NOTE: 'home' is intentionally NOT in this list — /home/<user>/projects/foo is
 		# the host-path-mirror use case; ancestor-of-$HOME is handled by (f) below.
 		local _first_comp
 		_first_comp="${container_target#/}"
@@ -1333,7 +1446,7 @@ cmd_link() {
 		esac
 		# (f) Reject $HOME itself and ancestors of $HOME as custom target.
 		# A mount over $HOME or /home shadows the entire home directory.
-		# NOTE: targets under $HOME (e.g. /home/<user>/git/foo) are NOT rejected —
+		# NOTE: targets under $HOME (e.g. /home/<user>/projects/foo) are NOT rejected —
 		# that is the host-path-mirror use case.
 		# R3-FIX-6: use $_real_home for consistency with (e) and with the
 		# host-source guards above.
@@ -1481,19 +1594,25 @@ cmd_link() {
 
 # ── cmd_unlink ────────────────────────────────────────────────────────────────
 
-# cmd_unlink [--rw] <host-path>
+# cmd_unlink [--rw] [--mirror] <host-path>
 # Removes the matching entry from the project list file.
-# --rw is accepted and ignored; the .list entry's flags field is authoritative
-# for determining cleanup behavior (SR-6).
+# --rw and --mirror are accepted and ignored; the .list entry's flags field is
+# authoritative for determining cleanup behavior (SR-6).
 # Exits non-zero when the path is not found in the list.
 cmd_unlink() {
-	# Parse --rw flag (accepted and ignored per SR-6)
-	case "${1:-}" in
-	--rw) shift ;;
-	esac
+	# Parse leading flags. --rw is accepted and ignored per SR-6 (the .list
+	# entry's flags field is authoritative). --mirror is accepted as an alias of
+	# the plain form: a mirror entry is keyed by its host path like any other, so
+	# skipping the flag is all that is required.
+	while :; do
+		case "${1:-}" in
+		--rw | --mirror) shift ;;
+		*) break ;;
+		esac
+	done
 
 	local src="${1:-}"
-	[ -n "$src" ] || err "usage: drydock unlink <host-path>"
+	[ -n "$src" ] || err "usage: drydock unlink [--rw] [--mirror] <host-path>"
 
 	# Canonicalize input for consistent comparison
 	local canonical

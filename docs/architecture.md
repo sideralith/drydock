@@ -40,7 +40,7 @@ $PROJECT_DIR/  ───────────────────→ $PRO
 $PROJECT_DIR/docs/ ───────────────→ $PROJECT_DIR/docs/  :rw
   (if 9P drvfs / sub-mount)           (explicit re-mount overlay)
 
-~/git/sibling/     (optional)    ──→ /workspace-siblings/sibling  :ro  (or :rw)
+~/projects/sibling/     (optional)    ──→ /workspace-siblings/sibling  :ro  (or :rw)
   (any path via `drydock link`)       (:ro by default; :rw when `flags=rw` in
                                        the .list entry — set by `drydock link --rw`)
                                        Overlay generated per-launch from
@@ -515,19 +515,23 @@ sibling be mounted at the **same absolute path inside the container as it has on
 the host**. For example:
 
 ```bash
-drydock link ~/git/shared-lib /home/rai/git/shared-lib
+drydock link ~/projects/shared-lib /home/you/projects/shared-lib
+# or, equivalently:
+drydock link --mirror ~/projects/shared-lib
 ```
 
-Inside the container, `shared-lib` appears at `/home/rai/git/shared-lib` — the
+Inside the container, `shared-lib` appears at `/home/you/projects/shared-lib` — the
 same path the host shell resolves. This is useful when stack traces, language
 server output, IDE configs, or build tool output embed absolute paths: the paths
 are stable and match what is on disk. Devcontainers use the same convention.
 
-The reason this works without a special flag is that `home` is intentionally
-**not** in the system-directory reject list at `lib/commands.sh:753`. Targets
-under `$HOME` (e.g. `/home/<user>/git/foo`) are valid; only `$HOME` itself and
-its ancestors are rejected. See [docs/links.md](links.md#the-host-path-mirror-pattern)
-for the full pattern guide.
+The underlying mechanism needs no special target handling: `home` is
+intentionally **not** in the system-directory reject list in `lib/commands.sh`.
+Targets under `$HOME` (e.g. `/home/<user>/projects/foo`) are valid; only `$HOME`
+itself and its ancestors are rejected. `--mirror <path>` is the user-facing
+shorthand over this — it expands to the explicit two-arg form *before* all
+downstream path-rejection guards run, so every guard applies identically. See
+[docs/links.md](links.md#the-host-path-mirror-pattern) for the full pattern guide.
 
 **INV-3 and the link guard.** The hooks RO overlay covers two paths: the
 container's `~/.claude/hooks` (sourced from `${DRYDOCK_SESSION_CLAUDE_DIR}/hooks`)

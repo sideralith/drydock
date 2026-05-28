@@ -1,2 +1,2 @@
 24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
-600 24 0:99 / /home/rai/git/proj/nfsmount rw,relatime - nfs server:/export rw,vers=4
+600 24 0:99 / /home/you/projects/proj/nfsmount rw,relatime - nfs server:/export rw,vers=4

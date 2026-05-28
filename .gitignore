@@ -24,7 +24,11 @@ Thumbs.db
 
 # Per-developer drydock init output (host-path-substituted .claude/settings.json).
 # The canonical template lives at templates/default-settings.json.
-.claude/
+# Note: we exclude .claude/* (not .claude/) so the carve-out below can re-include
+# .claude/skills/ — git cannot re-include a path whose parent dir is excluded.
+.claude/*
+# Carve-out: project-level skills are repo-shared (consumed by skill-registry).
+!.claude/skills/
 
 # Per-session AI handoff briefings — engram is the source of truth; this is
 # only a path-discoverable mirror for the next session and must not be versioned.
@@ -36,3 +40,6 @@ Thumbs.db
 
 # Social media post drafts — local-only working notes, not part of the project
 /.social/
+
+# Skill registry — local cache of resolved compact rules for delegators
+/.atl/

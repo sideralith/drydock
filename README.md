@@ -178,7 +178,7 @@ call `drydock setup` directly unless you want to.
 
 ```bash
 # In any project — drydock works out of the box, no per-project setup needed:
-cd ~/git/myproject && drydock
+cd ~/projects/myproject && drydock
 
 # Other commands:
 drydock shell [DIR]      # bash inside the container — for debugging
@@ -219,8 +219,8 @@ scripts, a justfile) runs the same way.
 | `drydock list` | List live sessions for the current project (columns: NAME, STATUS, AGE) |
 | `drydock stop [NAME]` | Stop a session (force-removes the container). With no arg and N>1 sessions, prompts. |
 | `drydock shell [DIR]` | Bash shell inside the container at DIR |
-| `drydock link [--rw] <PATH> [CONTAINER-PATH]` | Mount a sibling project inside the container at `/workspace-siblings/<name>` (or a custom path). Without `--rw`: read-only mount, no key needed. With `--rw`: read-write mount; generates a per-sibling deploy key and managed SSH config so the agent can `git push` from the sibling without exposing `~/.ssh/`. |
-| `drydock unlink PATH` | Remove a sibling mount from the current project's list |
+| `drydock link [--rw] [--mirror] <PATH> [CONTAINER-PATH]` | Mount a sibling project inside the container at `/workspace-siblings/<name>` (or a custom path). Without `--rw`: read-only mount, no key needed. With `--rw`: read-write mount; generates a per-sibling deploy key and managed SSH config so the agent can `git push` from the sibling without exposing `~/.ssh/`. With `--mirror`: mount at the same host path inside the container (host-path-mirror — fixes in-project skill symlinks to external paths). |
+| `drydock unlink [--rw\|--mirror] PATH` | Remove a sibling mount from the current project's list (`--rw` and `--mirror` are accepted and ignored — the entry is keyed by host path) |
 | `drydock links` | Show all sibling mounts configured for the current project |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host — runs automatically when the container copy is stale (set `DRYDOCK_SKIP_AUTOSYNC=1` to disable) |
 | `drydock build` | Build/rebuild `drydock:latest` |
@@ -236,10 +236,10 @@ Some projects have sub-directories that are separate filesystem mounts — for
 example, an Obsidian vault bind-mounted via WSL2's 9P drvfs layer:
 
 ```bash
-# Example: ~/git/myproject/docs is a drvfs bind from Windows
-ls ~/git/myproject/docs   # works on host — files visible
+# Example: ~/projects/myproject/docs is a drvfs bind from Windows
+ls ~/projects/myproject/docs   # works on host — files visible
 drydock shell
-ls ~/git/myproject/docs  # empty without sub-mount propagation!
+ls ~/projects/myproject/docs  # empty without sub-mount propagation!
 ```
 
 drydock automatically detects sub-mounts under `${PROJECT_DIR}` and generates
@@ -247,10 +247,10 @@ a temporary compose overlay that propagates them into the container. Run
 `drydock doctor` to see what was detected:
 
 ```
-── sub-mounts under /home/you/git/myproject ──
-  ✓ /home/you/git/myproject/docs → /mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject (drvfs auto-translated)
-  ✓ /home/you/git/myproject/data → /data/foo (Linux-native bind)
-  ⚠ /home/you/git/myproject/nfsmount → server:/export (nfs, may not propagate)
+── sub-mounts under /home/you/projects/myproject ──
+  ✓ /home/you/projects/myproject/docs → /mnt/c/Users/You/Documents/Obsidian/Vaults/MyProject (drvfs auto-translated)
+  ✓ /home/you/projects/myproject/data → /data/foo (Linux-native bind)
+  ⚠ /home/you/projects/myproject/nfsmount → server:/export (nfs, may not propagate)
 ```
 
 Three classes of sub-mount:
@@ -258,7 +258,7 @@ Three classes of sub-mount:
 | Class | Example | Behaviour |
 |---|---|---|
 | **drvfs** (WSL2 9P) | Obsidian vault, OneDrive folder | Auto-translated to `/mnt/<drive>/...` — Docker Desktop reads it |
-| **Linux-native** | `mount --bind /data/src ~/git/proj/bind` | Source path translated via `/proc/self/mountinfo` lookup |
+| **Linux-native** | `mount --bind /data/src ~/projects/proj/bind` | Source path translated via `/proc/self/mountinfo` lookup |
 | **Exotic** (nfs, cifs, fuse, tmpfs) | NFS share, SSHFS mount | Passed through with a warning — propagation not guaranteed |
 
 If a sub-mount does not appear inside the container, see

@@ -6,7 +6,7 @@
 #
 # ── C-VERIFY-1: PreToolUse hook structure in managed-settings ────────────────
 # Verified 2026-05-18 from primary source:
-#   /home/rai/.claude/settings.json (live Claude Code installation)
+#   /home/you/.claude/settings.json (live Claude Code installation)
 #
 # Key finding: hooks.PreToolUse is an array of objects with shape:
 #   { "matcher": "<tool-name>", "hooks": [{ "type": "command", "command": "...", "timeout": N }] }

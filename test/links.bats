@@ -639,11 +639,11 @@ _links_setup() {
 	local sibling_dir="$BATS_TEST_TMPDIR/sibling-repo"
 	mkdir -p "$sibling_dir"
 
-	# A target UNDER $HOME (e.g. /home/<user>/git/sibling) must be accepted —
+	# A target UNDER $HOME (e.g. /home/<user>/projects/sibling) must be accepted —
 	# this is the host-path-mirror use case the maintainer explicitly requires.
 	(
 		cd "$PROJECT_DIR"
-		run cmd_link "$sibling_dir" "$FAKE_HOME/git/sibling"
+		run cmd_link "$sibling_dir" "$FAKE_HOME/projects/sibling"
 		[ "$status" -eq 0 ]
 	)
 }
@@ -1956,4 +1956,266 @@ _make_git_sibling() {
 	after="$(git -C "$sibling_dir" remote get-url origin)"
 	[ "$before" = "$after" ]
 	[ "$after" = "git@github.com:owner/repo.git" ]
+}
+
+# ── #122: --mirror flag (host-path-mirror syntactic sugar) ────────────────────
+
+@test "cmd_link: #122 --mirror stores the host source path as the container target" {
+	_links_setup
+
+	# Mirror target == host source path. When $BATS_TEST_TMPDIR is under a
+	# system-denylisted first component (CI runs `bats` directly with TMPDIR
+	# under /tmp), block (c) rejects the target before the mount succeeds.
+	# scripts/test.sh redirects TMPDIR to a /home-rooted path where this runs.
+	# `skip` must be called inline (not via a helper) to return from the test.
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+
+	# Mirror entry: realpath(host)|<host source path>| (RO → empty flags).
+	grep -qF "$(realpath "$sib")|$sib|" "$list_file"
+}
+
+@test "cmd_link: #122 --mirror is equivalent to the two-arg same-path form" {
+	_links_setup
+
+	# See the guard note above: skip when the mirror target lands under a
+	# system-denylisted first component (direct `bats` run with TMPDIR=/tmp).
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+	local mirror_line
+	mirror_line="$(grep . "$list_file")"
+
+	rm -f "$list_file"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link "$sib" "$sib"
+		[ "$status" -eq 0 ]
+	)
+	local twoarg_line
+	twoarg_line="$(grep . "$list_file")"
+
+	[ "$mirror_line" = "$twoarg_line" ]
+}
+
+@test "cmd_link: #122 --mirror rejects an explicit container target (conflict)" {
+	_links_setup
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$sib" "/custom/mount"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"--mirror"* ]]
+	)
+}
+
+@test "cmd_link: #122 --mirror still applies host-source rejection guards (INV-1)" {
+	_links_setup
+
+	mkdir -p "$FAKE_HOME/.ssh"
+
+	(
+		cd "$PROJECT_DIR"
+		run cmd_link --mirror "$FAKE_HOME/.ssh"
+		[ "$status" -ne 0 ]
+		[[ "$output" == *"protected path"* ]]
+	)
+}
+
+@test "cmd_unlink: #122 --mirror is accepted as an alias and removes the entry" {
+	_links_setup
+
+	# See the guard note above: the link step uses --mirror, so skip when the
+	# mirror target lands under a system-denylisted first component.
+	local _tmp_first="${BATS_TEST_TMPDIR#/}"
+	_tmp_first="${_tmp_first%%/*}"
+	case "$_tmp_first" in
+	etc | bin | sbin | usr | lib | lib32 | lib64 | boot | root | opt | proc | sys | dev | run | var | tmp)
+		skip "tmpdir first-component '/$_tmp_first' is system-denylisted as a mirror target; run via scripts/test.sh"
+		;;
+	esac
+
+	local sib="$BATS_TEST_TMPDIR/sibling-repo"
+	mkdir -p "$sib"
+
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+
+	(
+		cd "$PROJECT_DIR"
+		cmd_link --mirror "$sib"
+		run cmd_unlink --mirror "$sib"
+		[ "$status" -eq 0 ]
+	)
+
+	# Entry removed (file may be empty after removing the last entry).
+	! grep -qF "$(realpath "$sib")|" "$list_file"
+}
+
+# ── #123: warn_unlinked_skill_symlinks (broken-skill-symlink pre-flight) ──────
+
+@test "warn_unlinked_skill_symlinks: #123 outside-project unlinked symlink → one warning with fix" {
+	_links_setup
+
+	local ext="$BATS_TEST_TMPDIR/external-skills/playwright"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext" "$PROJECT_DIR/.claude/skills/playwright"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"playwright"* ]]
+	[[ "$output" == *"not linked"* ]]
+	# Fix command names --mirror and points at the target's parent dir.
+	[[ "$output" == *"drydock link --mirror $(dirname "$(realpath -m "$ext")")"* ]]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 no warning when target tree is mirror-linked" {
+	_links_setup
+
+	local ext_root="$BATS_TEST_TMPDIR/external-skills"
+	local ext="$ext_root/playwright"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext" "$PROJECT_DIR/.claude/skills/playwright"
+
+	# Mirror entry covering the parent tree: container target == host path.
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	local canon
+	canon="$(realpath -m "$ext_root")"
+	printf '%s|%s|\n' "$canon" "$canon" >"$list_file"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 default (/workspace-siblings) link does NOT suppress the warning" {
+	_links_setup
+
+	local ext_root="$BATS_TEST_TMPDIR/external-skills"
+	local ext="$ext_root/playwright"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext" "$PROJECT_DIR/.claude/skills/playwright"
+
+	# Default link: host path mounted at /workspace-siblings — does NOT make the
+	# absolute symlink target resolve in the container, so the warning must fire.
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	local canon
+	canon="$(realpath -m "$ext_root")"
+	printf '%s|/workspace-siblings/external-skills|\n' "$canon" >"$list_file"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"not linked"* ]]
+	[[ "$output" == *"drydock link --mirror"* ]]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 N symlinks into one tree → one grouped warning" {
+	_links_setup
+
+	local ext_root="$BATS_TEST_TMPDIR/external-skills"
+	mkdir -p "$ext_root/a" "$ext_root/b" "$ext_root/c"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext_root/a" "$PROJECT_DIR/.claude/skills/a"
+	ln -s "$ext_root/b" "$PROJECT_DIR/.claude/skills/b"
+	ln -s "$ext_root/c" "$PROJECT_DIR/.claude/skills/c"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	# All three share parent $ext_root → exactly one fix line.
+	local fix_count
+	fix_count="$(printf '%s\n' "$output" | grep -c 'drydock link --mirror')"
+	[ "$fix_count" -eq 1 ]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 symlink that stays inside the project → no warning" {
+	_links_setup
+
+	mkdir -p "$PROJECT_DIR/.claude/skills" "$PROJECT_DIR/shared"
+	ln -s "$PROJECT_DIR/shared" "$PROJECT_DIR/.claude/skills/local"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 no skills dir → silent, exit 0" {
+	_links_setup
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 relative symlink escaping the project → warning" {
+	_links_setup
+
+	# A relative symlink that climbs out of the project tree. realpath -m must
+	# resolve it relative to the symlink's own directory before the under-project
+	# check, otherwise an escaping relative link would be missed.
+	local ext="$BATS_TEST_TMPDIR/outside-tree/skill"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "../../../outside-tree/skill" "$PROJECT_DIR/.claude/skills/escaper"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"escaper"* ]]
+	[[ "$output" == *"drydock link --mirror"* ]]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 two distinct parents → two warnings" {
+	_links_setup
+
+	local tree_a="$BATS_TEST_TMPDIR/tree-a"
+	local tree_b="$BATS_TEST_TMPDIR/tree-b"
+	mkdir -p "$tree_a/one" "$tree_b/two"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$tree_a/one" "$PROJECT_DIR/.claude/skills/one"
+	ln -s "$tree_b/two" "$PROJECT_DIR/.claude/skills/two"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	# Distinct parents must NOT be grouped — one fix line each.
+	local fix_count
+	fix_count="$(printf '%s\n' "$output" | grep -c 'drydock link --mirror')"
+	[ "$fix_count" -eq 2 ]
 }

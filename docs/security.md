@@ -161,7 +161,7 @@ alignment:
 
 - **One key per sibling basename.** Keys are scoped by `basename`, not by host
   path or project. If two different projects link siblings with the same basename
-  (e.g. both link `~/git/shared-lib`), there would be a key-scope collision —
+  (e.g. both link `~/projects/shared-lib`), there would be a key-scope collision —
   drydock prevents this with a cross-project basename scan
   (`_check_sibling_basename_collision_rw` scans ALL `*.list` files, not just the
   current project's) and rejects the second link at the point of collision.
