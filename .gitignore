@@ -40,3 +40,6 @@ Thumbs.db
 
 # Social media post drafts — local-only working notes, not part of the project
 /.social/
+
+# Skill registry — local cache of resolved compact rules for delegators
+/.atl/
