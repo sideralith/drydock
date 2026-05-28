@@ -2085,3 +2085,102 @@ _make_git_sibling() {
 	# Entry removed (file may be empty after removing the last entry).
 	! grep -qF "$(realpath "$sib")|" "$list_file"
 }
+
+# ── #123: warn_unlinked_skill_symlinks (broken-skill-symlink pre-flight) ──────
+
+@test "warn_unlinked_skill_symlinks: #123 outside-project unlinked symlink → one warning with fix" {
+	_links_setup
+
+	local ext="$BATS_TEST_TMPDIR/external-skills/playwright"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext" "$PROJECT_DIR/.claude/skills/playwright"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"playwright"* ]]
+	[[ "$output" == *"not linked"* ]]
+	# Fix command names --mirror and points at the target's parent dir.
+	[[ "$output" == *"drydock link --mirror $(dirname "$(realpath -m "$ext")")"* ]]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 no warning when target tree is mirror-linked" {
+	_links_setup
+
+	local ext_root="$BATS_TEST_TMPDIR/external-skills"
+	local ext="$ext_root/playwright"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext" "$PROJECT_DIR/.claude/skills/playwright"
+
+	# Mirror entry covering the parent tree: container target == host path.
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	local canon
+	canon="$(realpath -m "$ext_root")"
+	printf '%s|%s|\n' "$canon" "$canon" >"$list_file"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 default (/workspace-siblings) link does NOT suppress the warning" {
+	_links_setup
+
+	local ext_root="$BATS_TEST_TMPDIR/external-skills"
+	local ext="$ext_root/playwright"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext" "$PROJECT_DIR/.claude/skills/playwright"
+
+	# Default link: host path mounted at /workspace-siblings — does NOT make the
+	# absolute symlink target resolve in the container, so the warning must fire.
+	local list_file="$FAKE_HOME/.config/drydock/links/myproject.list"
+	mkdir -p "$(dirname "$list_file")"
+	local canon
+	canon="$(realpath -m "$ext_root")"
+	printf '%s|/workspace-siblings/external-skills|\n' "$canon" >"$list_file"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"not linked"* ]]
+	[[ "$output" == *"drydock link --mirror"* ]]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 N symlinks into one tree → one grouped warning" {
+	_links_setup
+
+	local ext_root="$BATS_TEST_TMPDIR/external-skills"
+	mkdir -p "$ext_root/a" "$ext_root/b" "$ext_root/c"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$ext_root/a" "$PROJECT_DIR/.claude/skills/a"
+	ln -s "$ext_root/b" "$PROJECT_DIR/.claude/skills/b"
+	ln -s "$ext_root/c" "$PROJECT_DIR/.claude/skills/c"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	# All three share parent $ext_root → exactly one fix line.
+	local fix_count
+	fix_count="$(printf '%s\n' "$output" | grep -c 'drydock link --mirror')"
+	[ "$fix_count" -eq 1 ]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 symlink that stays inside the project → no warning" {
+	_links_setup
+
+	mkdir -p "$PROJECT_DIR/.claude/skills" "$PROJECT_DIR/shared"
+	ln -s "$PROJECT_DIR/shared" "$PROJECT_DIR/.claude/skills/local"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 no skills dir → silent, exit 0" {
+	_links_setup
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
