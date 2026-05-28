@@ -64,15 +64,15 @@ usage() {
 	# ── EXAMPLES ──
 	_dr_section "EXAMPLES"
 	_DR_LABEL_WIDTH=42
-	_dr_help_row "cd ~/git/myproject && drydock" "launch claude there"
-	_dr_help_row "drydock run ~/git/otherproject" "explicit dir"
+	_dr_help_row "cd ~/projects/myproject && drydock" "launch claude there"
+	_dr_help_row "drydock run ~/projects/otherproject" "explicit dir"
 	_dr_help_row 'drydock run -- --resume "my-session"' "resume a session"
 	_dr_help_row "drydock build" "rebuild image"
-	_dr_help_row "drydock link ~/git/shared-lib" "mount sibling read-only"
-	_dr_help_row "drydock link --rw ~/git/shared-lib" "RW + per-sibling deploy key"
-	_dr_help_row "drydock link ~/git/shared-lib /opt/lib" "mount at custom path"
-	_dr_help_row "drydock link --mirror ~/git/skills" "identical path in container — resolves external symlinks"
-	_dr_help_row "drydock unlink ~/git/shared-lib" "remove sibling"
+	_dr_help_row "drydock link ~/projects/shared-lib" "mount sibling read-only"
+	_dr_help_row "drydock link --rw ~/projects/shared-lib" "RW + per-sibling deploy key"
+	_dr_help_row "drydock link ~/projects/shared-lib /opt/lib" "mount at custom path"
+	_dr_help_row "drydock link --mirror ~/projects/skills" "identical path in container — resolves external symlinks"
+	_dr_help_row "drydock unlink ~/projects/shared-lib" "remove sibling"
 	_dr_help_row "drydock links" "list current project's siblings"
 	_dr_help_row "drydock new" "start a fresh session alongside any existing ones"
 	_dr_help_row "drydock attach ab12" "reconnect to session with discriminator ab12"
@@ -1414,7 +1414,7 @@ cmd_link() {
 			err "rejected: container target '$container_target' shadows the drydock hooks RO mount (INV-3)"
 		fi
 		# (c) Reject targets whose first path component is a system directory.
-		# NOTE: 'home' is intentionally NOT in this list — /home/<user>/git/foo is
+		# NOTE: 'home' is intentionally NOT in this list — /home/<user>/projects/foo is
 		# the host-path-mirror use case; ancestor-of-$HOME is handled by (f) below.
 		local _first_comp
 		_first_comp="${container_target#/}"
@@ -1446,7 +1446,7 @@ cmd_link() {
 		esac
 		# (f) Reject $HOME itself and ancestors of $HOME as custom target.
 		# A mount over $HOME or /home shadows the entire home directory.
-		# NOTE: targets under $HOME (e.g. /home/<user>/git/foo) are NOT rejected —
+		# NOTE: targets under $HOME (e.g. /home/<user>/projects/foo) are NOT rejected —
 		# that is the host-path-mirror use case.
 		# R3-FIX-6: use $_real_home for consistency with (e) and with the
 		# host-source guards above.

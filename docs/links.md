@@ -16,8 +16,8 @@ the sibling via a per-sibling deploy key.
 ## RO links (default)
 
 ```bash
-drydock link ~/git/shared-lib
-# linked: /home/user/git/shared-lib → /workspace-siblings/shared-lib (ro)
+drydock link ~/projects/shared-lib
+# linked: /home/you/projects/shared-lib → /workspace-siblings/shared-lib (ro)
 ```
 
 The agent can read the sibling but not write. The `:ro` flag is enforced at
@@ -26,8 +26,8 @@ the OS layer — not a policy setting the agent can modify.
 ## RW links (`--rw`)
 
 ```bash
-drydock link --rw ~/git/mylib
-# linked: /home/user/git/mylib → /workspace-siblings/mylib (rw)
+drydock link --rw ~/projects/mylib
+# linked: /home/you/projects/mylib → /workspace-siblings/mylib (rw)
 # [prints pubkey + GitHub deploy-key instructions]
 ```
 
@@ -79,7 +79,7 @@ step.
 ## `drydock unlink` with RW siblings
 
 ```bash
-drydock unlink ~/git/mylib
+drydock unlink ~/projects/mylib
 ```
 
 Regardless of whether `--rw` was used at link time, `unlink` detects the
@@ -147,8 +147,8 @@ The optional `<container-target>` argument lets you mount a sibling at the
 **same absolute path inside the container as it occupies on the host**:
 
 ```bash
-# ~/git/shared-lib on host → /home/user/git/shared-lib inside container
-drydock link ~/git/shared-lib /home/user/git/shared-lib
+# ~/projects/shared-lib on host → /home/you/projects/shared-lib inside container
+drydock link ~/projects/shared-lib /home/you/projects/shared-lib
 ```
 
 Because repeating the path is verbose and easy to get wrong, `--mirror` is
@@ -156,7 +156,7 @@ shorthand for the same mount — the container target is implied to equal the
 host source:
 
 ```bash
-drydock link --mirror ~/git/shared-lib
+drydock link --mirror ~/projects/shared-lib
 ```
 
 `drydock unlink --mirror <path>` is accepted as an alias of the plain
@@ -178,8 +178,8 @@ top-level symlink whose target is an absolute host path outside the project and
 not covered by a link, naming the exact fix (grouped by parent directory):
 
 ```
-warn:  skill 'playwright' → '/home/user/git/skills/playwright' is outside the project and not linked
-       fix: drydock link --mirror /home/user/git/skills
+warn:  skill 'playwright' → '/home/you/projects/skills/playwright' is outside the project and not linked
+       fix: drydock link --mirror /home/you/projects/skills
 ```
 
 This is informational and non-blocking: the session launches normally. drydock
@@ -212,18 +212,18 @@ work even when no container is running.
 Re-linking the same host path with the **same container target** is a no-op:
 
 ```bash
-drydock link ~/git/foo /workspace-siblings/foo   # first call: linked
-drydock link ~/git/foo /workspace-siblings/foo   # second call: "already linked: ..."
+drydock link ~/projects/foo /workspace-siblings/foo   # first call: linked
+drydock link ~/projects/foo /workspace-siblings/foo   # second call: "already linked: ..."
 ```
 
 Re-linking the same host path with a **different container target** is an
 error — `drydock link` requires an explicit `unlink` first:
 
 ```bash
-drydock link ~/git/foo /workspace-siblings/foo
-drydock link ~/git/foo /home/user/git/foo
+drydock link ~/projects/foo /workspace-siblings/foo
+drydock link ~/projects/foo /home/you/projects/foo
 # error: already linked with a different container target '/workspace-siblings/foo'
-#        — run 'drydock unlink ~/git/foo' first
+#        — run 'drydock unlink ~/projects/foo' first
 ```
 
 ## Collision detection
@@ -255,8 +255,8 @@ target would cause Docker Compose to silently keep only one mount. drydock
 rejects the second:
 
 ```bash
-drydock link ~/git/a /workspace-siblings/common
-drydock link ~/git/b /workspace-siblings/common
+drydock link ~/projects/a /workspace-siblings/common
+drydock link ~/projects/b /workspace-siblings/common
 # error: container target collision: '/workspace-siblings/common' already used
 ```
 

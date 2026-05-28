@@ -5,7 +5,7 @@
 # compose fragment if the target project has a docs/ directory.
 #
 # Required env vars (set by the drydock CLI):
-#   PROJECT_DIR     Absolute path to the project root (e.g. /home/<you>/git/foo)
+#   PROJECT_DIR     Absolute path to the project root (e.g. /home/<you>/projects/foo)
 #   PROJECT_NAME    Basename of PROJECT_DIR, used for container name uniqueness
 #   USER_NAME       Invoking host user (id -un) — drives the container user/$HOME
 #   HOME            Host home directory (ambient) — root of every host bind path
