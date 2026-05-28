@@ -2184,3 +2184,38 @@ _make_git_sibling() {
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
 }
+
+@test "warn_unlinked_skill_symlinks: #123 relative symlink escaping the project → warning" {
+	_links_setup
+
+	# A relative symlink that climbs out of the project tree. realpath -m must
+	# resolve it relative to the symlink's own directory before the under-project
+	# check, otherwise an escaping relative link would be missed.
+	local ext="$BATS_TEST_TMPDIR/outside-tree/skill"
+	mkdir -p "$ext"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "../../../outside-tree/skill" "$PROJECT_DIR/.claude/skills/escaper"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"escaper"* ]]
+	[[ "$output" == *"drydock link --mirror"* ]]
+}
+
+@test "warn_unlinked_skill_symlinks: #123 two distinct parents → two warnings" {
+	_links_setup
+
+	local tree_a="$BATS_TEST_TMPDIR/tree-a"
+	local tree_b="$BATS_TEST_TMPDIR/tree-b"
+	mkdir -p "$tree_a/one" "$tree_b/two"
+	mkdir -p "$PROJECT_DIR/.claude/skills"
+	ln -s "$tree_a/one" "$PROJECT_DIR/.claude/skills/one"
+	ln -s "$tree_b/two" "$PROJECT_DIR/.claude/skills/two"
+
+	run warn_unlinked_skill_symlinks "$PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	# Distinct parents must NOT be grouped — one fix line each.
+	local fix_count
+	fix_count="$(printf '%s\n' "$output" | grep -c 'drydock link --mirror')"
+	[ "$fix_count" -eq 2 ]
+}
