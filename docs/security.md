@@ -311,6 +311,37 @@ The hook is wired by `40-guardrails-hook.json` (also image-baked) as a
 `PreToolUse` handler with matcher `"Bash"` — it only runs for Bash tool calls.
 The script reads the full command string on stdin and applies regex checks.
 
+**ADR-9 — Conditional quote-strip gate (issue #133).** The hook pre-processes
+each command segment through `_strip_quotes`, which masks quoted strings before
+deciding whether to expose their content to the rule set. This prevents
+data-quote false positives where a quoted argument containing a destructive
+pattern (e.g. `git commit -m "..."` or `rg "..." file`) was incorrectly
+blocked by C1-residue, C17, or C18.
+
+The gate uses a closed flatten-trigger set: it exposes the original quoted
+content (FLATTEN) only when the masked segment reveals a command word that a
+downstream rule inspects — specifically:
+- `rm` command word (C1-residue / C17 / C18)
+- Shell exec introducers — `bash`, `sh`, `dash`, `zsh`, bare or
+  path-qualified (e.g. `/bin/sh`), optionally `sudo`-prefixed — when a `-c`
+  flag is also present anywhere in the segment (need not be adjacent)
+- `eval`, optionally `sudo`-prefixed
+- Per-segment rule introducers: `ssh` (A1), `kubectl`/`helm` (A2),
+  `psql`/`mysql`/`mongo`/`mongosh`/`redis-cli` (A3), `terraform` (A4),
+  `chmod` (C7-residue) — preserves flag-value coverage (e.g. `--context="prod"`)
+
+Segments with NO introducer token anywhere in their masked text (e.g. `git`,
+`gh`, `echo`, `rg` commands) receive DROP treatment: quoted content is replaced
+by spaces and the masked form is passed to the rules — no phantom `rm` token
+escapes.
+
+This narrowly reopens ADR-6 (rejected general flag-tokenizing), because the
+gate uses a fixed introducer set only to decide strip behavior, not to
+parse per-command flags. The change is monotonic: exposed text per segment is
+always ≤ the shipped unconditional flatten, so new false positives cannot be
+introduced (only BLOCK→ALLOW flips are possible, and the flip audit closes
+all accident-class flips). Rule loops C1-residue, C17, and C18 are unchanged.
+
 **Docker exec/run coverage.** The hook checks the full command string
 regardless of a leading `docker exec <ctr>` or `docker run [opts] <image>`
 prefix — dangerous substrings (`rm -rf`, `:(){:|:&};:`, `curl … | bash`, etc.)
@@ -350,6 +381,50 @@ accidents, not adversaries. See "What drydock does NOT protect against" below.
   would bypass the space-anchored regex. Accident-class typos do not produce
   these metacharacter-glued forms; this gap is documented for completeness
   under threat model A (accidents, not adversaries).
+- **ADR-9 evasion class — quoted command name.** Quoting ANY introducer's
+  command name masks it from the gate: `"rm" -rf /etc`, `"kubectl" delete pod x
+  --context=prod`, `"psql" --host=prod-db`. In each case the masked segment
+  contains no introducer token → the segment receives DROP treatment → the rule
+  never fires → ALLOW. Distinguishing a quoted command name from a quoted data
+  argument requires a real shell parser — exactly the ADR-6 arms race ADR-9 is
+  designed to avoid. Deliberate construction, not an accident-class action.
+  Documented non-goal.
+- **ADR-9 evasion class — interpreter wrappers.** Commands such as
+  `python -c "..."`, `perl -e "..."`, `ruby -e "..."`, or `node -e "..."`
+  are not covered by the executor arm. The flatten-trigger set is shell-only
+  by design; scripting language interpreters are out of scope.
+- **ADR-9 evasion class — shells outside the closed introducer set.**
+  `ksh -c "..."`, `csh -c "..."`, `tcsh -c "..."`, and `fish -c "..."` receive
+  DROP treatment (quoted content masked away) because Part A only matches
+  `{bash, sh, dash, zsh}`. These shells are uncommon in the minimal container
+  image (absent = command-not-found, no harm), and expanding the set would
+  reopen the ADR-6 arms race. The closed-set membership is ADR-9's standing
+  decision.
+- **ADR-9 evasion class — case-sensitivity divergence between gate and rules.**
+  The gate matches introducer tokens case-sensitively (the `_strip_quotes`
+  function runs in the main shell with `nocasematch` off). Rules A1, A2, and A3
+  each run in a `(...)` subshell with `shopt -s nocasematch`. An uppercase
+  introducer therefore falls through the gate (no case-sensitive match → DROP),
+  while the quoted prod/host marker is also removed by masking, so the rule
+  never sees either token: `SSH "prod-host" runit`, `KUBECTL delete pod x
+  --context="prod"`, `PSQL --host="prod-db"` all ALLOW where the lowercase
+  equivalents (with quoted markers) would have BLOCKed. This is evasion-class /
+  deliberate-construction only: uppercase command names are not valid Linux
+  commands (`SSH`, `KUBECTL`, `PSQL` → command-not-found, nothing executes),
+  and the prod/host marker must be quoted to survive masking. Not an
+  accident-class pattern. Documented non-goal. Note: `rm`, `terraform`, and
+  `chmod` rules run in the main shell (case-sensitive, matching the gate), so
+  there is no equivalent gap for those introducers.
+- **ADR-9 over-block (tolerable) — quoted remote ssh payload.** Because `ssh`
+  is in the flatten-trigger set (needed so A1 can inspect hostname and flag
+  values), `ssh host "rm -rf /"` FLATTENs its quoted payload and is then
+  BLOCKED by C1-residue (the `/` system-root token is now visible). This is an
+  over-block, not an evasion: the command executes on a remote host, so there
+  is no local-filesystem hazard. The monotonic direction is correct: tolerable
+  false-positive rather than missed accident. By contrast, `ssh host "rm -rf
+  /var/cache/x"` passes — the non-system-root path token does not match the
+  C1-residue anchor. A1 continues to block ssh to any production host regardless
+  of whether the remote payload contains a destructive command.
 
 ### If you have a personal `block-destructive.sh` hook
 

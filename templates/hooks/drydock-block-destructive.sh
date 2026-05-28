@@ -145,8 +145,8 @@ IFS=$'\x01' read -ra _segments <<<"$norm"
 #     quoted flag VALUES (e.g. --context="prod", --host="prod-db") being
 #     exposed — those values are part of the real command, not data quotes
 #
-# Only segments whose leading token is not in this set (git, gh, echo, rg,
-# and similar data-passing tools) receive the DROP treatment.
+# Segments with NO introducer token anywhere in their masked text (git, gh,
+# echo, rg, and similar data-passing tools) receive the DROP treatment.
 # This reopens ADR-6 narrowly (ADR-9 standing decision). Rule loops
 # C1-residue / C17 / C18 are UNCHANGED.
 _strip_quotes() {
