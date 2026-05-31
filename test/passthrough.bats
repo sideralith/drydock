@@ -77,10 +77,13 @@ _run_main() {
 @test "cmd_run: no extra args -> runs claude with no passthrough" {
   # New persistent model: compose up -d then exec -it drydock claude.
   # DOCKER=echo means ps returns nothing (0 sessions) → non-nested → launch new.
+  # Note: lifecycle helper also emits 'rm -f <name>' after exec returns,
+  # so we match the exec line specifically (not whole output) using grep -E with
+  # a line-end anchor to guarantee no stray trailing args are present.
   _run_cmd_run "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude" ]]
+  grep -qE ' drydock claude$' <<<"$output"
 }
 
 @test "cmd_run: DIR -- --resume foo -> passes args to claude" {
@@ -88,14 +91,14 @@ _run_main() {
   _run_cmd_run "$BATS_TEST_TMPDIR" -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo" ]]
+  [[ "$output" == *" drydock claude --resume foo"* ]]
 }
 
 @test "cmd_run: -- --resume foo (no DIR) -> passes args to claude" {
   _run_cmd_run -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo" ]]
+  [[ "$output" == *" drydock claude --resume foo"* ]]
 }
 
 # ── cmd_shell tests ────────────────────────────────────────────────────────────
@@ -123,12 +126,12 @@ _run_main() {
   _run_main -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo" ]]
+  [[ "$output" == *" drydock claude --resume foo"* ]]
 }
 
 @test "main run -- --resume foo -> routes to cmd_run with passthrough" {
   _run_main run -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo" ]]
+  [[ "$output" == *" drydock claude --resume foo"* ]]
 }

@@ -73,9 +73,11 @@ main() {
 	# Submount overlay: PID-namespaced temp file cleaned up on EXIT.
 	# MUST be inside main() (post source-guard): bats files source bin/drydock
 	# to test functions, and a top-level trap would fire at test cleanup.
-	# NOTE: lib/commands.sh uses `exec docker compose run` for run/shell/exec —
-	# `exec` replaces this bash process and the trap NEVER fires for those
-	# paths. That's why the orphan-reap loop above also exists.
+	# NOTE: shell + nested-run paths still use `exec docker compose run` —
+	# `exec` replaces this bash process and the trap NEVER fires for those paths.
+	# run/new/attach paths now use _run_claude_lifecycle (child, not exec), so
+	# this EXIT trap fires correctly on those paths. The orphan-reap loop above
+	# is kept as defense-in-depth for the still-exec'd shell/nested paths.
 	SUBMOUNT_OVERLAY="${TMPDIR:-/tmp}/drydock-submounts-$$.yml"
 	export SUBMOUNT_OVERLAY
 	# Links overlay: same lifecycle as SUBMOUNT_OVERLAY.
