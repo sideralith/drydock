@@ -705,9 +705,9 @@ _passthrough_has_session_flag() {
 		# value forms (-rfoo, -r=foo, -cr, -rc) are also deferred to the user.
 		# Revisit when the bundled claude version changes — this list is version-coupled.
 		case "$_el" in
-			--resume|--session-id|--resume=*|--session-id=*|-r*|-c*|--continue|--from-pr|--from-pr=*)
-				return 0
-				;;
+		--resume | --session-id | --resume=* | --session-id=* | -r* | -c* | --continue | --from-pr | --from-pr=*)
+			return 0
+			;;
 		esac
 	done
 	return 1
@@ -725,7 +725,7 @@ _write_session_marker() {
 	local _uuid="$2"
 	local _dir="$HOME/.claude-container-${_disc}"
 	mkdir -p "$_dir"
-	printf '%s\n' "$_uuid" > "$_dir/session-id"
+	printf '%s\n' "$_uuid" >"$_dir/session-id"
 }
 
 # _launch_new project_dir compose_args_nameref [passthrough...]
