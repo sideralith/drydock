@@ -3340,6 +3340,62 @@ STUB
 	grep -q "rm -f" "$DOCKER_CALL_LOG"
 }
 
+# ── T1.9b: cmd_run attach branch derives disc from target suffix, NOT $DRYDOCK_DISCRIMINATOR ──
+# D-6 clobber hazard: cmd_run's Attach:* branch calls export_compose_env which
+# re-mints DRYDOCK_DISCRIMINATOR to a DIFFERENT value from the target suffix.
+# The test sets export_compose_env to DRYDOCK_DISCRIMINATOR="ff00" while the live
+# container has suffix ab12 and the marker lives under ab12.
+# Correct: disc=ab12 → reads marker → emits --resume <uuid>.
+# Buggy (disc=$DRYDOCK_DISCRIMINATOR=ff00): marker miss → bare --resume (no uuid).
+
+@test "cmd_run: attach branch derives disc from target suffix, NOT \$DRYDOCK_DISCRIMINATOR (D-6, CRITICAL)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 0; }
+	warn_unlinked_skill_symlinks() { :; }
+
+	local proj_name
+	proj_name="$(basename "$CMD_T4_PROJECT_DIR")"
+	local target_name="drydock-${proj_name}-ab12"
+
+	# Docker stub: ps returns one live session (suffix ab12); all other calls succeed.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-run-d6-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-${proj_name}-ab12\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	# export_compose_env sets DRYDOCK_DISCRIMINATOR to ff00 — a DIFFERENT value
+	# from the target suffix ab12 — exactly what happens in production when the
+	# Attach:* branch calls export_compose_env after session discovery.
+	export_compose_env() {
+		export PROJECT_NAME="${proj_name}"
+		export DRYDOCK_DISCRIMINATOR="ff00"
+		export DRYDOCK_SESSION_NAME="drydock-${proj_name}-ff00"
+		export COMPOSE_PROJECT_NAME="drydock-${proj_name}-ff00"
+	}
+
+	# Stub _select_choice to return the Attach option for the ab12 container.
+	_select_choice() { printf 'Attach: drydock-%s-ab12\n' "${proj_name}"; }
+
+	# Pre-create the marker under the CORRECT disc (ab12), NOT ff00.
+	mkdir -p "$HOME/.claude-container-ab12"
+	printf '550e8400-e29b-41d4-a716-446655440000\n' > "$HOME/.claude-container-ab12/session-id"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+
+	# Must pass the specific uuid from the ab12 marker.
+	# A buggy disc=ff00 path would miss the marker and emit bare --resume (no uuid).
+	grep -q -- "--resume 550e8400-e29b-41d4-a716-446655440000" "$DOCKER_CALL_LOG"
+}
+
 # ── #103: regex tightening — reject discriminators with length != 4 ──────────
 # _gen_discriminator (lib/paths.sh:18) produces exactly 4 hex chars via
 # `printf '%04x' "$(((RANDOM << 8 ^ RANDOM) & 0xffff))"` — the `& 0xffff` clamp

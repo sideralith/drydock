@@ -153,6 +153,9 @@ STUB
 	[ -f "$HOME/.claude-container-cc99/session-id" ]
 	# The WRONG disc (ff00) must NOT have a marker file created by accident.
 	[ ! -f "$HOME/.claude-container-ff00/session-id" ]
+	# The docker call log must contain the specific uuid from the cc99 marker.
+	# A buggy disc=ff00 path would emit bare --resume (no uuid) and fail this.
+	grep -q -- "--resume 550e8400-e29b-41d4-a716-446655440000" "$DOCKER_CALL_LOG"
 }
 
 # ── T4.7: cmd_attach reads marker and passes --resume <uuid> ─────────────────

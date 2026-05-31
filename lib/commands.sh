@@ -580,13 +580,18 @@ cmd_run() {
 			local _run_uuid=""
 			local _run_marker="$HOME/.claude-container-${_run_disc}/session-id"
 			[ -f "$_run_marker" ] && _run_uuid="$(cat "$_run_marker")"
-			# Reap orphan, then refresh marker, then resume (D-7, D-5, D-6, REQ-5, REQ-6).
+			# Reap orphan unconditionally (D-7, REQ-5); then resume unless the user
+			# already supplied a session flag in passthrough (REQ-PT-1).
 			_reap_orphan_claude "$target" "$_run_uuid"
-			[ -n "$_run_uuid" ] && _write_session_marker "$_run_disc" "$_run_uuid"
-			if [ -n "$_run_uuid" ]; then
-				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+			if _passthrough_has_session_flag "${passthrough[@]}"; then
+				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude "${passthrough[@]}"
 			else
-				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+				[ -n "$_run_uuid" ] && _write_session_marker "$_run_disc" "$_run_uuid"
+				if [ -n "$_run_uuid" ]; then
+					_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+				else
+					_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+				fi
 			fi
 			;;
 		"Start a new session")
@@ -685,6 +690,24 @@ _reap_orphan_claude() {
 	fi
 }
 
+# _passthrough_has_session_flag [args...]
+# Returns 0 (true) if any element in the argument list is a user-supplied
+# Claude session flag: --resume, --session-id, --resume=*, or --session-id=*.
+# When true, drydock must NOT inject its own --session-id / --resume and must
+# NOT write a session marker — pass the claude invocation through clean.
+# Call as: _passthrough_has_session_flag "${passthrough[@]}"
+_passthrough_has_session_flag() {
+	local _el
+	for _el in "$@"; do
+		case "$_el" in
+			--resume|--session-id|--resume=*|--session-id=*)
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
 # _write_session_marker disc uuid
 # Write the claude session UUID to the per-session state file so that a future
 # `drydock attach` can resume the specific conversation without showing a picker.
@@ -721,10 +744,16 @@ _launch_new() {
 	local _uuid
 	_uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
 	"$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" up -d
-	# Write the marker BEFORE handing off to the lifecycle helper so that a future
-	# attach can read it regardless of how the session ends (D-5, Refinement 3).
-	_write_session_marker "$_disc" "$_uuid"
-	_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+	# If the user already supplied --resume or --session-id in passthrough, pass
+	# through clean — no injected --session-id, no marker write (REQ-PT-1).
+	if _passthrough_has_session_flag "${passthrough[@]}"; then
+		_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	else
+		# Write the marker BEFORE handing off to the lifecycle helper so that a future
+		# attach can read it regardless of how the session ends (D-5, Refinement 3).
+		_write_session_marker "$_disc" "$_uuid"
+		_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+	fi
 }
 
 cmd_shell() {
@@ -2045,9 +2074,15 @@ cmd_new() {
 	# then _run_claude_lifecycle attaches Claude interactively as a child process.
 	# Dropping exec here lets the EXIT trap in bin/drydock fire correctly (D-8).
 	"$DOCKER" compose "${compose_args[@]}" -p "$_name" up -d
-	# Write the marker BEFORE handing off to the lifecycle helper (D-5, Refinement 3).
-	_write_session_marker "$_disc" "$_uuid"
-	_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+	# If the user already supplied --resume or --session-id in passthrough, pass
+	# through clean — no injected --session-id, no marker write (REQ-PT-1).
+	if _passthrough_has_session_flag "${passthrough[@]}"; then
+		_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	else
+		# Write the marker BEFORE handing off to the lifecycle helper (D-5, Refinement 3).
+		_write_session_marker "$_disc" "$_uuid"
+		_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+	fi
 }
 
 # ── cmd_attach ────────────────────────────────────────────────────────────────
@@ -2127,17 +2162,23 @@ cmd_attach() {
 	# Unconditional; idempotent when no orphan exists (D-7, REQ-5).
 	_reap_orphan_claude "$target_name" "$_uuid"
 
-	# Write/refresh the marker BEFORE the lifecycle call so it is always
-	# up-to-date regardless of how this session eventually ends (D-5, Refinement 3).
-	# Only write when a uuid is known; the bare --resume fallback has no uuid to record.
-	[ -n "$_uuid" ] && _write_session_marker "$_disc" "$_uuid"
-
-	# Resume the specific session by uuid (no picker), or fall back to bare --resume
-	# (picker) when no marker existed (pre-#131 detach / lookup miss) (D-6, REQ-6).
-	if [ -n "$_uuid" ]; then
-		_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+	# If the user already supplied --resume or --session-id in passthrough, pass
+	# through clean — no injected --resume, no marker write (REQ-PT-1).
+	if _passthrough_has_session_flag "${passthrough[@]}"; then
+		_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude "${passthrough[@]}"
 	else
-		_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+		# Write/refresh the marker BEFORE the lifecycle call so it is always
+		# up-to-date regardless of how this session eventually ends (D-5, Refinement 3).
+		# Only write when a uuid is known; the bare --resume fallback has no uuid to record.
+		[ -n "$_uuid" ] && _write_session_marker "$_disc" "$_uuid"
+
+		# Resume the specific session by uuid (no picker), or fall back to bare --resume
+		# (picker) when no marker existed (pre-#131 detach / lookup miss) (D-6, REQ-6).
+		if [ -n "$_uuid" ]; then
+			_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+		else
+			_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+		fi
 	fi
 }
 
