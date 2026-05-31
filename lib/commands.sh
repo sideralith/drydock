@@ -639,6 +639,7 @@ _run_claude_lifecycle() {
 	# (lib/commands.sh:1185) to capture _rc without letting errexit abort.
 	local _rc=0
 	"$DOCKER" "${_docker_argv[@]}" || _rc=$?
+	trap - HUP
 
 	# Teardown: single-name rm -f. NEVER compose down (REQ-4, D-3).
 	# Guarded with || true so a failing rm does not suppress _rc (D-2).

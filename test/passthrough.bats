@@ -78,11 +78,12 @@ _run_main() {
   # New persistent model: compose up -d then exec -it drydock claude.
   # DOCKER=echo means ps returns nothing (0 sessions) → non-nested → launch new.
   # Note: lifecycle helper also emits 'rm -f <name>' after exec returns,
-  # so we match *" drydock claude"* (trailing * allows text after on same/next line).
+  # so we match the exec line specifically (not whole output) using grep -E with
+  # a line-end anchor to guarantee no stray trailing args are present.
   _run_cmd_run "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude"* ]]
+  grep -qE ' drydock claude$' <<<"$output"
 }
 
 @test "cmd_run: DIR -- --resume foo -> passes args to claude" {
