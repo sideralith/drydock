@@ -574,7 +574,7 @@ cmd_run() {
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			note "Attaching to $target"
-			exec "$DOCKER" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+			_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
 			;;
 		"Start a new session")
 			note "Starting new session alongside existing in $project_dir"
@@ -610,6 +610,43 @@ cmd_run() {
 	fi
 }
 
+# _run_claude_lifecycle session_name docker_argv...
+# Core lifecycle helper: run `docker compose exec` as a CHILD (no exec), capture
+# exit code without letting errexit abort early, and apply the structural
+# parent-survival discriminator:
+#   TRAP A (parent survived)  — teardown: single-name `docker rm -f session_name`
+#   TRAP B (SIGHUP received)  — disconnect→persist: exit 0, NO teardown
+#
+# Signal policy: `trap 'exit 0' HUP` — terminal-close fires the trap; the HUP
+# path exits before reaching the rm -f line, so the container is preserved.
+# SIGINT is NOT trapped — the interactive claude TUI holds the host TTY in RAW
+# mode, so Ctrl+C (INTR byte) forwards via the PTY to the in-container claude;
+# the host drydock parent never receives SIGINT. (Gate #2 pending empirical
+# confirmation; not trapping SIGINT is the design hypothesis — D-2.)
+#
+# Teardown is guarded with `|| true` so a failing rm does not suppress _rc.
+# The function propagates claude's exit code as its own return code (D-2, OQ-6).
+_run_claude_lifecycle() {
+	local _session_name="$1"
+	shift
+	local -a _docker_argv=("$@")
+
+	# TRAP B: SIGHUP → disconnect→persist. Exit 0 immediately; rm -f line is
+	# never reached, so the container survives.
+	trap 'exit 0' HUP
+
+	# TRAP A: reach-exit-guarded exec. Use the cmd_setup_token precedent
+	# (lib/commands.sh:1185) to capture _rc without letting errexit abort.
+	local _rc=0
+	"$DOCKER" "${_docker_argv[@]}" || _rc=$?
+
+	# Teardown: single-name rm -f. NEVER compose down (REQ-4, D-3).
+	# Guarded with || true so a failing rm does not suppress _rc (D-2).
+	"$DOCKER" rm -f "$_session_name" || true
+
+	return "$_rc"
+}
+
 # _launch_new project_dir compose_args_nameref [passthrough...]
 # Internal: mint-and-launch a fresh persistent container.
 # Calls compose up -d then exec -it claude. Used by cmd_run (0-sessions path,
@@ -626,7 +663,7 @@ _launch_new() {
 
 	local _name="$DRYDOCK_SESSION_NAME"
 	"$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" up -d
-	exec "$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
 }
 
 cmd_shell() {
@@ -1938,9 +1975,10 @@ cmd_new() {
 	note "Starting new session $_name in $project_dir"
 
 	# Persistent lifecycle: compose up -d starts the container (PID 1 = sleep infinity),
-	# then compose exec attaches Claude interactively.
+	# then _run_claude_lifecycle attaches Claude interactively as a child process.
+	# Dropping exec here lets the EXIT trap in bin/drydock fire correctly (D-8).
 	"$DOCKER" compose "${compose_args[@]}" -p "$_name" up -d
-	exec "$DOCKER" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
 }
 
 # ── cmd_attach ────────────────────────────────────────────────────────────────
@@ -2005,7 +2043,10 @@ cmd_attach() {
 		return 2
 	fi
 	note "Attaching to $target_name"
-	exec "$DOCKER" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+	# Drop exec: run _run_claude_lifecycle as a child so the EXIT trap in bin/drydock
+	# fires correctly on return (D-8). Phase 4 (--session-id/marker/reap) will add
+	# disc derivation, marker read, and orphan reap here once Gate-1/Gate-3 are clear.
+	_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
 }
 
 # ── cmd_list ──────────────────────────────────────────────────────────────────

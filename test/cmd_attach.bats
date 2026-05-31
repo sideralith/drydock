@@ -186,6 +186,23 @@ drydock-myproj-ef56")"
 	[ "$status" -ne 0 ]
 }
 
+# ── T1.10: cmd_attach uses _run_claude_lifecycle (teardown fires) (D-8) ───────
+
+@test "cmd_attach: uses lifecycle helper — teardown rm -f appears after exec (D-8)" {
+	# GIVEN cmd_attach is called with a live session and a TTY
+	# WHEN claude exits
+	# THEN docker rm -f appears in the call log (lifecycle helper was used,
+	# not raw exec — exec would replace the process and teardown would never run)
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+
+	run cmd_attach "ab12"
+	[ "$status" -eq 0 ]
+	grep -q "rm -f drydock-myproj-ab12" "$DOCKER_CALL_LOG"
+}
+
 # ── Filter: only matches current project (SR-NEW-1) ──────────────────────────
 
 @test "cmd_attach: does NOT attach to a different project's container (SR-NEW-1)" {
