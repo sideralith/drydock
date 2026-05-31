@@ -44,7 +44,7 @@ usage() {
 	_dr_help_row "(no args)" "Default — attach to existing session or launch Claude (prompts if multiple)"
 	_dr_help_row "run [DIR] [-- ARGS]" "Detect + delegate: attach, new, or prompt; ARGS after -- go to claude"
 	_dr_help_row "new" "Start a new session (skips prompt; runs alongside any existing sessions)"
-	_dr_help_row "attach [NAME]" "Reconnect to an existing session (claude --resume)"
+	_dr_help_row "attach [NAME]" "Reconnect to an existing session; resumes the specific prior conversation by UUID (picker fallback if no record)"
 	_dr_help_row "list" "List live sessions for the current project"
 	_dr_help_row "stop [NAME]" "Stop a session (docker rm -f); with no arg, prompts if multiple"
 	_dr_help_row "shell [DIR] [-- CMD]" "Bash shell in container; with -- CMD, run CMD instead"
@@ -574,7 +574,20 @@ cmd_run() {
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			note "Attaching to $target"
-			_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+			# Derive disc from target name suffix — NEVER from $DRYDOCK_DISCRIMINATOR,
+			# which export_compose_env (above) just clobbered with a new random value (D-6).
+			local _run_disc="${target##*-}"
+			local _run_uuid=""
+			local _run_marker="$HOME/.claude-container-${_run_disc}/session-id"
+			[ -f "$_run_marker" ] && _run_uuid="$(cat "$_run_marker")"
+			# Reap orphan, then refresh marker, then resume (D-7, D-5, D-6, REQ-5, REQ-6).
+			_reap_orphan_claude "$target" "$_run_uuid"
+			[ -n "$_run_uuid" ] && _write_session_marker "$_run_disc" "$_run_uuid"
+			if [ -n "$_run_uuid" ]; then
+				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+			else
+				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+			fi
 			;;
 		"Start a new session")
 			note "Starting new session alongside existing in $project_dir"
@@ -621,8 +634,10 @@ cmd_run() {
 # path exits before reaching the rm -f line, so the container is preserved.
 # SIGINT is NOT trapped — the interactive claude TUI holds the host TTY in RAW
 # mode, so Ctrl+C (INTR byte) forwards via the PTY to the in-container claude;
-# the host drydock parent never receives SIGINT. (Gate #2 pending empirical
-# confirmation; not trapping SIGINT is the design hypothesis — D-2.)
+# the host drydock parent never receives SIGINT. Gate #2 empirically confirmed:
+# Ctrl+C reached the in-container process; the host parent was NOT signaled.
+# DO NOT add a SIGINT trap — it would intercept an event this process never
+# receives and mask real signal problems. (D-2)
 #
 # Teardown is guarded with `|| true` so a failing rm does not suppress _rc.
 # The function propagates claude's exit code as its own return code (D-2, OQ-6).
@@ -648,6 +663,43 @@ _run_claude_lifecycle() {
 	return "$_rc"
 }
 
+# _reap_orphan_claude session_name uuid
+# Kill any orphaned claude process left inside the container from a prior
+# disconnected session. Must run unconditionally before --resume so the orphan
+# does not double-append to the conversation file.
+#
+# When uuid is non-empty: `pkill -f <uuid>` targets ONLY the orphan launched as
+# `claude --session-id <uuid>`. PID-1-safe: PID 1 is `sleep infinity` and does
+# not carry the uuid in its cmdline.
+# When uuid is empty (pre-#131 attach / marker absent): falls back to
+# `pkill -f claude` — safe because each session lives in its own container.
+# Idempotent: pkill exits non-zero when no process matches; `|| true` absorbs it.
+# (REQ-5, D-7)
+_reap_orphan_claude() {
+	local _session_name="$1"
+	local _uuid="$2"
+	if [ -n "$_uuid" ]; then
+		"$DOCKER" exec "$_session_name" pkill -f "$_uuid" || true
+	else
+		"$DOCKER" exec "$_session_name" pkill -f claude || true
+	fi
+}
+
+# _write_session_marker disc uuid
+# Write the claude session UUID to the per-session state file so that a future
+# `drydock attach` can resume the specific conversation without showing a picker.
+# Idempotent: calling twice with the same uuid overwrites cleanly.
+# Must be called on BOTH launch AND attach (Refinement 3 — D-5).
+# mkdir -p is a no-op when the dir already exists (seed_session_config_dir creates
+# it before _launch_new is called in production; the -p guard covers edge cases).
+_write_session_marker() {
+	local _disc="$1"
+	local _uuid="$2"
+	local _dir="$HOME/.claude-container-${_disc}"
+	mkdir -p "$_dir"
+	printf '%s\n' "$_uuid" > "$_dir/session-id"
+}
+
 # _launch_new project_dir compose_args_nameref [passthrough...]
 # Internal: mint-and-launch a fresh persistent container.
 # Calls compose up -d then exec -it claude. Used by cmd_run (0-sessions path,
@@ -663,8 +715,16 @@ _launch_new() {
 	local -a passthrough=("$@")
 
 	local _name="$DRYDOCK_SESSION_NAME"
+	local _disc="$DRYDOCK_DISCRIMINATOR"
+	# Generate a host-side UUID for this session. /proc/sys/kernel/random/uuid is
+	# always available on Linux/WSL2; uuidgen is the fallback (D-4).
+	local _uuid
+	_uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
 	"$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" up -d
-	_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	# Write the marker BEFORE handing off to the lifecycle helper so that a future
+	# attach can read it regardless of how the session ends (D-5, Refinement 3).
+	_write_session_marker "$_disc" "$_uuid"
+	_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
 }
 
 cmd_shell() {
@@ -1973,13 +2033,21 @@ cmd_new() {
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
 	local _name="$DRYDOCK_SESSION_NAME"
+	local _disc="$DRYDOCK_DISCRIMINATOR"
 	note "Starting new session $_name in $project_dir"
+
+	# Generate a host-side UUID for this session. /proc/sys/kernel/random/uuid is
+	# always available on Linux/WSL2; uuidgen is the fallback (D-4).
+	local _uuid
+	_uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
 
 	# Persistent lifecycle: compose up -d starts the container (PID 1 = sleep infinity),
 	# then _run_claude_lifecycle attaches Claude interactively as a child process.
 	# Dropping exec here lets the EXIT trap in bin/drydock fire correctly (D-8).
 	"$DOCKER" compose "${compose_args[@]}" -p "$_name" up -d
-	_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	# Write the marker BEFORE handing off to the lifecycle helper (D-5, Refinement 3).
+	_write_session_marker "$_disc" "$_uuid"
+	_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
 }
 
 # ── cmd_attach ────────────────────────────────────────────────────────────────
@@ -2044,10 +2112,33 @@ cmd_attach() {
 		return 2
 	fi
 	note "Attaching to $target_name"
-	# Drop exec: run _run_claude_lifecycle as a child so the EXIT trap in bin/drydock
-	# fires correctly on return (D-8). Phase 4 (--session-id/marker/reap) will add
-	# disc derivation, marker read, and orphan reap here once Gate-1/Gate-3 are clear.
-	_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+
+	# Derive disc from the target container name suffix — NEVER from
+	# $DRYDOCK_DISCRIMINATOR, which cmd_run's attach branch clobbers via
+	# export_compose_env (D-6, CRITICAL correctness rule).
+	local _disc="${target_name##*-}"
+
+	# Read the session-id marker written at launch (or prior attach).
+	local _uuid=""
+	local _marker="$HOME/.claude-container-${_disc}/session-id"
+	[ -f "$_marker" ] && _uuid="$(cat "$_marker")"
+
+	# Reap any orphaned claude left from the previous disconnected session.
+	# Unconditional; idempotent when no orphan exists (D-7, REQ-5).
+	_reap_orphan_claude "$target_name" "$_uuid"
+
+	# Write/refresh the marker BEFORE the lifecycle call so it is always
+	# up-to-date regardless of how this session eventually ends (D-5, Refinement 3).
+	# Only write when a uuid is known; the bare --resume fallback has no uuid to record.
+	[ -n "$_uuid" ] && _write_session_marker "$_disc" "$_uuid"
+
+	# Resume the specific session by uuid (no picker), or fall back to bare --resume
+	# (picker) when no marker existed (pre-#131 detach / lookup miss) (D-6, REQ-6).
+	if [ -n "$_uuid" ]; then
+		_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+	else
+		_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+	fi
 }
 
 # ── cmd_list ──────────────────────────────────────────────────────────────────

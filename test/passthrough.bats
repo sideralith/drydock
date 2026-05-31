@@ -22,7 +22,8 @@ _run_cmd_run() {
     ensure_synced()     { :; }
     export_compose_env() {
       PROJECT_NAME="$(sanitize_project_name "$(basename "$1")")"
-      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
+      export DRYDOCK_DISCRIMINATOR="ab12"
+      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-ab12"
     }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     _drydock_has_tty()  { return 0; }
@@ -63,7 +64,8 @@ _run_main() {
     ensure_synced()     { :; }
     export_compose_env() {
       PROJECT_NAME="$(sanitize_project_name "$(basename "$1")")"
-      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
+      export DRYDOCK_DISCRIMINATOR="ab12"
+      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-ab12"
     }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     _drydock_has_tty()  { return 0; }
@@ -78,27 +80,32 @@ _run_main() {
   # New persistent model: compose up -d then exec -it drydock claude.
   # DOCKER=echo means ps returns nothing (0 sessions) → non-nested → launch new.
   # Note: lifecycle helper also emits 'rm -f <name>' after exec returns,
-  # so we match the exec line specifically (not whole output) using grep -E with
-  # a line-end anchor to guarantee no stray trailing args are present.
+  # so we match the exec line specifically. Since #131 P4, launch sites pass
+  # --session-id <uuid> so the claude invocation is 'drydock claude --session-id <uuid>'.
+  # We assert 'exec' is present and 'drydock claude' is invoked (no spurious passthrough).
   _run_cmd_run "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  grep -qE ' drydock claude$' <<<"$output"
+  # Must call claude with --session-id (uuid pre-assigned at launch, D-4).
+  grep -qE ' drydock claude --session-id ' <<<"$output"
+  # Must NOT have any passthrough args after --session-id <uuid>.
+  ! grep -qE ' drydock claude --session-id [^ ]+ .+' <<<"$output"
 }
 
 @test "cmd_run: DIR -- --resume foo -> passes args to claude" {
-  # New persistent model: passthrough args forwarded to exec -it drydock claude.
+  # New persistent model: passthrough args forwarded after --session-id <uuid>.
   _run_cmd_run "$BATS_TEST_TMPDIR" -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  # uuid is unpredictable; assert --session-id is present and passthrough follows.
+  grep -qE ' drydock claude --session-id [^ ]+ --resume foo' <<<"$output"
 }
 
 @test "cmd_run: -- --resume foo (no DIR) -> passes args to claude" {
   _run_cmd_run -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  grep -qE ' drydock claude --session-id [^ ]+ --resume foo' <<<"$output"
 }
 
 # ── cmd_shell tests ────────────────────────────────────────────────────────────
@@ -126,12 +133,13 @@ _run_main() {
   _run_main -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  # Since #131 P4, launch sites inject --session-id <uuid>; passthrough follows.
+  grep -qE ' drydock claude --session-id [^ ]+ --resume foo' <<<"$output"
 }
 
 @test "main run -- --resume foo -> routes to cmd_run with passthrough" {
   _run_main run -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  grep -qE ' drydock claude --session-id [^ ]+ --resume foo' <<<"$output"
 }
