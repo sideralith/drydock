@@ -22,7 +22,8 @@ _run_cmd_run() {
     ensure_synced()     { :; }
     export_compose_env() {
       PROJECT_NAME="$(sanitize_project_name "$(basename "$1")")"
-      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
+      export DRYDOCK_DISCRIMINATOR="ab12"
+      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-ab12"
     }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     _drydock_has_tty()  { return 0; }
@@ -63,7 +64,8 @@ _run_main() {
     ensure_synced()     { :; }
     export_compose_env() {
       PROJECT_NAME="$(sanitize_project_name "$(basename "$1")")"
-      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-test"
+      export DRYDOCK_DISCRIMINATOR="ab12"
+      export DRYDOCK_SESSION_NAME="drydock-${PROJECT_NAME}-ab12"
     }
     compose_files()     { printf "%s\n" "-f" "/tmp/x.yml"; }
     _drydock_has_tty()  { return 0; }
@@ -78,27 +80,43 @@ _run_main() {
   # New persistent model: compose up -d then exec -it drydock claude.
   # DOCKER=echo means ps returns nothing (0 sessions) → non-nested → launch new.
   # Note: lifecycle helper also emits 'rm -f <name>' after exec returns,
-  # so we match the exec line specifically (not whole output) using grep -E with
-  # a line-end anchor to guarantee no stray trailing args are present.
+  # so we match the exec line specifically. Since #131 P4, launch sites pass
+  # --session-id <uuid> so the claude invocation is 'drydock claude --session-id <uuid>'.
+  # We assert 'exec' is present and 'drydock claude' is invoked (no spurious passthrough).
   _run_cmd_run "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  grep -qE ' drydock claude$' <<<"$output"
+  # Must call claude with --session-id (uuid pre-assigned at launch, D-4).
+  grep -qE ' drydock claude --session-id ' <<<"$output"
+  # Must NOT have any passthrough args after --session-id <uuid>.
+  ! grep -qE ' drydock claude --session-id [^ ]+ .+' <<<"$output"
 }
 
-@test "cmd_run: DIR -- --resume foo -> passes args to claude" {
-  # New persistent model: passthrough args forwarded to exec -it drydock claude.
+@test "cmd_run: DIR -- --resume foo -> passes --resume foo clean (no injected --session-id)" {
+  # User supplied --resume: drydock must NOT inject --session-id, pass through clean.
   _run_cmd_run "$BATS_TEST_TMPDIR" -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  # Bare --resume foo must be present in the claude invocation.
+  grep -qE ' drydock claude --resume foo$' <<<"$output"
+  # --session-id must NOT appear — injecting it would conflict with user --resume.
+  ! grep -q -- '--session-id' <<<"$output"
 }
 
-@test "cmd_run: -- --resume foo (no DIR) -> passes args to claude" {
+@test "cmd_run: -- --resume foo (no DIR) -> passes --resume foo clean (no injected --session-id)" {
   _run_cmd_run -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  grep -qE ' drydock claude --resume foo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "cmd_run: -- --model opus (non-session passthrough) -> still injects --session-id" {
+  # Non-session passthrough must NOT suppress drydock's session-id injection.
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- --model opus
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude --session-id [^ ]+ --model opus' <<<"$output"
 }
 
 # ── cmd_shell tests ────────────────────────────────────────────────────────────
@@ -122,16 +140,87 @@ _run_main() {
 
 # ── main() dispatch tests ──────────────────────────────────────────────────────
 
-@test "main -- --resume foo -> routes to cmd_run with passthrough" {
+@test "main -- --resume foo -> routes to cmd_run with passthrough (no injected --session-id)" {
   _run_main -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  # User supplied --resume: drydock must pass through clean.
+  grep -qE ' drydock claude --resume foo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
 }
 
-@test "main run -- --resume foo -> routes to cmd_run with passthrough" {
+@test "main run -- --resume foo -> routes to cmd_run with passthrough (no injected --session-id)" {
   _run_main run -- --resume foo
   [ "$status" -eq 0 ]
   [[ "$output" == *" exec "* ]]
-  [[ "$output" == *" drydock claude --resume foo"* ]]
+  grep -qE ' drydock claude --resume foo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+# ── short-flag / --continue passthrough tests ─────────────────────────────────
+# -r, -c, and --continue are documented session-establishing flags equivalent to
+# --resume / --session-id. When present, drydock must NOT inject --session-id
+# and must NOT write a session marker.
+
+@test "cmd_run: -- -r foo -> passes -r foo clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- -r foo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -r foo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "cmd_run: -- -rfoo (attached value) -> passes -rfoo clean (no injected --session-id)" {
+  # commander.js attached-value form: -rfoo is equivalent to --resume foo.
+  # The guard must match prefix -r*, not just exact -r, so -rfoo defers to user.
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- -rfoo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -rfoo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "cmd_run: -- -c -> passes -c clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- -c
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -c$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "cmd_run: -- --continue -> passes --continue clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- --continue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude --continue$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "main -- -r foo -> routes to cmd_run with passthrough (no injected --session-id)" {
+  _run_main -- -r foo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -r foo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "main -- --continue -> routes to cmd_run with passthrough (no injected --session-id)" {
+  _run_main -- --continue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude --continue$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+# ── --from-pr passthrough test ────────────────────────────────────────────────
+# --from-pr is a session-establishing flag (resume by PR number/URL) — same
+# class as --resume / --continue. When present, drydock must NOT inject
+# --session-id and must pass the invocation through clean.
+
+@test "cmd_run: -- --from-pr 123 -> passes --from-pr 123 clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- --from-pr 123
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude --from-pr 123$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
 }
