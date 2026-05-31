@@ -7,6 +7,9 @@
 
 load "helpers/load"
 
+# The negated-run assertions ('run !') below require bats >= 1.5.0.
+bats_require_minimum_version 1.5.0
+
 # ── Shared setup helper ───────────────────────────────────────────────────────
 
 # Source all libs in bin/drydock order with a synthetic home and project dir.
