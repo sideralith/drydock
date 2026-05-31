@@ -699,8 +699,11 @@ _reap_orphan_claude() {
 _passthrough_has_session_flag() {
 	local _el
 	for _el in "$@"; do
+		# Enumerate claude's session-establishing flags as of `claude --help` v2.1.159:
+		#   --resume / -r, --continue / -c, --session-id, --from-pr
+		# Revisit when the bundled claude version changes — this list is version-coupled.
 		case "$_el" in
-			--resume|--session-id|--resume=*|--session-id=*|-r|-c|--continue)
+			--resume|--session-id|--resume=*|--session-id=*|-r|-c|--continue|--from-pr|--from-pr=*)
 				return 0
 				;;
 		esac

@@ -201,3 +201,16 @@ _run_main() {
   grep -qE ' drydock claude --continue$' <<<"$output"
   ! grep -q -- '--session-id' <<<"$output"
 }
+
+# ── --from-pr passthrough test ────────────────────────────────────────────────
+# --from-pr is a session-establishing flag (resume by PR number/URL) — same
+# class as --resume / --continue. When present, drydock must NOT inject
+# --session-id and must pass the invocation through clean.
+
+@test "cmd_run: -- --from-pr 123 -> passes --from-pr 123 clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- --from-pr 123
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude --from-pr 123$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
