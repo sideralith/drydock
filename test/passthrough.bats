@@ -156,3 +156,48 @@ _run_main() {
   grep -qE ' drydock claude --resume foo$' <<<"$output"
   ! grep -q -- '--session-id' <<<"$output"
 }
+
+# ── short-flag / --continue passthrough tests ─────────────────────────────────
+# -r, -c, and --continue are documented session-establishing flags equivalent to
+# --resume / --session-id. When present, drydock must NOT inject --session-id
+# and must NOT write a session marker.
+
+@test "cmd_run: -- -r foo -> passes -r foo clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- -r foo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -r foo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "cmd_run: -- -c -> passes -c clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- -c
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -c$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "cmd_run: -- --continue -> passes --continue clean (no injected --session-id)" {
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- --continue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude --continue$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "main -- -r foo -> routes to cmd_run with passthrough (no injected --session-id)" {
+  _run_main -- -r foo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -r foo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
+@test "main -- --continue -> routes to cmd_run with passthrough (no injected --session-id)" {
+  _run_main -- --continue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude --continue$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}

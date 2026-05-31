@@ -700,7 +700,7 @@ _passthrough_has_session_flag() {
 	local _el
 	for _el in "$@"; do
 		case "$_el" in
-			--resume|--session-id|--resume=*|--session-id=*)
+			--resume|--session-id|--resume=*|--session-id=*|-r|-c|--continue)
 				return 0
 				;;
 		esac
