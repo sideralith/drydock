@@ -170,6 +170,16 @@ _run_main() {
   ! grep -q -- '--session-id' <<<"$output"
 }
 
+@test "cmd_run: -- -rfoo (attached value) -> passes -rfoo clean (no injected --session-id)" {
+  # commander.js attached-value form: -rfoo is equivalent to --resume foo.
+  # The guard must match prefix -r*, not just exact -r, so -rfoo defers to user.
+  _run_cmd_run "$BATS_TEST_TMPDIR" -- -rfoo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" exec "* ]]
+  grep -qE ' drydock claude -rfoo$' <<<"$output"
+  ! grep -q -- '--session-id' <<<"$output"
+}
+
 @test "cmd_run: -- -c -> passes -c clean (no injected --session-id)" {
   _run_cmd_run "$BATS_TEST_TMPDIR" -- -c
   [ "$status" -eq 0 ]
