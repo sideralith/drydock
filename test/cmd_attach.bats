@@ -633,6 +633,68 @@ drydock-myproj-ef56")"
 	! grep -q -- "--session-id test-uuid-9999" "$DOCKER_CALL_LOG"
 }
 
+# ── T10: Nested launch mux label capture — RED→GREEN (S-4A–4E) ───────────────
+
+@test "cmd_run nested launch: zellij env → compose run includes --label drydock.mux=zellij (T10, S-4A)" {
+	# GIVEN ZELLIJ env is set during nested launch
+	# WHEN cmd_run detects nested session
+	# THEN compose run includes --label drydock.mux=zellij in DOCKER_CALL_LOG
+	export ZELLIJ=1
+	export ZELLIJ_SESSION_NAME="main"
+	unset TMUX STY 2>/dev/null || true
+	export TMUX=""
+	export STY=""
+
+	export_compose_env() {
+		export PROJECT_NAME="myproj"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12"
+		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12"
+	}
+	ensure_prereqs() { :; }; ensure_image() { :; }; ensure_runtime_dirs() { :; }
+	ensure_synced() { :; }; warn_unlinked_skill_symlinks() { :; }
+	compose_files() { printf ''; }
+	# Override exec to log instead of replacing process
+	exec() { echo "exec $*" >> "$DOCKER_CALL_LOG"; }
+
+	local stub
+	stub="$(make_docker_stub_with_sessions "")"
+	export DOCKER="$stub"
+
+	run cmd_run 2>&1
+	# exec is stubbed so status can vary; check log content
+	grep -q "drydock.mux=zellij" "$DOCKER_CALL_LOG"
+	grep -q "drydock.mux_session=main" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_run nested launch: no mux env → compose run has NO drydock.mux label (T10, S-4D)" {
+	# GIVEN no mux environment vars
+	# WHEN cmd_run detects nested via DRYDOCK_NESTED=1
+	# THEN compose run has NO drydock.mux label
+	export DRYDOCK_NESTED=1
+	export ZELLIJ=""
+	export TMUX=""
+	export STY=""
+
+	export_compose_env() {
+		export PROJECT_NAME="myproj"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12"
+		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12"
+	}
+	ensure_prereqs() { :; }; ensure_image() { :; }; ensure_runtime_dirs() { :; }
+	ensure_synced() { :; }; warn_unlinked_skill_symlinks() { :; }
+	compose_files() { printf ''; }
+	exec() { echo "exec $*" >> "$DOCKER_CALL_LOG"; }
+
+	local stub
+	stub="$(make_docker_stub_with_sessions "")"
+	export DOCKER="$stub"
+
+	run cmd_run 2>&1
+	! grep -q "drydock.mux" "$DOCKER_CALL_LOG"
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude session flag (REQ-6-M)" {

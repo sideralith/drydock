@@ -513,7 +513,10 @@ cmd_run() {
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		local _name="$DRYDOCK_SESSION_NAME"
-		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
+		# Capture host mux labels to stamp onto the nested container (REQ-4, S-4A-4E).
+		local -a mux_args=()
+		while IFS= read -r _a; do mux_args+=("$_a"); done < <(_capture_mux_labels)
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" "${mux_args[@]}" drydock claude "${passthrough[@]}"
 		# exec replaces the process in production. return 0 is a test safety-net:
 		# if exec() is overridden by a test stub (which returns without replacing
 		# the process), return ensures we don't fall through to the non-nested path.
