@@ -741,6 +741,34 @@ _session_has_transcript() {
 	[ -n "$_m" ]
 }
 
+# _capture_mux_labels
+# Detects the host multiplexer (zellij → tmux → screen) and emits --label tokens
+# ONE PER LINE so the caller can read them into an array via:
+#   while IFS= read -r a; do args+=("$a"); done < <(_capture_mux_labels)
+# This idiom (used by compose_files) survives session names with spaces.
+# Precedence: zellij ($ZELLIJ/$ZELLIJ_SESSION_NAME) → tmux ($TMUX/tmux display-message)
+# → screen ($STY). When no mux is detected, emits nothing.
+# OQ-3: OMIT the drydock.mux_session token entirely when session name is empty —
+# do NOT emit an empty-valued label (simplifies detection on the attach side).
+_capture_mux_labels() {
+	local _mux="" _ms=""
+	if [ -n "${ZELLIJ:-}" ]; then
+		_mux="zellij"
+		_ms="${ZELLIJ_SESSION_NAME:-}"
+	elif [ -n "${TMUX:-}" ]; then
+		_mux="tmux"
+		_ms=$(tmux display-message -p '#S' 2>/dev/null || true)
+	elif [ -n "${STY:-}" ]; then
+		_mux="screen"
+		_ms="${STY:-}"
+	fi
+	[ -n "$_mux" ] || return 0
+	printf '%s\n' "--label" "drydock.mux=${_mux}"
+	if [ -n "$_ms" ]; then
+		printf '%s\n' "--label" "drydock.mux_session=${_ms}"
+	fi
+}
+
 # _write_session_marker disc uuid
 # Write the claude session UUID to the per-session state file so that a future
 # `drydock attach` can resume the specific conversation without showing a picker.

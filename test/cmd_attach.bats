@@ -207,6 +207,81 @@ STUB
 	[ "$status" -eq 1 ]
 }
 
+# ── T4: _capture_mux_labels — RED→GREEN (S-4A–4E, OQ-3) ─────────────────────
+
+@test "_capture_mux_labels: zellij env → emits --label drydock.mux=zellij and session token (S-4A)" {
+	# GIVEN ZELLIJ and ZELLIJ_SESSION_NAME are set
+	# WHEN _capture_mux_labels is called
+	# THEN emits --label drydock.mux=zellij and --label drydock.mux_session=<name> one per line
+	local output
+	output="$(ZELLIJ=1 ZELLIJ_SESSION_NAME="main" TMUX="" STY="" _capture_mux_labels)"
+	[[ "$output" == *"--label"* ]]
+	[[ "$output" == *"drydock.mux=zellij"* ]]
+	[[ "$output" == *"drydock.mux_session=main"* ]]
+}
+
+@test "_capture_mux_labels: tmux env → emits --label drydock.mux=tmux (S-4B)" {
+	# GIVEN TMUX is set (tmux display-message fallback, not available in CI)
+	# Use TMUX_SESSION_NAME as a direct env override — we test the label output
+	# by providing a stub tmux command that echoes a session name.
+	local stub_dir="$BATS_TEST_TMPDIR/tmux-stub"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/tmux" <<'TSTUB'
+#!/usr/bin/env bash
+printf 'worksession\n'
+TSTUB
+	chmod +x "$stub_dir/tmux"
+	local output
+	output="$(PATH="$stub_dir:$PATH" ZELLIJ="" STY="" TMUX="tmux-session-info" _capture_mux_labels)"
+	[[ "$output" == *"drydock.mux=tmux"* ]]
+	[[ "$output" == *"drydock.mux_session=worksession"* ]]
+}
+
+@test "_capture_mux_labels: screen env → emits --label drydock.mux=screen (S-4C)" {
+	# GIVEN STY is set (screen session id)
+	# WHEN _capture_mux_labels is called
+	# THEN emits --label drydock.mux=screen and --label drydock.mux_session=<id>
+	local output
+	output="$(ZELLIJ="" TMUX="" STY="123.pts-0.host" _capture_mux_labels)"
+	[[ "$output" == *"drydock.mux=screen"* ]]
+	[[ "$output" == *"drydock.mux_session=123.pts-0.host"* ]]
+}
+
+@test "_capture_mux_labels: no mux env → emits nothing (S-4D)" {
+	# GIVEN ZELLIJ, TMUX, STY all unset
+	# WHEN _capture_mux_labels is called
+	# THEN emits nothing (empty output)
+	local output
+	output="$(ZELLIJ="" TMUX="" STY="" _capture_mux_labels)"
+	[ -z "$output" ]
+}
+
+@test "_capture_mux_labels: zellij with empty session name → omits mux_session token (S-4E, OQ-3)" {
+	# GIVEN ZELLIJ is set but ZELLIJ_SESSION_NAME is empty
+	# WHEN _capture_mux_labels is called
+	# THEN drydock.mux=zellij IS emitted, drydock.mux_session is OMITTED entirely
+	local output
+	output="$(ZELLIJ=1 ZELLIJ_SESSION_NAME="" TMUX="" STY="" _capture_mux_labels)"
+	[[ "$output" == *"drydock.mux=zellij"* ]]
+	[[ "$output" != *"drydock.mux_session"* ]]
+}
+
+@test "_capture_mux_labels: tokens are one per line (array-safe for spaces in names)" {
+	# GIVEN ZELLIJ_SESSION_NAME with a space (e.g. 'my session')
+	# WHEN tokens are consumed via while IFS= read -r
+	# THEN all tokens including the session name with spaces are captured correctly
+	local -a args=()
+	while IFS= read -r a; do args+=("$a"); done < <(
+		ZELLIJ=1 ZELLIJ_SESSION_NAME="my session" TMUX="" STY="" _capture_mux_labels
+	)
+	# Should have 4 tokens: --label, drydock.mux=zellij, --label, drydock.mux_session=my session
+	[ "${#args[@]}" -eq 4 ]
+	[ "${args[0]}" = "--label" ]
+	[ "${args[1]}" = "drydock.mux=zellij" ]
+	[ "${args[2]}" = "--label" ]
+	[ "${args[3]}" = "drydock.mux_session=my session" ]
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {
