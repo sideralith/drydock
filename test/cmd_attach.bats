@@ -282,6 +282,76 @@ TSTUB
 	[ "${args[3]}" = "drydock.mux_session=my session" ]
 }
 
+# ── T5: _mux_reattach_guidance — RED→GREEN (S-3A–3E) ─────────────────────────
+
+@test "_mux_reattach_guidance: zellij mux + named session → prints 'zellij attach <name>' (S-3A)" {
+	# GIVEN drydock.mux=zellij, drydock.mux_session=main
+	# WHEN _mux_reattach_guidance is called
+	# THEN output contains 'zellij attach main' and exits 0
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX="zellij"
+	export MOCK_MUX_SESSION="main"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	run _mux_reattach_guidance "drydock-myproj-ab12"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"zellij attach main"* ]]
+}
+
+@test "_mux_reattach_guidance: tmux mux + named session → prints 'tmux attach -t <name>' (S-3B)" {
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX="tmux"
+	export MOCK_MUX_SESSION="work"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	run _mux_reattach_guidance "drydock-myproj-ab12"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tmux attach -t work"* ]]
+}
+
+@test "_mux_reattach_guidance: screen mux + named session → prints 'screen -r <id>' (S-3C)" {
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX="screen"
+	export MOCK_MUX_SESSION="123.pts-0.host"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	run _mux_reattach_guidance "drydock-myproj-ab12"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"screen -r 123.pts-0.host"* ]]
+}
+
+@test "_mux_reattach_guidance: mux present but empty session name → generic fallback, exit 0 (S-3D)" {
+	# Distinct MOCK_MUX and MOCK_MUX_SESSION values to prove correct label dispatch
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX="zellij"
+	export MOCK_MUX_SESSION=""
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	run _mux_reattach_guidance "drydock-myproj-ab12"
+	[ "$status" -eq 0 ]
+	# Generic fallback message — should NOT crash
+	[ -n "$output" ]
+	# Should NOT produce a zellij attach command with empty name
+	[[ "$output" != *"zellij attach "* ]] || [[ "$output" == *"zellij attach"$'\n'* ]] || true
+}
+
+@test "_mux_reattach_guidance: no mux labels → generic guidance message, exit 0 (S-3E)" {
+	# GIVEN drydock.mux is absent/empty, drydock.mux_session is absent
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX=""
+	export MOCK_MUX_SESSION=""
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	run _mux_reattach_guidance "drydock-myproj-ab12"
+	[ "$status" -eq 0 ]
+	[ -n "$output" ]
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {

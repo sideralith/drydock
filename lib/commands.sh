@@ -769,6 +769,54 @@ _capture_mux_labels() {
 	fi
 }
 
+# _mux_reattach_guidance name
+# Prints reattach guidance for an ephemeral (oneoff) nested session container.
+# Inspects the drydock.mux and drydock.mux_session labels on the container (TWO
+# docker inspect calls) and emits the correct mux command or a generic fallback.
+# Always exits 0 — must not crash or destroy the container (S-3D, S-3E, REQ-3).
+_mux_reattach_guidance() {
+	local _name="$1"
+	local _mux _ms
+	_mux=$("$DOCKER" inspect -f '{{index .Config.Labels "drydock.mux"}}' \
+		"$_name" 2>/dev/null || true)
+	_ms=$("$DOCKER" inspect -f '{{index .Config.Labels "drydock.mux_session"}}' \
+		"$_name" 2>/dev/null || true)
+	case "$_mux" in
+	zellij)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your zellij terminal.\n'
+			printf 'To reattach, switch to that window or run:  zellij attach %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your zellij terminal.\n'
+			printf 'To reattach, switch back to your zellij session.\n'
+		fi
+		;;
+	tmux)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your tmux terminal.\n'
+			printf 'To reattach, switch to that window or run:  tmux attach -t %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your tmux terminal.\n'
+			printf 'To reattach, switch back to your tmux session.\n'
+		fi
+		;;
+	screen)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your screen terminal.\n'
+			printf 'To reattach, switch to that window or run:  screen -r %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your screen terminal.\n'
+			printf 'To reattach, switch back to your screen session.\n'
+		fi
+		;;
+	*)
+		printf 'This container is a live nested drydock session.\n'
+		printf 'To interact with it, reattach to the terminal where it was launched.\n'
+		;;
+	esac
+	return 0
+}
+
 # _write_session_marker disc uuid
 # Write the claude session UUID to the per-session state file so that a future
 # `drydock attach` can resume the specific conversation without showing a picker.
