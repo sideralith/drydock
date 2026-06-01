@@ -352,6 +352,80 @@ TSTUB
 	[ -n "$output" ]
 }
 
+# ── T6: cmd_attach oneoff gate — RED→GREEN (S-2A, S-2B, S-2C) ───────────────
+
+@test "cmd_attach: oneoff=True + no-TTY (explicit name) → prints guidance + exit 0, NO reap (S-2B)" {
+	# GIVEN target container is oneoff (com.docker.compose.oneoff=True)
+	# AND no TTY (normal test environment)
+	# WHEN cmd_attach is called with explicit disc name
+	# THEN guidance is printed, exit 0, NO compose exec, NO rm -f (S-2A/2B)
+	export MOCK_ONEOFF="True"
+	export MOCK_MUX="zellij"
+	export MOCK_MUX_SESSION="main"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	# NO _drydock_has_tty override — no TTY in test env
+
+	run cmd_attach "ab12" 2>&1
+	[ "$status" -eq 0 ]
+	# Guidance must be printed
+	[[ "$output" == *"zellij attach main"* ]]
+	# Must NOT invoke compose exec (no reap, no rm)
+	! grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
+	! grep -q "rm -f" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_attach: oneoff=True + TTY (single session) → prints guidance + exit 0 (S-2A)" {
+	# GIVEN oneoff container, single session, TTY present
+	# WHEN cmd_attach is called without disc arg (single-session path)
+	# THEN guidance is printed and exits 0
+	export MOCK_ONEOFF="True"
+	export MOCK_MUX="tmux"
+	export MOCK_MUX_SESSION="work"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+
+	run cmd_attach 2>&1
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tmux attach -t work"* ]]
+	! grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_attach: oneoff=False (persistent) → proceeds to normal flow (S-2C)" {
+	# GIVEN container is persistent (oneoff=False)
+	# WHEN cmd_attach is called with TTY
+	# THEN normal compose exec flow proceeds (no early exit)
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX=""
+	export MOCK_MUX_SESSION=""
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+
+	run cmd_attach "ab12"
+	[ "$status" -eq 0 ]
+	# Normal flow: compose exec must be called
+	grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_attach: multi-session + no-TTY → exit 2 before oneoff gate (preserves list-and-hint)" {
+	# S-2B scoping: multi+no-TTY exits 2 at ~2249 BEFORE target resolution
+	# so the oneoff gate at 2252+ is never reached — correct behavior
+	export MOCK_ONEOFF="True"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12
+drydock-myproj-ef56")"
+	export DOCKER="$stub"
+	# No TTY override
+
+	run cmd_attach 2>&1
+	[ "$status" -eq 2 ]
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {

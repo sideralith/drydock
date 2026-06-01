@@ -2251,6 +2251,14 @@ cmd_attach() {
 		fi
 	fi
 
+	# Oneoff gate (REQ-2, OQ-1): fires AFTER target is resolved, BEFORE TTY guard.
+	# Ephemeral (compose run) containers must not be reaped or resumed — print mux
+	# guidance and exit 0 (S-2A/S-2B). The TTY guard does NOT move (OQ-1).
+	if _is_oneoff_container "$target_name"; then
+		_mux_reattach_guidance "$target_name"
+		return 0
+	fi
+
 	if ! _drydock_has_tty; then
 		printf 'drydock attach requires a TTY — not called from a terminal\n' >&2
 		return 2
