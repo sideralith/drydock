@@ -547,11 +547,12 @@ drydock-myproj-ef56")"
 	! grep -q -- "--session-id test-uuid-abcd" "$DOCKER_CALL_LOG"
 }
 
-@test "cmd_attach: reap is UNCONDITIONAL regardless of transcript presence (S-1B, Bug 1 reap rule)" {
-	# GIVEN transcript is present (or absent)
+@test "cmd_attach: reap still runs on the --resume path (transcript present) (S-1B, Bug 1 reap rule)" {
+	# GIVEN transcript is present (so the switch picks --resume)
 	# WHEN cmd_attach is called
-	# THEN _reap_orphan_claude is always called (pkill -f <uuid> appears in DOCKER_CALL_LOG)
-	# This verifies reap does NOT become conditional (design invariant).
+	# THEN _reap_orphan_claude still runs (pkill -f <uuid> appears in DOCKER_CALL_LOG) —
+	# the transcript switch does NOT skip the reap. Transcript-ABSENT reap coverage
+	# lives in the S-1A tests (cmd_attach transcript-absent → --session-id).
 	export MOCK_ONEOFF="False"
 	local stub
 	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
