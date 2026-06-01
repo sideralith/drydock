@@ -580,6 +580,12 @@ cmd_run() {
 			local _run_uuid=""
 			local _run_marker="$HOME/.claude-container-${_run_disc}/session-id"
 			[ -f "$_run_marker" ] && _run_uuid="$(cat "$_run_marker")"
+			# Oneoff gate (REQ-2, S-2A): inside _drydock_has_tty block, no TTY conflict.
+			# Fires after marker read, before reap — ephemeral containers must not be reaped.
+			if _is_oneoff_container "$target"; then
+				_mux_reattach_guidance "$target"
+				return 0
+			fi
 			# Reap orphan unconditionally (D-7, REQ-5); then resume unless the user
 			# already supplied a session flag in passthrough (REQ-PT-1).
 			_reap_orphan_claude "$target" "$_run_uuid"

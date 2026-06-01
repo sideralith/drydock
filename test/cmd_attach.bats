@@ -426,6 +426,74 @@ drydock-myproj-ef56")"
 	[ "$status" -eq 2 ]
 }
 
+# ── T7: cmd_run attach gate — RED→GREEN (S-2A, S-2C) ────────────────────────
+
+@test "cmd_run attach branch: oneoff=True → prints guidance + return 0, NO reap (T7, S-2A)" {
+	# GIVEN a live container with oneoff=True, user chooses Attach from menu
+	# WHEN cmd_run is invoked with TTY
+	# THEN guidance is printed, returns 0, NO _reap_orphan_claude, NO compose exec
+	export MOCK_ONEOFF="True"
+	export MOCK_MUX="zellij"
+	export MOCK_MUX_SESSION="main"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+
+	# Stub env/helpers needed by cmd_run
+	_drydock_has_tty() { return 0; }
+	_select_choice() { printf 'Attach: drydock-myproj-ab12\n'; }
+	export_compose_env() {
+		export PROJECT_NAME="myproj"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12"
+		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12"
+	}
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_synced() { :; }
+	warn_unlinked_skill_symlinks() { :; }
+	compose_files() { printf ''; }
+
+	run cmd_run 2>&1
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"zellij attach main"* ]]
+	# Must NOT reap (no rm in call log from attach path)
+	! grep -qE "^compose.*exec" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_run attach branch: oneoff=False → proceeds to normal reap+resume flow (T7, S-2C)" {
+	# GIVEN a persistent container (oneoff=False)
+	# WHEN user chooses Attach from cmd_run menu
+	# THEN normal flow runs (compose exec appears in call log)
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX=""
+	export MOCK_MUX_SESSION=""
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+
+	_drydock_has_tty() { return 0; }
+	_select_choice() { printf 'Attach: drydock-myproj-ab12\n'; }
+	export_compose_env() {
+		export PROJECT_NAME="myproj"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12"
+		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12"
+	}
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	ensure_runtime_dirs() { :; }
+	ensure_synced() { :; }
+	warn_unlinked_skill_symlinks() { :; }
+	compose_files() { printf ''; }
+
+	run cmd_run 2>&1
+	[ "$status" -eq 0 ]
+	# Normal flow: compose exec called
+	grep -qE "exec" "$DOCKER_CALL_LOG"
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {
