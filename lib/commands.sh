@@ -2295,10 +2295,15 @@ cmd_attach() {
 		# Only write when a uuid is known; the bare --resume fallback has no uuid to record.
 		[ -n "$_uuid" ] && _write_session_marker "$_disc" "$_uuid"
 
-		# Resume the specific session by uuid (no picker), or fall back to bare --resume
-		# (picker) when no marker existed (pre-#131 detach / lookup miss) (D-6, REQ-6).
+		# Bug 1 fix (REQ-1): use --session-id when transcript is absent (zero-turn session)
+		# to avoid "session not found" on --resume; use --resume only when transcript
+		# confirms ≥1 turn. Reap stays UNCONDITIONAL above (design invariant).
 		if [ -n "$_uuid" ]; then
-			_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+			if _session_has_transcript "$_uuid"; then
+				_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+			else
+				_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+			fi
 		else
 			_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
 		fi

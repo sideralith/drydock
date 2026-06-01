@@ -494,12 +494,86 @@ drydock-myproj-ef56")"
 	grep -qE "exec" "$DOCKER_CALL_LOG"
 }
 
+# ── T8: Bug 1 transcript switch in cmd_attach — RED→GREEN (S-1A, S-1B) ──────
+
+@test "cmd_attach: transcript absent → uses --session-id <uuid>, NOT --resume (S-1A, Bug 1 fix)" {
+	# GIVEN session UUID in marker file, no transcript .jsonl present
+	# WHEN cmd_attach is called
+	# THEN claude is invoked with --session-id <uuid>, NOT --resume <uuid>
+	export MOCK_ONEOFF="False"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+
+	# Set up fake HOME with marker but NO transcript
+	local fake_home="$BATS_TEST_TMPDIR/fake-home-t8a"
+	mkdir -p "$fake_home/.claude-container-ab12"
+	printf 'test-uuid-abcd\n' > "$fake_home/.claude-container-ab12/session-id"
+	# No transcript file
+	export HOME="$fake_home"
+
+	run cmd_attach "ab12"
+	[ "$status" -eq 0 ]
+	grep -q -- "--session-id test-uuid-abcd" "$DOCKER_CALL_LOG"
+	! grep -q -- "--resume test-uuid-abcd" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_attach: transcript present → uses --resume <uuid>, NOT --session-id (S-1B, Bug 1 fix)" {
+	# GIVEN session UUID in marker file AND transcript .jsonl exists
+	# WHEN cmd_attach is called
+	# THEN claude is invoked with --resume <uuid>, NOT --session-id <uuid>
+	export MOCK_ONEOFF="False"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+
+	# Set up fake HOME with marker AND transcript
+	local fake_home="$BATS_TEST_TMPDIR/fake-home-t8b"
+	mkdir -p "$fake_home/.claude-container-ab12"
+	printf 'test-uuid-abcd\n' > "$fake_home/.claude-container-ab12/session-id"
+	mkdir -p "$fake_home/.claude-container/projects/myproj"
+	touch "$fake_home/.claude-container/projects/myproj/test-uuid-abcd.jsonl"
+	export HOME="$fake_home"
+
+	run cmd_attach "ab12"
+	[ "$status" -eq 0 ]
+	grep -q -- "--resume test-uuid-abcd" "$DOCKER_CALL_LOG"
+	! grep -q -- "--session-id test-uuid-abcd" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_attach: reap is UNCONDITIONAL regardless of transcript presence (S-1B, Bug 1 reap rule)" {
+	# GIVEN transcript is present (or absent)
+	# WHEN cmd_attach is called
+	# THEN _reap_orphan_claude is always called (rm -f appears in DOCKER_CALL_LOG)
+	# This verifies reap does NOT become conditional (design invariant).
+	export MOCK_ONEOFF="False"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+
+	local fake_home="$BATS_TEST_TMPDIR/fake-home-t8c"
+	mkdir -p "$fake_home/.claude-container-ab12"
+	printf 'test-uuid-abcd\n' > "$fake_home/.claude-container-ab12/session-id"
+	mkdir -p "$fake_home/.claude-container/projects/myproj"
+	touch "$fake_home/.claude-container/projects/myproj/test-uuid-abcd.jsonl"
+	export HOME="$fake_home"
+
+	run cmd_attach "ab12"
+	[ "$status" -eq 0 ]
+	# rm -f must appear (lifecycle teardown — confirms reap ran)
+	grep -q "rm -f" "$DOCKER_CALL_LOG"
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
-@test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {
+@test "cmd_attach: explicit disc arg → invokes compose exec with claude session flag (REQ-6-M)" {
 	# GIVEN a live container drydock-myproj-ab12
 	# WHEN cmd_attach ab12 is called with a TTY
-	# THEN docker compose exec is called with claude --resume
+	# THEN docker compose exec is called with claude --resume or --session-id (Bug 1 fix:
+	# flag depends on transcript presence; either flag connects to the session)
 	local stub
 	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
 	export DOCKER="$stub"
@@ -508,9 +582,9 @@ drydock-myproj-ef56")"
 
 	run cmd_attach "ab12"
 	[ "$status" -eq 0 ]
-	# Log format: "compose <args> exec -it drydock claude --resume"
+	# Log format: "compose <args> exec -it drydock claude --resume|--session-id"
 	grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
-	grep -q -- "--resume" "$DOCKER_CALL_LOG"
+	grep -qE -- "--resume|--session-id" "$DOCKER_CALL_LOG"
 }
 
 @test "cmd_attach: explicit disc arg → NO menu shown (REQ-7-M sub-scenario a)" {
@@ -551,7 +625,7 @@ drydock-myproj-ef56")"
 	run cmd_attach
 	[ "$status" -eq 0 ]
 	grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
-	grep -q -- "--resume" "$DOCKER_CALL_LOG"
+	grep -qE -- "--resume|--session-id" "$DOCKER_CALL_LOG"
 	[[ "$output" != *"[1]"* ]]
 }
 
