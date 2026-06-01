@@ -53,6 +53,10 @@ echo "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
 	printf '%s\n' "${sessions_output}"
 elif [ "\${1:-}" = "inspect" ]; then
+	# Honor MOCK_DOCKER_EXIT: non-zero → print nothing, exit with that code.
+	if [ "\${MOCK_DOCKER_EXIT:-0}" != "0" ]; then
+		exit "\${MOCK_DOCKER_EXIT}"
+	fi
 	# Dispatch on the -f format string to return per-label mock values.
 	_fmt="\${3:-}"
 	case "\$_fmt" in
@@ -333,10 +337,10 @@ TSTUB
 	export DOCKER="$stub"
 	run _mux_reattach_guidance "drydock-myproj-ab12"
 	[ "$status" -eq 0 ]
-	# Generic fallback message — should NOT crash
-	[ -n "$output" ]
-	# Should NOT produce a zellij attach command with empty name
-	[[ "$output" != *"zellij attach "* ]] || [[ "$output" == *"zellij attach"$'\n'* ]] || true
+	# Generic fallback message IS present (mux known, session name missing → switch-back guidance)
+	[[ "$output" == *"switch back to your zellij session"* ]]
+	# Must NOT produce a bare "zellij attach " with an empty trailing argument
+	[[ "$output" != *"zellij attach "* ]]
 }
 
 @test "_mux_reattach_guidance: no mux labels → generic guidance message, exit 0 (S-3E)" {
@@ -546,7 +550,7 @@ drydock-myproj-ef56")"
 @test "cmd_attach: reap is UNCONDITIONAL regardless of transcript presence (S-1B, Bug 1 reap rule)" {
 	# GIVEN transcript is present (or absent)
 	# WHEN cmd_attach is called
-	# THEN _reap_orphan_claude is always called (rm -f appears in DOCKER_CALL_LOG)
+	# THEN _reap_orphan_claude is always called (pkill -f <uuid> appears in DOCKER_CALL_LOG)
 	# This verifies reap does NOT become conditional (design invariant).
 	export MOCK_ONEOFF="False"
 	local stub
@@ -563,8 +567,8 @@ drydock-myproj-ef56")"
 
 	run cmd_attach "ab12"
 	[ "$status" -eq 0 ]
-	# rm -f must appear (lifecycle teardown — confirms reap ran)
-	grep -q "rm -f" "$DOCKER_CALL_LOG"
+	# pkill -f <uuid> must appear — confirms _reap_orphan_claude ran with the session uuid
+	grep -q "pkill -f test-uuid-abcd" "$DOCKER_CALL_LOG"
 }
 
 # ── T9: Bug 1 transcript switch in cmd_run attach branch — RED→GREEN (S-1A, S-1B) ──
@@ -665,6 +669,10 @@ drydock-myproj-ef56")"
 	# exec is stubbed so status can vary; check log content
 	grep -q "drydock.mux=zellij" "$DOCKER_CALL_LOG"
 	grep -q "drydock.mux_session=main" "$DOCKER_CALL_LOG"
+	# Assert ORDER: --label drydock.mux=zellij must precede the service name ' drydock '
+	# (space-padded to distinguish from container names like drydock-myproj-ab12).
+	# If mux_args were placed after the service name the label would become a claude arg.
+	grep -qE -- "--label drydock\.mux=zellij.* drydock " "$DOCKER_CALL_LOG"
 }
 
 @test "cmd_run nested launch: no mux env → compose run has NO drydock.mux label (T10, S-4D)" {
