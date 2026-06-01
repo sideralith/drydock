@@ -145,6 +145,9 @@ STUB
 	# Create the marker dir for the CORRECT disc (cc99), not the ff00 one.
 	mkdir -p "$HOME/.claude-container-cc99"
 	printf '550e8400-e29b-41d4-a716-446655440000\n' > "$HOME/.claude-container-cc99/session-id"
+	# Transcript file required for --resume path (Bug 1 fix: transcript present → --resume).
+	mkdir -p "$HOME/.claude-container/projects/myproj"
+	touch "$HOME/.claude-container/projects/myproj/550e8400-e29b-41d4-a716-446655440000.jsonl"
 
 	run cmd_attach "cc99"
 	[ "$status" -eq 0 ]
@@ -180,6 +183,9 @@ STUB
 
 	mkdir -p "$HOME/.claude-container-ab12"
 	printf '550e8400-e29b-41d4-a716-446655440000\n' > "$HOME/.claude-container-ab12/session-id"
+	# Transcript file required for --resume path (Bug 1 fix: transcript present → --resume).
+	mkdir -p "$HOME/.claude-container/projects/myproj"
+	touch "$HOME/.claude-container/projects/myproj/550e8400-e29b-41d4-a716-446655440000.jsonl"
 
 	run cmd_attach "ab12"
 	[ "$status" -eq 0 ]

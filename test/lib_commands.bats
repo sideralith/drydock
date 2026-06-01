@@ -3387,6 +3387,9 @@ STUB
 	# Pre-create the marker under the CORRECT disc (ab12), NOT ff00.
 	mkdir -p "$HOME/.claude-container-ab12"
 	printf '550e8400-e29b-41d4-a716-446655440000\n' > "$HOME/.claude-container-ab12/session-id"
+	# Transcript file required for --resume path (Bug 1 fix: transcript present → --resume).
+	mkdir -p "$HOME/.claude-container/projects/myproj"
+	touch "$HOME/.claude-container/projects/myproj/550e8400-e29b-41d4-a716-446655440000.jsonl"
 
 	run cmd_run "$CMD_T4_PROJECT_DIR"
 	[ "$status" -eq 0 ]
