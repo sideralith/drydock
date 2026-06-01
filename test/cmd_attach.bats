@@ -128,6 +128,53 @@ STUB
 	[ "$result" != "True" ]
 }
 
+# ── T2: _is_oneoff_container — RED→GREEN (S-2C, S-2D) ───────────────────────
+
+@test "_is_oneoff_container: label=True → returns 0 (S-2D, OQ-5)" {
+	# GIVEN a container with com.docker.compose.oneoff=True (capital T)
+	# WHEN _is_oneoff_container is called
+	# THEN it returns 0 (success = is oneoff)
+	export MOCK_ONEOFF="True"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_is_oneoff_container "drydock-myproj-ab12"
+}
+
+@test "_is_oneoff_container: label=False → returns 1 (S-2C, OQ-5)" {
+	# GIVEN a container with com.docker.compose.oneoff=False (capital F)
+	# WHEN _is_oneoff_container is called
+	# THEN it returns 1 (failure = not oneoff, persistent)
+	export MOCK_ONEOFF="False"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	run _is_oneoff_container "drydock-myproj-ab12"
+	[ "$status" -eq 1 ]
+}
+
+@test "_is_oneoff_container: label=lowercase true → returns 1 (OQ-5 contract: must be capital)" {
+	# lowercase 'true' MUST NOT be treated as oneoff — OQ-5 invariant
+	export MOCK_ONEOFF="true"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	run _is_oneoff_container "drydock-myproj-ab12"
+	[ "$status" -eq 1 ]
+}
+
+@test "_is_oneoff_container: inspect failure → returns 1 (OQ-4 degrade gracefully)" {
+	# GIVEN docker inspect fails (container absent)
+	# WHEN _is_oneoff_container is called
+	# THEN it returns 1 (degrades to false, treats as persistent)
+	export MOCK_DOCKER_EXIT=1
+	local stub
+	stub="$(make_docker_stub_with_sessions "")"
+	export DOCKER="$stub"
+	run _is_oneoff_container "drydock-myproj-ab12"
+	[ "$status" -eq 1 ]
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {

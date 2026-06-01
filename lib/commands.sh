@@ -713,6 +713,19 @@ _passthrough_has_session_flag() {
 	return 1
 }
 
+# _is_oneoff_container name
+# Returns 0 if the container's com.docker.compose.oneoff label is exactly "True"
+# (capital T — the value Docker itself sets for compose run containers, OQ-5).
+# Returns 1 for "False", absent, or any inspect failure (OQ-4: degrade to persistent).
+# Used as the oneoff gate in cmd_attach and cmd_run attach branch (REQ-2, S-2A).
+_is_oneoff_container() {
+	local _name="$1"
+	local _label
+	_label=$("$DOCKER" inspect -f '{{index .Config.Labels "com.docker.compose.oneoff"}}' \
+		"$_name" 2>/dev/null || true)
+	[ "$_label" = "True" ]
+}
+
 # _write_session_marker disc uuid
 # Write the claude session UUID to the per-session state file so that a future
 # `drydock attach` can resume the specific conversation without showing a picker.
