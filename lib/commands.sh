@@ -726,6 +726,21 @@ _is_oneoff_container() {
 	[ "$_label" = "True" ]
 }
 
+# _session_has_transcript uuid
+# Returns 0 if a transcript file exists at
+# $HOME/.claude-container/projects/*/<uuid>.jsonl (the shared projects/ carve-out,
+# INV-2). Transcript-present is an explicit proxy for "≥1 turn completed" (REQ-1).
+# Returns 1 when uuid is empty, the glob finds nothing, or compgen fails.
+# compgen -G is errexit-safe: returns non-zero when no match, does not expand the
+# literal glob into the argument list the way a bare glob would under set -e.
+_session_has_transcript() {
+	local uuid="$1"
+	[ -n "$uuid" ] || return 1
+	local _m
+	_m=$(compgen -G "$HOME/.claude-container/projects/*/${uuid}.jsonl" 2>/dev/null || true)
+	[ -n "$_m" ]
+}
+
 # _write_session_marker disc uuid
 # Write the claude session UUID to the per-session state file so that a future
 # `drydock attach` can resume the specific conversation without showing a picker.

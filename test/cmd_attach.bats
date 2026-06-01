@@ -175,6 +175,38 @@ STUB
 	[ "$status" -eq 1 ]
 }
 
+# ── T3: _session_has_transcript — RED→GREEN (S-1A, S-1B) ────────────────────
+
+@test "_session_has_transcript: transcript present → returns 0 (S-1B)" {
+	# GIVEN a fake HOME with a .jsonl transcript file for the given uuid
+	# WHEN _session_has_transcript is called
+	# THEN it returns 0 (transcript exists = ≥1 turn)
+	local fake_home="$BATS_TEST_TMPDIR/fake-home"
+	mkdir -p "$fake_home/.claude-container/projects/myproj-abc123"
+	touch "$fake_home/.claude-container/projects/myproj-abc123/test-uuid-1234.jsonl"
+	HOME="$fake_home" _session_has_transcript "test-uuid-1234"
+}
+
+@test "_session_has_transcript: transcript absent → returns 1 (S-1A)" {
+	# GIVEN a fake HOME with no .jsonl transcript for the given uuid
+	# WHEN _session_has_transcript is called
+	# THEN it returns 1 (no transcript = fresh/zero-turn session)
+	local fake_home="$BATS_TEST_TMPDIR/fake-home-absent"
+	mkdir -p "$fake_home/.claude-container/projects"
+	run env HOME="$fake_home" bash -c '. "$DRYDOCK_HOME/lib/common.sh"; . "$DRYDOCK_HOME/lib/paths.sh"; . "$DRYDOCK_HOME/lib/compose.sh"; . "$DRYDOCK_HOME/lib/commands.sh"; _session_has_transcript "no-such-uuid"'
+	[ "$status" -eq 1 ]
+}
+
+@test "_session_has_transcript: empty uuid → returns 1 (guard, no glob expansion)" {
+	# GIVEN an empty uuid argument
+	# WHEN _session_has_transcript is called
+	# THEN it returns 1 (guard catches empty uuid before glob)
+	local fake_home="$BATS_TEST_TMPDIR/fake-home-empty"
+	mkdir -p "$fake_home/.claude-container/projects"
+	run env HOME="$fake_home" bash -c '. "$DRYDOCK_HOME/lib/common.sh"; . "$DRYDOCK_HOME/lib/paths.sh"; . "$DRYDOCK_HOME/lib/compose.sh"; . "$DRYDOCK_HOME/lib/commands.sh"; _session_has_transcript ""'
+	[ "$status" -eq 1 ]
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude --resume (REQ-6-M)" {
