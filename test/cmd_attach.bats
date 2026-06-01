@@ -567,6 +567,72 @@ drydock-myproj-ef56")"
 	grep -q "rm -f" "$DOCKER_CALL_LOG"
 }
 
+# ── T9: Bug 1 transcript switch in cmd_run attach branch — RED→GREEN (S-1A, S-1B) ──
+
+@test "cmd_run attach branch: transcript absent → uses --session-id <uuid> (S-1A, Bug 1 fix)" {
+	# GIVEN uuid in marker, no transcript, user selects Attach from menu
+	# WHEN cmd_run runs
+	# THEN --session-id is used, NOT --resume
+	export MOCK_ONEOFF="False"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+	_select_choice() { printf 'Attach: drydock-myproj-ab12\n'; }
+	export_compose_env() {
+		export PROJECT_NAME="myproj"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12"
+		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12"
+	}
+	ensure_prereqs() { :; }; ensure_image() { :; }; ensure_runtime_dirs() { :; }
+	ensure_synced() { :; }; warn_unlinked_skill_symlinks() { :; }
+	compose_files() { printf ''; }
+
+	local fake_home="$BATS_TEST_TMPDIR/fake-home-t9a"
+	mkdir -p "$fake_home/.claude-container-ab12"
+	printf 'test-uuid-9999\n' > "$fake_home/.claude-container-ab12/session-id"
+	export HOME="$fake_home"
+
+	run cmd_run 2>&1
+	[ "$status" -eq 0 ]
+	grep -q -- "--session-id test-uuid-9999" "$DOCKER_CALL_LOG"
+	! grep -q -- "--resume test-uuid-9999" "$DOCKER_CALL_LOG"
+}
+
+@test "cmd_run attach branch: transcript present → uses --resume <uuid> (S-1B, Bug 1 fix)" {
+	# GIVEN uuid in marker AND transcript exists
+	# WHEN cmd_run attach branch runs
+	# THEN --resume is used
+	export MOCK_ONEOFF="False"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+	_drydock_has_tty() { return 0; }
+	_select_choice() { printf 'Attach: drydock-myproj-ab12\n'; }
+	export_compose_env() {
+		export PROJECT_NAME="myproj"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="drydock-myproj-ab12"
+		export COMPOSE_PROJECT_NAME="drydock-myproj-ab12"
+	}
+	ensure_prereqs() { :; }; ensure_image() { :; }; ensure_runtime_dirs() { :; }
+	ensure_synced() { :; }; warn_unlinked_skill_symlinks() { :; }
+	compose_files() { printf ''; }
+
+	local fake_home="$BATS_TEST_TMPDIR/fake-home-t9b"
+	mkdir -p "$fake_home/.claude-container-ab12"
+	printf 'test-uuid-9999\n' > "$fake_home/.claude-container-ab12/session-id"
+	mkdir -p "$fake_home/.claude-container/projects/myproj"
+	touch "$fake_home/.claude-container/projects/myproj/test-uuid-9999.jsonl"
+	export HOME="$fake_home"
+
+	run cmd_run 2>&1
+	[ "$status" -eq 0 ]
+	grep -q -- "--resume test-uuid-9999" "$DOCKER_CALL_LOG"
+	! grep -q -- "--session-id test-uuid-9999" "$DOCKER_CALL_LOG"
+}
+
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
 
 @test "cmd_attach: explicit disc arg → invokes compose exec with claude session flag (REQ-6-M)" {

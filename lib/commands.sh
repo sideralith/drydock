@@ -593,8 +593,13 @@ cmd_run() {
 				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude "${passthrough[@]}"
 			else
 				[ -n "$_run_uuid" ] && _write_session_marker "$_run_disc" "$_run_uuid"
+				# Bug 1 fix (REQ-1): use --session-id for zero-turn sessions (transcript absent).
 				if [ -n "$_run_uuid" ]; then
-					_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+					if _session_has_transcript "$_run_uuid"; then
+						_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+					else
+						_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --session-id "$_run_uuid" "${passthrough[@]}"
+					fi
 				else
 					_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
 				fi
