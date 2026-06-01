@@ -42,16 +42,90 @@ make_docker_stub_with_sessions() {
 	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-attach-$$-$RANDOM"
 	mkdir -p "$stub_dir"
 	local sessions_output="$1"
+	# Per-argument docker stub: switches on the -f label key for inspect calls.
+	# Env vars (evaluated at runtime, not at stub creation — note escaped \$):
+	#   MOCK_ONEOFF       — value for com.docker.compose.oneoff (capital True/False, OQ-5)
+	#   MOCK_MUX          — value for drydock.mux
+	#   MOCK_MUX_SESSION  — value for drydock.mux_session
 	cat >"$stub_dir/docker" <<STUB
 #!/usr/bin/env bash
 echo "\$*" >> "${DOCKER_CALL_LOG}"
 if [ "\${1:-}" = "ps" ]; then
 	printf '%s\n' "${sessions_output}"
+elif [ "\${1:-}" = "inspect" ]; then
+	# Dispatch on the -f format string to return per-label mock values.
+	_fmt="\${3:-}"
+	case "\$_fmt" in
+	*com.docker.compose.oneoff*)
+		printf '%s\n' "\${MOCK_ONEOFF:-False}"
+		;;
+	*drydock.mux_session*)
+		printf '%s\n' "\${MOCK_MUX_SESSION:-}"
+		;;
+	*drydock.mux*)
+		printf '%s\n' "\${MOCK_MUX:-}"
+		;;
+	*)
+		printf '%s\n' "\${MOCK_DOCKER_INSPECT_OUTPUT:-}"
+		;;
+	esac
 fi
 exit 0
 STUB
 	chmod +x "$stub_dir/docker"
 	printf '%s' "$stub_dir/docker"
+}
+
+# ── T1: per-argument docker stub — label dispatch RED→GREEN ──────────────────
+
+@test "make_docker_stub_with_sessions: inspect -f oneoff label returns MOCK_ONEOFF (T1, OQ-5)" {
+	# GIVEN the per-arg stub is built with sessions output
+	# WHEN docker inspect -f '{{index .Config.Labels "com.docker.compose.oneoff"}}' is called
+	# THEN the stub returns MOCK_ONEOFF (capital True)
+	export MOCK_ONEOFF="True"
+	export MOCK_MUX="zellij"
+	export MOCK_MUX_SESSION="main"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	# Invoke the stub as docker inspect would
+	local result
+	result="$("$stub" inspect -f '{{index .Config.Labels "com.docker.compose.oneoff"}}' drydock-myproj-ab12)"
+	[ "$result" = "True" ]
+}
+
+@test "make_docker_stub_with_sessions: inspect -f mux label returns MOCK_MUX (T1)" {
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX="tmux"
+	export MOCK_MUX_SESSION="work"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	local result
+	result="$("$stub" inspect -f '{{index .Config.Labels "drydock.mux"}}' drydock-myproj-ab12)"
+	[ "$result" = "tmux" ]
+}
+
+@test "make_docker_stub_with_sessions: inspect -f mux_session label returns MOCK_MUX_SESSION (T1)" {
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX="tmux"
+	export MOCK_MUX_SESSION="work"
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	local result
+	result="$("$stub" inspect -f '{{index .Config.Labels "drydock.mux_session"}}' drydock-myproj-ab12)"
+	[ "$result" = "work" ]
+}
+
+@test "make_docker_stub_with_sessions: MOCK_ONEOFF=False distinguishes from True (T1, OQ-5)" {
+	# Verify capital False returns false, not true — critical for OQ-5 contract
+	export MOCK_ONEOFF="False"
+	export MOCK_MUX=""
+	export MOCK_MUX_SESSION=""
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	local result
+	result="$("$stub" inspect -f '{{index .Config.Labels "com.docker.compose.oneoff"}}' drydock-myproj-ab12)"
+	[ "$result" = "False" ]
+	[ "$result" != "True" ]
 }
 
 # ── Scenario (a): explicit disc arg → direct attach ───────────────────────────
