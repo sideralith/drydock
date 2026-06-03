@@ -813,6 +813,97 @@ MI
 	unset DRYDOCK_SKIP_ENV_WRITE
 }
 
+# ── close-marker isolation + idempotency (#140) ──────────────────────────────
+# Regression for #140: the managed-block serializer emitted $block with no
+# trailing newline, gluing "# <<< end drydock managed >>>" onto the last
+# DRYDOCK_SUBMOUNT_*_HOST_PATH value (Docker then bind-mounts a nonexistent
+# path it silently creates as an empty dir). These assert the RAW .env, NOT a
+# round-trip through the extraction awk — whose /^# <<< end/ anchor is blind to
+# the glued marker and would hide the bug (the green-false trap that shipped it).
+
+@test "sync_submount_env_file: close marker on its own line, never glued to last value (#140, 1 sub-mount)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-glue-1"
+	mkdir -p "$proj"
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-glue-1.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# Guard against a false RED: the managed block must actually be written.
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	# (1) The close marker MUST occupy its own line.
+	grep -qxF '# <<< end drydock managed >>>' "$proj/.env"
+	# (2) The close marker MUST NOT be concatenated onto a KEY=VALUE line (#140).
+	run grep -qE '=.*# <<< end drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+}
+
+@test "sync_submount_env_file: close marker on its own line with multiple sub-mounts (#140)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-glue-multi"
+	mkdir -p "$proj"
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-glue-multi.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+687 80 0:68 /Users/X/Media $proj/assets rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# Both sub-mounts present → managed block has ≥2 value lines (the bug glues
+	# the marker onto the last one); assert the close marker stays isolated.
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	grep -qE '^DRYDOCK_SUBMOUNT_ASSETS_HOST_PATH=' "$proj/.env"
+	grep -qxF '# <<< end drydock managed >>>' "$proj/.env"
+	run grep -qE '=.*# <<< end drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+}
+
+@test "sync_submount_env_file: second call does not rewrite the file — glued-marker idempotency (#140)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-noop"
+	mkdir -p "$proj"
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-glue-noop.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	export MOUNTINFO_FILE="$tmp_mi"
+	sync_submount_env_file "$proj"
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	local inode_before
+	inode_before=$(stat -c %i "$proj/.env")
+	# A glued close marker defeats the idempotency check (existing_block carries
+	# the marker → never equals the rebuilt block), so the file is rewritten
+	# (mktemp + mv → new inode) on every run. Fixed: the second call is a no-op.
+	sync_submount_env_file "$proj"
+	local inode_after
+	inode_after=$(stat -c %i "$proj/.env")
+	[ "$inode_before" = "$inode_after" ]
+}
+
+@test "sync_submount_env_file: heals a pre-existing glued-marker .env (#140 upgrade path)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-heal"
+	mkdir -p "$proj"
+	# Simulate an .env already corrupted by the pre-fix serializer: the close
+	# marker glued onto the (otherwise correct) last value. The seed value MUST
+	# match the detected sub-mount so this exercises the no-skip idempotency path
+	# (only the glued marker differs), not a trivial value-diff rewrite.
+	cat >"$proj/.env" <<'GLUED'
+# >>> drydock managed (auto-generated, do not edit manually) <<<
+DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/X/Vault# <<< end drydock managed >>>
+GLUED
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-heal.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# The var survives and the close marker is repaired onto its own line.
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	grep -qxF '# <<< end drydock managed >>>' "$proj/.env"
+	run grep -qE '=.*# <<< end drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+}
+
 # ── sanitize_project_name (REQ-1, S1.1–S1.11) ────────────────────────────────
 
 @test "sanitize_project_name: S1.1 — period mapped to dash" {

@@ -150,7 +150,7 @@ sync_submount_env_file() {
 		if [ -n "$block" ]; then
 			[ -n "$user_content" ] && printf '\n'
 			printf '%s\n' "$marker_start"
-			printf '%s' "$block"
+			printf '%s\n' "$block"
 			printf '%s\n' "$marker_end"
 		fi
 	} >"$tmp"
