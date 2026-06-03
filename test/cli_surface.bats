@@ -24,22 +24,22 @@ drydock() {
   run bash -c '"$1" "$@"' -- "$DRYDOCK_HOME/bin/drydock" "$@" 2>&1
 }
 
-@test "drydock version exits 0 and prints exactly 'drydock 0.3.2'" {
+@test "drydock version exits 0 and prints exactly 'drydock 0.3.3'" {
   run "$DRYDOCK_HOME/bin/drydock" version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.3.2" ]
+  [ "$output" = "drydock 0.3.3" ]
 }
 
 @test "drydock --version exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" --version
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.3.2" ]
+  [ "$output" = "drydock 0.3.3" ]
 }
 
 @test "drydock -v exits 0 and prints version" {
   run "$DRYDOCK_HOME/bin/drydock" -v
   [ "$status" -eq 0 ]
-  [ "$output" = "drydock 0.3.2" ]
+  [ "$output" = "drydock 0.3.3" ]
 }
 
 @test "drydock help exits 0 and contains command list" {
