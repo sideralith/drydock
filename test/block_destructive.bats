@@ -1153,3 +1153,65 @@ teardown() {
     run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"rg -n \"C1|rm -rf|x\" file"}}'
     [ "$status" -eq 0 ]
 }
+
+# ── Guardrail wrapper fail-closed (#140-adjacent: concurrent-launch race) ─────
+# The image-baked PreToolUse wrapper (templates/managed-settings.d/40-guardrails-hook.json)
+# execs the destructive-command guardrail IF its script is present. If the script
+# is ABSENT — e.g. a concurrent gc_orphan_session_dirs reaped the per-session hook
+# overlay dir mid-launch (INV-3) — the wrapper MUST fail CLOSED (exit 2 = block),
+# never silently allow (exit 0): a silently-disabled tier-1 guardrail is the actual
+# safety hole. These exercise the baked wrapper command string itself, with its
+# hardcoded /opt/drydock/hooks path redirected to a temp dir.
+
+# Extract the baked wrapper command, redirecting its /opt path to $1.
+_guardrail_wrapper_cmd() {
+    local fake_hooks="$1" cmd
+    cmd="$(jq -r '.hooks.PreToolUse[0].hooks[0].command' \
+        "$DRYDOCK_HOME/templates/managed-settings.d/40-guardrails-hook.json")"
+    printf '%s' "${cmd//\/opt\/drydock\/hooks/$fake_hooks}"
+}
+
+@test "guardrail wrapper: script ABSENT → fail-closed (exit 2, blocks)" {
+    local fake_hooks="$BATS_TEST_TMPDIR/gw-absent"
+    mkdir -p "$fake_hooks" # empty — no drydock-block-destructive.sh present
+    run sh -c "$(_guardrail_wrapper_cmd "$fake_hooks")" <<< '{"tool_name":"Bash","tool_input":{"command":"echo hi"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "guardrail wrapper: script present and blocks (exit 2) → wrapper propagates 2" {
+    local fake_hooks="$BATS_TEST_TMPDIR/gw-block"
+    mkdir -p "$fake_hooks"
+    printf '#!/usr/bin/env bash\nexit 2\n' >"$fake_hooks/drydock-block-destructive.sh"
+    chmod +x "$fake_hooks/drydock-block-destructive.sh"
+    run sh -c "$(_guardrail_wrapper_cmd "$fake_hooks")" <<< '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "guardrail wrapper: script present and allows (exit 0) → wrapper propagates 0" {
+    local fake_hooks="$BATS_TEST_TMPDIR/gw-allow"
+    mkdir -p "$fake_hooks"
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_hooks/drydock-block-destructive.sh"
+    chmod +x "$fake_hooks/drydock-block-destructive.sh"
+    run sh -c "$(_guardrail_wrapper_cmd "$fake_hooks")" <<< '{"tool_name":"Bash","tool_input":{"command":"ls"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "guardrail wrapper: script present but NOT executable → fail-closed (exit 2)" {
+    local fake_hooks="$BATS_TEST_TMPDIR/gw-nonexec"
+    mkdir -p "$fake_hooks"
+    # Present but intentionally NOT chmod +x → [ -x ] is false → must block.
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_hooks/drydock-block-destructive.sh"
+    run sh -c "$(_guardrail_wrapper_cmd "$fake_hooks")" <<< '{"tool_name":"Bash","tool_input":{"command":"echo hi"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "guardrail wrapper: fail-closed message goes to stderr, NOT stdout (PreToolUse protocol safety)" {
+    local fake_hooks="$BATS_TEST_TMPDIR/gw-stream"
+    mkdir -p "$fake_hooks" # absent → fail-closed path
+    run --separate-stderr sh -c "$(_guardrail_wrapper_cmd "$fake_hooks")" <<< '{"tool_name":"Bash","tool_input":{"command":"echo hi"}}'
+    [ "$status" -eq 2 ]
+    # stdout MUST stay empty: a PreToolUse hook's stdout is part of its structured
+    # protocol; the human-facing block reason belongs on stderr.
+    [ -z "$output" ]
+    [[ "$stderr" == *"fail-closed"* ]]
+}

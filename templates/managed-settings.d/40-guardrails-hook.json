@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '[ -x /opt/drydock/hooks/drydock-block-destructive.sh ] && exec /opt/drydock/hooks/drydock-block-destructive.sh || exit 0'",
+            "command": "sh -c '[ -x /opt/drydock/hooks/drydock-block-destructive.sh ] && exec /opt/drydock/hooks/drydock-block-destructive.sh || { echo \"drydock: destructive-command guardrail script missing - blocking (fail-closed)\" >&2; exit 2; }'",
             "timeout": 5
           }
         ]
