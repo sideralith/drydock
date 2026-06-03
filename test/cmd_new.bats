@@ -103,6 +103,19 @@ setup() {
 		grep -q "compose" "$DOCKER_CALL_LOG"
 }
 
+# ── T1.8: cmd_new uses _run_claude_lifecycle (teardown fires) (D-8) ──────────
+
+@test "cmd_new: uses lifecycle helper — teardown rm -f appears after up -d (D-8)" {
+	# GIVEN cmd_new is called with a TTY
+	# WHEN it completes
+	# THEN the docker call log contains 'rm -f' (proves lifecycle helper was used
+	# and exec was dropped; exec would replace the process and never reach teardown)
+	_drydock_has_tty() { return 0; }
+	run cmd_new
+	[ "$status" -eq 0 ]
+	grep -q "rm -f" "$DOCKER_CALL_LOG"
+}
+
 # ── No-TTY guard (FIX-3) ─────────────────────────────────────────────────────
 
 @test "cmd_new: no TTY → exits 2 with friendly error (FIX-3)" {

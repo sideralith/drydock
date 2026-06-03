@@ -121,15 +121,103 @@ IFS=$'\x01' read -ra _segments <<<"$norm"
 # - Mismatched quotes (e.g. quoted opening with no closing): bash rejects the
 #   command at parse time before execution. The hook receives the raw string
 #   but bash never runs it destructively. Acceptable under threat model A.
+#
+# ADR-9 — mask-first conditional flatten (issue #133):
+# The old unconditional flatten exposed rm tokens inside quoted DATA arguments
+# (e.g. `git commit -m "rm -rf /"`) as false positives. The new approach
+# uses a two-step gate:
+#   1. Compute masked = s with every "…"/'…' run replaced by spaces (quoted
+#      content GONE — no phantom tokens injected into rule matching).
+#   2. If masked reveals a command word that a downstream per-segment rule
+#      inspects, FLATTEN the ORIGINAL s (existing two-sed behavior: expose
+#      content so rules can inspect the real arguments).
+#   3. Otherwise return masked (data-quote drop: the content is gone, no
+#      phantom rm token reaches the rules).
+#
+# The flatten-trigger set is CLOSED (ADR-9 standing decision):
+#   - rm command word (C1-residue / C17 / C18)
+#   - Shell exec introducers: {bash, sh, dash, zsh} — bare or path-qualified
+#     (e.g. /bin/sh), optionally sudo-prefixed — WITH a -c flag present
+#     anywhere in the segment (need not be adjacent)
+#   - eval, optionally sudo-prefixed
+#   - ssh (A1), kubectl/helm (A2), psql/mysql/mongo/mongosh/redis-cli (A3),
+#     terraform (A4), chmod (C7-residue): per-segment rules that rely on
+#     quoted flag VALUES (e.g. --context="prod", --host="prod-db") being
+#     exposed — those values are part of the real command, not data quotes
+#
+# Segments with NO introducer token anywhere in their masked text (git, gh,
+# echo, rg, and similar data-passing tools) receive the DROP treatment.
+# This reopens ADR-6 narrowly (ADR-9 standing decision). Rule loops
+# C1-residue / C17 / C18 are UNCHANGED.
 _strip_quotes() {
 	local s="$1"
-	s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
-	s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
-	printf '%s' "$s"
+	# Step 1: compute masked — replace each quoted run with a single space.
+	# Use separate sed passes (same as flatten) but replace group with space only.
+	local masked
+	masked="$(printf '%s' "$s" | sed -E 's/"[^"]*"/ /g')"
+	masked="$(printf '%s' "$masked" | sed -E "s/'[^']*'/ /g")"
+
+	# Step 2: gate — decide FLATTEN vs. DROP based on masked content.
+	# rm-arm (FIX 1): rm command word visible (no visible-flag requirement).
+	if [[ "$masked" =~ (^|[[:space:]])rm[[:space:]] ]]; then
+		# FLATTEN: expose original quoted content for C1-residue / C17 / C18.
+		s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+		s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+		printf '%s' "$s"
+		return
+	fi
+	# executor-arm (FIX 2 + FIX 3):
+	# Part A — shell introducer present (bare or path-qualified, optional sudo).
+	# Part B — a -c-bearing flag token present anywhere in the segment.
+	# eval arm — eval introducer present (optional sudo).
+	if { [[ "$masked" =~ (^|[[:space:]/])(sudo[[:space:]]+)?(bash|sh|dash|zsh)([[:space:]]|$) ]] &&
+		[[ "$masked" =~ [[:space:]]-[A-Za-z]*c([[:space:]]|$) ]]; } ||
+		[[ "$masked" =~ (^|[[:space:]])(sudo[[:space:]]+)?eval([[:space:]]|$) ]]; then
+		# FLATTEN: expose original quoted content so C1-residue catches the payload.
+		s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+		s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+		printf '%s' "$s"
+		return
+	fi
+	# per-segment rule introducers: flatten so the rules can see the real argument
+	# VALUES that may be quoted (--context="prod", --host="prod-db", etc.).
+	# A1 (ssh), A2 (kubectl/helm), A3 (psql/mysql/mongo/mongosh/redis-cli),
+	# A4 (terraform), C7-residue (chmod with sudo).
+	if [[ "$masked" =~ (^|[[:space:]])(sudo[[:space:]]+)?(ssh|kubectl|helm|psql|mysql|mongo|mongosh|redis-cli|terraform|chmod)[[:space:]] ]]; then
+		s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+		s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+		printf '%s' "$s"
+		return
+	fi
+	# cmdsub-arm (ADR-9): a DOUBLE-quoted run carrying command substitution —
+	# $(...) or `...` — is EXECUTED by bash even inside double quotes, so its
+	# content is NOT inert data. Flatten so the inner command reaches the rules;
+	# dropping it would let `echo "$(curl x | bash)"` slip past C20. Single quotes
+	# do not expand, so a single-quoted $(...) correctly stays on the DROP path.
+	local _dq_cmdsub_re='"[^"]*(\$\(|`)[^"]*"'
+	if [[ "$s" =~ $_dq_cmdsub_re ]]; then
+		s="$(printf '%s' "$s" | sed -E 's/"([^"]*)"/ \1 /g')"
+		s="$(printf '%s' "$s" | sed -E "s/'([^']*)'/ \1 /g")"
+		printf '%s' "$s"
+		return
+	fi
+	# else: data-quote DROP — return masked (content gone, no phantom rm token).
+	printf '%s' "$masked"
 }
 
 for _i in "${!_segments[@]}"; do
 	_segments[_i]="$(_strip_quotes "${_segments[_i]}")"
+done
+
+# Data-stripped scan string for the cross-segment rules C12 and C20 (ADR-9):
+# join the per-segment masked forms so quoted DATA (dropped above) no longer
+# trips them, while real execution forms (flattened above) stay visible. Joined
+# with ';' so C12's two halves still combine across the original separator, and
+# C20's pipe — never a split point, preserved inside its segment — is unaffected.
+_scrubbed_cmd=""
+for _seg in "${_segments[@]}"; do
+	[ -n "$_scrubbed_cmd" ] && _scrubbed_cmd+=";"
+	_scrubbed_cmd+="$_seg"
 done
 
 # ── Rule C1-residue: rm with any recursive flag targeting a system path root ──
@@ -177,9 +265,10 @@ done
 
 # ── Rule C12: fork bomb ────────────────────────────────────────────────────────
 # Block: the classic :() { :|: & };: shape (colon-function recursion).
-# Checked against full $cmd — the two pattern halves may straddle a ; but
-# splitting would break the compound detection.
-if [[ "$cmd" =~ :\(\)[[:space:]]*\{ ]] && [[ "$cmd" =~ :\|: ]]; then
+# Checked against the data-stripped _scrubbed_cmd (ADR-9) so a fork bomb quoted
+# as DATA (e.g. in a commit message, no ';' inside the quote) no longer trips it;
+# the two halves may straddle a ';', which the ';'-joined scrubbed form preserves.
+if [[ "$_scrubbed_cmd" =~ :\(\)[[:space:]]*\{ ]] && [[ "$_scrubbed_cmd" =~ :\|: ]]; then
 	echo "drydock guardrail: fork bomb pattern detected and blocked (C12)." >&2
 	exit 2
 fi
@@ -384,7 +473,10 @@ done
 # Block: curl or wget combined with a pipe to bash or sh in the same command.
 # Allow: curl -o file.sh ..., curl https://api.example.com/data (no pipe to shell)
 #
-# Checked against full $cmd — C20 must see across pipes; do NOT split here.
+# Checked against the data-stripped _scrubbed_cmd (ADR-9): quoted DATA is gone
+# but executor / command-substitution content was flattened, and the pipe — never
+# a split point — is preserved inside its segment, so C20 still sees a real
+# curl|wget ... | bash across the pipe while benign quoted data no longer trips it.
 #
 # The curl/wget token check uses a non-alphabetic boundary (not just space) so
 # that docker-wrapped payloads like 'docker run ... sh -c "curl ... | bash"' are
@@ -394,8 +486,8 @@ done
 #
 # An optional "sudo " bridge between the pipe and the shell is allowed so that
 # "curl ... | sudo bash" is also blocked (FIX-4).
-if [[ "$cmd" =~ (^|[^a-zA-Z])(curl|wget)([^a-zA-Z]|$) ]] &&
-	[[ "$cmd" =~ \|[[:space:]]*(sudo[[:space:]]+)?(bash|sh)([^a-zA-Z]|$) ]]; then
+if [[ "$_scrubbed_cmd" =~ (^|[^a-zA-Z])(curl|wget)([^a-zA-Z]|$) ]] &&
+	[[ "$_scrubbed_cmd" =~ \|[[:space:]]*(sudo[[:space:]]+)?(bash|sh)([^a-zA-Z]|$) ]]; then
 	echo "drydock guardrail: piping curl/wget output directly into a shell is blocked (C20)." >&2
 	echo "Download the script first (curl -o script.sh ...), inspect it, then run it." >&2
 	exit 2

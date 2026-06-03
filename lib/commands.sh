@@ -44,7 +44,7 @@ usage() {
 	_dr_help_row "(no args)" "Default — attach to existing session or launch Claude (prompts if multiple)"
 	_dr_help_row "run [DIR] [-- ARGS]" "Detect + delegate: attach, new, or prompt; ARGS after -- go to claude"
 	_dr_help_row "new" "Start a new session (skips prompt; runs alongside any existing sessions)"
-	_dr_help_row "attach [NAME]" "Reconnect to an existing session (claude --resume)"
+	_dr_help_row "attach [NAME]" "Reconnect to an existing session; resumes the specific prior conversation by UUID (picker fallback if no record)"
 	_dr_help_row "list" "List live sessions for the current project"
 	_dr_help_row "stop [NAME]" "Stop a session (docker rm -f); with no arg, prompts if multiple"
 	_dr_help_row "shell [DIR] [-- CMD]" "Bash shell in container; with -- CMD, run CMD instead"
@@ -513,7 +513,10 @@ cmd_run() {
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		local _name="$DRYDOCK_SESSION_NAME"
-		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
+		# Capture host mux labels to stamp onto the nested container (REQ-4, S-4A-4E).
+		local -a mux_args=()
+		while IFS= read -r _a; do mux_args+=("$_a"); done < <(_capture_mux_labels)
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" "${mux_args[@]}" drydock claude "${passthrough[@]}"
 		# exec replaces the process in production. return 0 is a test safety-net:
 		# if exec() is overridden by a test stub (which returns without replacing
 		# the process), return ensures we don't fall through to the non-nested path.
@@ -570,11 +573,38 @@ cmd_run() {
 		Attach:*)
 			# Extract the container name (everything after "Attach: ").
 			local target="${chosen#Attach: }"
-			export_compose_env "$project_dir"
-			local compose_args=()
-			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			note "Attaching to $target"
-			exec "$DOCKER" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+			# Derive disc from the target container name suffix — no export_compose_env
+			# call here; compose exec resolves the service by project label via
+			# -p "$target", so no compose overlay vars or exported env are needed.
+			local _run_disc="${target##*-}"
+			local _run_uuid=""
+			local _run_marker="$HOME/.claude-container-${_run_disc}/session-id"
+			[ -f "$_run_marker" ] && _run_uuid="$(cat "$_run_marker")"
+			# Oneoff gate (REQ-2, S-2A): inside _drydock_has_tty block, no TTY conflict.
+			# Fires after marker read, before reap — ephemeral containers must not be reaped.
+			if _is_oneoff_container "$target"; then
+				_mux_reattach_guidance "$target"
+				return 0
+			fi
+			# Reap orphan unconditionally (D-7, REQ-5); then resume unless the user
+			# already supplied a session flag in passthrough (REQ-PT-1).
+			_reap_orphan_claude "$target" "$_run_uuid"
+			if _passthrough_has_session_flag "${passthrough[@]}"; then
+				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude "${passthrough[@]}"
+			else
+				[ -n "$_run_uuid" ] && _write_session_marker "$_run_disc" "$_run_uuid"
+				# Bug 1 fix (REQ-1): use --session-id for zero-turn sessions (transcript absent).
+				if [ -n "$_run_uuid" ]; then
+					if _session_has_transcript "$_run_uuid"; then
+						_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+					else
+						_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --session-id "$_run_uuid" "${passthrough[@]}"
+					fi
+				else
+					_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
+				fi
+			fi
 			;;
 		"Start a new session")
 			note "Starting new session alongside existing in $project_dir"
@@ -610,6 +640,210 @@ cmd_run() {
 	fi
 }
 
+# _run_claude_lifecycle session_name docker_argv...
+# Core lifecycle helper: run `docker compose exec` as a CHILD (no exec), capture
+# exit code without letting errexit abort early, and apply the structural
+# parent-survival discriminator:
+#   TRAP A (parent survived)  — teardown: single-name `docker rm -f session_name`
+#   TRAP B (SIGHUP received)  — disconnect→persist: exit 0, NO teardown
+#
+# Signal policy: `trap 'exit 0' HUP` — terminal-close fires the trap; the HUP
+# path exits before reaching the rm -f line, so the container is preserved.
+# SIGINT is NOT trapped — the interactive claude TUI holds the host TTY in RAW
+# mode, so Ctrl+C (INTR byte) forwards via the PTY to the in-container claude;
+# the host drydock parent never receives SIGINT. Gate #2 empirically confirmed:
+# Ctrl+C reached the in-container process; the host parent was NOT signaled.
+# DO NOT add a SIGINT trap — it would intercept an event this process never
+# receives and mask real signal problems. (D-2)
+#
+# Teardown is guarded with `|| true` so a failing rm does not suppress _rc.
+# The function propagates claude's exit code as its own return code (D-2, OQ-6).
+_run_claude_lifecycle() {
+	local _session_name="$1"
+	shift
+	local -a _docker_argv=("$@")
+
+	# TRAP B: SIGHUP → disconnect→persist. Exit 0 immediately; rm -f line is
+	# never reached, so the container survives.
+	trap 'exit 0' HUP
+
+	# TRAP A: reach-exit-guarded exec. Use the cmd_setup_token precedent
+	# (lib/commands.sh:1185) to capture _rc without letting errexit abort.
+	local _rc=0
+	"$DOCKER" "${_docker_argv[@]}" || _rc=$?
+	trap - HUP
+
+	# Teardown: single-name rm -f. NEVER compose down (REQ-4, D-3).
+	# Guarded with || true so a failing rm does not suppress _rc (D-2).
+	"$DOCKER" rm -f "$_session_name" || true
+
+	return "$_rc"
+}
+
+# _reap_orphan_claude session_name uuid
+# Kill any orphaned claude process left inside the container from a prior
+# disconnected session. Must run unconditionally before --resume so the orphan
+# does not double-append to the conversation file.
+#
+# When uuid is non-empty: `pkill -f <uuid>` targets ONLY the orphan launched as
+# `claude --session-id <uuid>`. PID-1-safe: PID 1 is `sleep infinity` and does
+# not carry the uuid in its cmdline.
+# When uuid is empty (pre-#131 attach / marker absent): falls back to
+# `pkill -f claude` — safe because each session lives in its own container.
+# Idempotent: pkill exits non-zero when no process matches; `|| true` absorbs it.
+# (REQ-5, D-7)
+_reap_orphan_claude() {
+	local _session_name="$1"
+	local _uuid="$2"
+	if [ -n "$_uuid" ]; then
+		"$DOCKER" exec "$_session_name" pkill -f "$_uuid" || true
+	else
+		"$DOCKER" exec "$_session_name" pkill -f claude || true
+	fi
+}
+
+# _passthrough_has_session_flag [args...]
+# Returns 0 (true) if any element in the argument list is a user-supplied
+# Claude session flag: --resume, --session-id, --resume=*, or --session-id=*.
+# When true, drydock must NOT inject its own --session-id / --resume and must
+# NOT write a session marker — pass the claude invocation through clean.
+# Call as: _passthrough_has_session_flag "${passthrough[@]}"
+_passthrough_has_session_flag() {
+	local _el
+	for _el in "$@"; do
+		# Enumerate claude's session-establishing flags as of `claude --help` v2.1.159:
+		#   --resume / -r*, --continue / -c*, --session-id, --from-pr
+		# Short-flag arms use prefix globs (-r*/-c*) so commander.js attached/bundled
+		# value forms (-rfoo, -r=foo, -cr, -rc) are also deferred to the user.
+		# Revisit when the bundled claude version changes — this list is version-coupled.
+		case "$_el" in
+		--resume | --session-id | --resume=* | --session-id=* | -r* | -c* | --continue | --from-pr | --from-pr=*)
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
+# _is_oneoff_container name
+# Returns 0 if the container's com.docker.compose.oneoff label is exactly "True"
+# (capital T — the value Docker itself sets for compose run containers, OQ-5).
+# Returns 1 for "False", absent, or any inspect failure (OQ-4: degrade to persistent).
+# Used as the oneoff gate in cmd_attach and cmd_run attach branch (REQ-2, S-2A).
+_is_oneoff_container() {
+	local _name="$1"
+	local _label
+	_label=$("$DOCKER" inspect -f '{{index .Config.Labels "com.docker.compose.oneoff"}}' \
+		"$_name" 2>/dev/null || true)
+	[ "$_label" = "True" ]
+}
+
+# _session_has_transcript uuid
+# Returns 0 if a transcript file exists at
+# $HOME/.claude-container/projects/*/<uuid>.jsonl (the shared projects/ carve-out,
+# INV-2). Transcript-present is an explicit proxy for "≥1 turn completed" (REQ-1).
+# Returns 1 when uuid is empty, the glob finds nothing, or compgen fails.
+# compgen -G is errexit-safe: returns non-zero when no match, does not expand the
+# literal glob into the argument list the way a bare glob would under set -e.
+_session_has_transcript() {
+	local uuid="$1"
+	[ -n "$uuid" ] || return 1
+	local _m
+	_m=$(compgen -G "$HOME/.claude-container/projects/*/${uuid}.jsonl" 2>/dev/null || true)
+	[ -n "$_m" ]
+}
+
+# _capture_mux_labels
+# Detects the host multiplexer (zellij → tmux → screen) and emits --label tokens
+# ONE PER LINE so the caller can read them into an array via:
+#   while IFS= read -r a; do args+=("$a"); done < <(_capture_mux_labels)
+# This idiom (used by compose_files) survives session names with spaces.
+# Precedence: zellij ($ZELLIJ/$ZELLIJ_SESSION_NAME) → tmux ($TMUX/tmux display-message)
+# → screen ($STY). When no mux is detected, emits nothing.
+# OQ-3: OMIT the drydock.mux_session token entirely when session name is empty —
+# do NOT emit an empty-valued label (simplifies detection on the attach side).
+_capture_mux_labels() {
+	local _mux="" _ms=""
+	if [ -n "${ZELLIJ:-}" ]; then
+		_mux="zellij"
+		_ms="${ZELLIJ_SESSION_NAME:-}"
+	elif [ -n "${TMUX:-}" ]; then
+		_mux="tmux"
+		_ms=$(tmux display-message -p '#S' 2>/dev/null || true)
+	elif [ -n "${STY:-}" ]; then
+		_mux="screen"
+		_ms="${STY:-}"
+	fi
+	[ -n "$_mux" ] || return 0
+	printf '%s\n' "--label" "drydock.mux=${_mux}"
+	if [ -n "$_ms" ]; then
+		printf '%s\n' "--label" "drydock.mux_session=${_ms}"
+	fi
+}
+
+# _mux_reattach_guidance name
+# Prints reattach guidance for an ephemeral (oneoff) nested session container.
+# Inspects the drydock.mux and drydock.mux_session labels on the container (TWO
+# docker inspect calls) and emits the correct mux command or a generic fallback.
+# Always exits 0 — must not crash or destroy the container (S-3D, S-3E, REQ-3).
+_mux_reattach_guidance() {
+	local _name="$1"
+	local _mux _ms
+	_mux=$("$DOCKER" inspect -f '{{index .Config.Labels "drydock.mux"}}' \
+		"$_name" 2>/dev/null || true)
+	_ms=$("$DOCKER" inspect -f '{{index .Config.Labels "drydock.mux_session"}}' \
+		"$_name" 2>/dev/null || true)
+	case "$_mux" in
+	zellij)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your zellij terminal.\n'
+			printf 'To reattach, switch to that window or run:  zellij attach %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your zellij terminal.\n'
+			printf 'To reattach, switch back to your zellij session.\n'
+		fi
+		;;
+	tmux)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your tmux terminal.\n'
+			printf 'To reattach, switch to that window or run:  tmux attach -t %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your tmux terminal.\n'
+			printf 'To reattach, switch back to your tmux session.\n'
+		fi
+		;;
+	screen)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your screen terminal.\n'
+			printf 'To reattach, switch to that window or run:  screen -r %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your screen terminal.\n'
+			printf 'To reattach, switch back to your screen session.\n'
+		fi
+		;;
+	*)
+		printf 'This container is a live nested drydock session.\n'
+		printf 'To interact with it, reattach to the terminal where it was launched.\n'
+		;;
+	esac
+	return 0
+}
+
+# _write_session_marker disc uuid
+# Write the claude session UUID to the per-session state file so that a future
+# `drydock attach` can resume the specific conversation without showing a picker.
+# Idempotent: calling twice with the same uuid overwrites cleanly.
+# Must be called on BOTH launch AND attach (Refinement 3 — D-5).
+# mkdir -p is a no-op when the dir already exists (seed_session_config_dir creates
+# it before _launch_new is called in production; the -p guard covers edge cases).
+_write_session_marker() {
+	local _disc="$1"
+	local _uuid="$2"
+	local _dir="$HOME/.claude-container-${_disc}"
+	mkdir -p "$_dir"
+	printf '%s\n' "$_uuid" >"$_dir/session-id"
+}
+
 # _launch_new project_dir compose_args_nameref [passthrough...]
 # Internal: mint-and-launch a fresh persistent container.
 # Calls compose up -d then exec -it claude. Used by cmd_run (0-sessions path,
@@ -625,8 +859,22 @@ _launch_new() {
 	local -a passthrough=("$@")
 
 	local _name="$DRYDOCK_SESSION_NAME"
+	local _disc="$DRYDOCK_DISCRIMINATOR"
+	# Generate a host-side UUID for this session. /proc/sys/kernel/random/uuid is
+	# always available on Linux/WSL2; uuidgen is the fallback (D-4).
+	local _uuid
+	_uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
 	"$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" up -d
-	exec "$DOCKER" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	# If the user already supplied --resume or --session-id in passthrough, pass
+	# through clean — no injected --session-id, no marker write (REQ-PT-1).
+	if _passthrough_has_session_flag "${passthrough[@]}"; then
+		_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	else
+		# Write the marker BEFORE handing off to the lifecycle helper so that a future
+		# attach can read it regardless of how the session ends (D-5, Refinement 3).
+		_write_session_marker "$_disc" "$_uuid"
+		_run_claude_lifecycle "$_name" compose "${_ln_compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+	fi
 }
 
 cmd_shell() {
@@ -1935,12 +2183,27 @@ cmd_new() {
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 
 	local _name="$DRYDOCK_SESSION_NAME"
+	local _disc="$DRYDOCK_DISCRIMINATOR"
 	note "Starting new session $_name in $project_dir"
 
+	# Generate a host-side UUID for this session. /proc/sys/kernel/random/uuid is
+	# always available on Linux/WSL2; uuidgen is the fallback (D-4).
+	local _uuid
+	_uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
+
 	# Persistent lifecycle: compose up -d starts the container (PID 1 = sleep infinity),
-	# then compose exec attaches Claude interactively.
+	# then _run_claude_lifecycle attaches Claude interactively as a child process.
+	# Dropping exec here lets the EXIT trap in bin/drydock fire correctly (D-8).
 	"$DOCKER" compose "${compose_args[@]}" -p "$_name" up -d
-	exec "$DOCKER" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	# If the user already supplied --resume or --session-id in passthrough, pass
+	# through clean — no injected --session-id, no marker write (REQ-PT-1).
+	if _passthrough_has_session_flag "${passthrough[@]}"; then
+		_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude "${passthrough[@]}"
+	else
+		# Write the marker BEFORE handing off to the lifecycle helper (D-5, Refinement 3).
+		_write_session_marker "$_disc" "$_uuid"
+		_run_claude_lifecycle "$_name" compose "${compose_args[@]}" -p "$_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+	fi
 }
 
 # ── cmd_attach ────────────────────────────────────────────────────────────────
@@ -2000,12 +2263,57 @@ cmd_attach() {
 		fi
 	fi
 
+	# Oneoff gate (REQ-2, OQ-1): fires AFTER target is resolved, BEFORE TTY guard.
+	# Ephemeral (compose run) containers must not be reaped or resumed — print mux
+	# guidance and exit 0 (S-2A/S-2B). The TTY guard does NOT move (OQ-1).
+	if _is_oneoff_container "$target_name"; then
+		_mux_reattach_guidance "$target_name"
+		return 0
+	fi
+
 	if ! _drydock_has_tty; then
 		printf 'drydock attach requires a TTY — not called from a terminal\n' >&2
 		return 2
 	fi
 	note "Attaching to $target_name"
-	exec "$DOCKER" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+
+	# Derive disc from the target container name suffix — NEVER from
+	# $DRYDOCK_DISCRIMINATOR, which cmd_run's attach branch clobbers via
+	# export_compose_env (D-6, CRITICAL correctness rule).
+	local _disc="${target_name##*-}"
+
+	# Read the session-id marker written at launch (or prior attach).
+	local _uuid=""
+	local _marker="$HOME/.claude-container-${_disc}/session-id"
+	[ -f "$_marker" ] && _uuid="$(cat "$_marker")"
+
+	# Reap any orphaned claude left from the previous disconnected session.
+	# Unconditional; idempotent when no orphan exists (D-7, REQ-5).
+	_reap_orphan_claude "$target_name" "$_uuid"
+
+	# If the user already supplied --resume or --session-id in passthrough, pass
+	# through clean — no injected --resume, no marker write (REQ-PT-1).
+	if _passthrough_has_session_flag "${passthrough[@]}"; then
+		_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude "${passthrough[@]}"
+	else
+		# Write/refresh the marker BEFORE the lifecycle call so it is always
+		# up-to-date regardless of how this session eventually ends (D-5, Refinement 3).
+		# Only write when a uuid is known; the bare --resume fallback has no uuid to record.
+		[ -n "$_uuid" ] && _write_session_marker "$_disc" "$_uuid"
+
+		# Bug 1 fix (REQ-1): use --session-id when transcript is absent (zero-turn session)
+		# to avoid "session not found" on --resume; use --resume only when transcript
+		# confirms ≥1 turn. Reap stays UNCONDITIONAL above (design invariant).
+		if [ -n "$_uuid" ]; then
+			if _session_has_transcript "$_uuid"; then
+				_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+			else
+				_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+			fi
+		else
+			_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
+		fi
+	fi
 }
 
 # ── cmd_list ──────────────────────────────────────────────────────────────────

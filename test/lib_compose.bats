@@ -813,6 +813,97 @@ MI
 	unset DRYDOCK_SKIP_ENV_WRITE
 }
 
+# ── close-marker isolation + idempotency (#140) ──────────────────────────────
+# Regression for #140: the managed-block serializer emitted $block with no
+# trailing newline, gluing "# <<< end drydock managed >>>" onto the last
+# DRYDOCK_SUBMOUNT_*_HOST_PATH value (Docker then bind-mounts a nonexistent
+# path it silently creates as an empty dir). These assert the RAW .env, NOT a
+# round-trip through the extraction awk — whose /^# <<< end/ anchor is blind to
+# the glued marker and would hide the bug (the green-false trap that shipped it).
+
+@test "sync_submount_env_file: close marker on its own line, never glued to last value (#140, 1 sub-mount)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-glue-1"
+	mkdir -p "$proj"
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-glue-1.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# Guard against a false RED: the managed block must actually be written.
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	# (1) The close marker MUST occupy its own line.
+	grep -qxF '# <<< end drydock managed >>>' "$proj/.env"
+	# (2) The close marker MUST NOT be concatenated onto a KEY=VALUE line (#140).
+	run grep -qE '=.*# <<< end drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+}
+
+@test "sync_submount_env_file: close marker on its own line with multiple sub-mounts (#140)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-glue-multi"
+	mkdir -p "$proj"
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-glue-multi.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+687 80 0:68 /Users/X/Media $proj/assets rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# Both sub-mounts present → managed block has ≥2 value lines (the bug glues
+	# the marker onto the last one); assert the close marker stays isolated.
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	grep -qE '^DRYDOCK_SUBMOUNT_ASSETS_HOST_PATH=' "$proj/.env"
+	grep -qxF '# <<< end drydock managed >>>' "$proj/.env"
+	run grep -qE '=.*# <<< end drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+}
+
+@test "sync_submount_env_file: second call does not rewrite the file — glued-marker idempotency (#140)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-noop"
+	mkdir -p "$proj"
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-glue-noop.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	export MOUNTINFO_FILE="$tmp_mi"
+	sync_submount_env_file "$proj"
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	local inode_before
+	inode_before=$(stat -c %i "$proj/.env")
+	# A glued close marker defeats the idempotency check (existing_block carries
+	# the marker → never equals the rebuilt block), so the file is rewritten
+	# (mktemp + mv → new inode) on every run. Fixed: the second call is a no-op.
+	sync_submount_env_file "$proj"
+	local inode_after
+	inode_after=$(stat -c %i "$proj/.env")
+	[ "$inode_before" = "$inode_after" ]
+}
+
+@test "sync_submount_env_file: heals a pre-existing glued-marker .env (#140 upgrade path)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-heal"
+	mkdir -p "$proj"
+	# Simulate an .env already corrupted by the pre-fix serializer: the close
+	# marker glued onto the (otherwise correct) last value. The seed value MUST
+	# match the detected sub-mount so this exercises the no-skip idempotency path
+	# (only the glued marker differs), not a trivial value-diff rewrite.
+	cat >"$proj/.env" <<'GLUED'
+# >>> drydock managed (auto-generated, do not edit manually) <<<
+DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/X/Vault# <<< end drydock managed >>>
+GLUED
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-heal.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# The var survives and the close marker is repaired onto its own line.
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	grep -qxF '# <<< end drydock managed >>>' "$proj/.env"
+	run grep -qE '=.*# <<< end drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+}
+
 # ── sanitize_project_name (REQ-1, S1.1–S1.11) ────────────────────────────────
 
 @test "sanitize_project_name: S1.1 — period mapped to dash" {
@@ -1136,6 +1227,116 @@ STUB
 		[ -d "$d" ] && count=$((count + 1))
 	done
 	[ "$count" -eq 0 ]
+}
+
+# ── concurrent-launch race hardening ──────────────────────────────────────────
+# GRACE: a dir with a FRESH .launching marker is protected from gc reap even
+# when no matching container exists in docker ps -a.
+# SENTINEL: seed_session_config_dir creates .launching in the new session dir.
+# DIR-CHECK: collision loop treats a dir with .launching as "disc taken".
+
+@test "gc_orphan_session_dirs: GRACE protect — fresh .launching marker shields orphan dir from reap" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-grace-protect-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-aaaa"
+	touch "$fake_home/.claude-container-aaaa.json"
+	# Create a FRESH .launching marker (mtime = now — well within grace window).
+	: >"$fake_home/.claude-container-aaaa/.launching"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a returns empty (no matching container exists yet).
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Dir must NOT have been removed — fresh marker protects it.
+	[ -d "$fake_home/.claude-container-aaaa" ]
+}
+
+@test "gc_orphan_session_dirs: GRACE reap-stale — expired .launching marker → dir IS reaped" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-grace-stale-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-bbbb"
+	touch "$fake_home/.claude-container-bbbb.json"
+	# Create a .launching marker aged well past the grace window (>300 s).
+	local marker="$fake_home/.claude-container-bbbb/.launching"
+	: >"$marker"
+	touch -d "@$(( $(date +%s) - 1000 ))" "$marker"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Stale marker should not protect the dir — it must be removed.
+	[ ! -d "$fake_home/.claude-container-bbbb" ]
+}
+
+@test "gc_orphan_session_dirs: GRACE compat — no .launching marker preserves existing orphan semantics" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-grace-compat-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-cccc"
+	touch "$fake_home/.claude-container-cccc.json"
+	# Deliberately NO .launching marker.
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# No marker → existing orphan semantics: dir is removed.
+	[ ! -d "$fake_home/.claude-container-cccc" ]
+}
+
+@test "seed_session_config_dir: SENTINEL — creates .launching marker in new session dir" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-sentinel-$$"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "dddd"
+	# .launching must exist immediately after seed.
+	[ -f "$fake_home/.claude-container-dddd/.launching" ]
+}
+
+@test "export_compose_env: DIR-CHECK — disc with existing session dir treated as taken; uses next free disc" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-dircheck-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Pre-create the session dir for disc "eeee" WITH a fresh .launching marker so
+	# the GRACE check protects it through the gc pass (gc runs first in export_compose_env).
+	mkdir -p "$fake_home/.claude-container-eeee"
+	: >"$fake_home/.claude-container-eeee/.launching"
+	# Discriminator fn: first call returns "eeee" (dir exists → taken), second "ffff" (free).
+	local call_count_file="$BATS_TEST_TMPDIR/disc-dircheck-count-$$"
+	printf '0' >"$call_count_file"
+	_seq_disc_dircheck() {
+		local n
+		n="$(cat "$call_count_file")"
+		printf '%s' "$((n + 1))" >"$call_count_file"
+		case "$n" in
+			0) printf 'eeee' ;;
+			*) printf 'ffff' ;;
+		esac
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc_dircheck
+	# Docker stub: always empty (no running containers — dir-existence is the only "taken" signal).
+	# gc pre-check (call 0): "" — no orphans (eeee has fresh marker, protected).
+	# collision check "eeee" (call 1): "" — no container, BUT dir exists → taken by DIR-CHECK.
+	# collision check "ffff" (call 2): "" — no container, no dir → free, break.
+	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-dircheck-$$"
+	printf '0' >"$counter_file"
+	local stub
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "" "" "")"
+	export DOCKER="$stub"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-dircheck-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# Must have treated "eeee" as taken — final disc must be "ffff".
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-ffff" ]]
 }
 
 # ── harvest_session_projects (issue #68 — conversation-history data loss) ─────

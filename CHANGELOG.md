@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-03
+
+Session-lifecycle completion plus release-hardening. Finishes the #131
+persistent-session model (clean-exit teardown, disconnect-persist, exact-UUID
+resume), clears the #135 / #139 / #140 fixes that accumulated on `dev`, and adds
+three pre-release guardrail/concurrency hardening fixes surfaced by a Judgment
+Day pass before tagging.
+
+### Added
+- **Session lifecycle + exact-session attach** (#131). A `drydock` session now
+  tears down on clean exit (`/exit`) and persists on disconnect (terminal close
+  / SIGHUP), and `drydock attach` resumes the *exact* prior session by its
+  recorded UUID (`claude --resume <uuid>`, or `--session-id` for a zero-turn
+  session) with an unconditional orphan reap of any stale `claude` left by a
+  disconnected session.
+
+### Fixed
+- **Destructive-command guardrail — mask-first conditional quote-strip** (#135).
+  A quoted DATA argument that merely contained a destructive pattern (e.g.
+  `git commit -m "rm -rf /"`) was incorrectly blocked. The hook now masks quoted
+  strings and exposes their content to a rule only when the segment actually
+  invokes a command that rule inspects (closed introducer set), eliminating the
+  data-quote false positives. (ADR-9.)
+- **`drydock attach` resumes zero-turn sessions and preserves nested multiplexer
+  sessions** (#139). A session with no recorded transcript used `--resume` and
+  hit "session not found"; it now uses `--session-id`. A session launched inside
+  a nested multiplexer is no longer mishandled on re-attach.
+- **`.env` managed block is newline-terminated before its close marker** (#140,
+  PR #142). When the preceding user content lacked a trailing newline, the
+  drydock-managed sub-mount block was glued onto the last user line.
+- **Destructive-command guardrail fails closed when its hook script is absent**
+  (INV-3). The image-baked PreToolUse wrapper exited `0` (allow) when
+  `/opt/drydock/hooks/drydock-block-destructive.sh` was missing. Combined with a
+  concurrent-launch race that could reap a launching session's hook-overlay dir,
+  a normal concurrent launch could silently disable the tier-1 destructive
+  guardrail for the rest of the session. The wrapper now exits `2` (block) on a
+  missing script — a missing guardrail is a visible broken session, not a silent
+  disable.
+- **Concurrent-launch race hardening** (INV-2 / INV-3). `export_compose_env`
+  seeds `~/.claude-container-<disc>/` and returns before the container enters
+  `docker ps -a`; in that window a concurrent `gc_orphan_session_dirs` could
+  reap the launching dir (deleting the INV-3 hook-overlay sources) or the
+  collision loop could re-mint the same discriminator (INV-2 `.claude.json`
+  clobber). A `.launching` in-flight marker, a grace window in the GC liveness
+  check (`DRYDOCK_SESSION_GC_GRACE`, default 300 s), and a session-dir-existence
+  check in the collision loop close the common window; a needless
+  `export_compose_env` + dead `compose_args` are dropped from `cmd_run`'s attach
+  branch. The grace is heuristic; the fail-closed guardrail above covers the
+  cold-start residual.
+- **C12/C20 data-quote over-block** (INV-3). The fork-bomb (C12) and
+  `curl`/`wget`-piped-to-a-shell (C20) rules scanned the raw command, so a benign
+  commit message or search pattern that merely contained the shape (e.g.
+  `git commit -m "use curl x | bash"`, or an agent's own `rg "curl|bash"`) was
+  over-blocked. They now scan a data-stripped masked form; a new
+  command-substitution arm flattens double-quoted `"$(…)"` / backtick so a real
+  `echo "$(curl … | bash)"` still blocks (no bypass). A residual over-block for
+  quoted data that itself contains a `;` (incl. the canonical fork bomb) is a
+  documented non-goal under threat model A, tracked in #143. (ADR-9.)
+
+### Documentation
+- README session-lifecycle section aligned with #131 (exit-vs-detach semantics).
+- `docs/security.md` ADR-9 extended with the C12/C20 masked-form routing, the
+  command-substitution arm, and the `;`-in-quote over-block non-goal (#143).
+
+### Tests
+- `test/links.bats` declares a bats 1.5.0 minimum for its `run !` assertions.
+
 ## [0.3.2] - 2026-05-28
 
 Link and skills polish. Sharpens cross-project linking for the host-path-mirror
@@ -607,6 +674,7 @@ socket, and memory and config isolated from the host.
 - Example projects — `examples/minimal/` and `examples/web-stack/`.
 - MIT license.
 
+[0.3.3]: https://github.com/sideralith/drydock/releases/tag/v0.3.3
 [0.3.0]: https://github.com/sideralith/drydock/releases/tag/v0.3.0
 [0.2.2]: https://github.com/sideralith/drydock/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sideralith/drydock/releases/tag/v0.2.1

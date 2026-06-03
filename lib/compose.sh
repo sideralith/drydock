@@ -150,7 +150,7 @@ sync_submount_env_file() {
 		if [ -n "$block" ]; then
 			[ -n "$user_content" ] && printf '\n'
 			printf '%s\n' "$marker_start"
-			printf '%s' "$block"
+			printf '%s\n' "$block"
 			printf '%s\n' "$marker_end"
 		fi
 	} >"$tmp"
@@ -516,7 +516,11 @@ export_compose_env() {
 		# both the run name (drydock-<proj>-<disc>) and the shell companion
 		# (drydock-<proj>-<disc>-shell).  --format '{{.Names}}' gives one name
 		# per line so ^ and $ anchors are exact; no column-padding false-matches.
-		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
+		# Also treat a pre-existing session dir as "taken": a concurrent launch has
+		# already reserved that disc and its dir is protected by the GRACE check in
+		# gc_orphan_session_dirs (in-flight marker present, not yet in docker ps).
+		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$" ||
+			[ -d "$HOME/.claude-container-${_disc}" ]; then
 			# The collision check is project-agnostic (any drydock-*-<disc> match),
 			# but the rm targets only THIS project's container for that disc.
 			# If the collision belongs to a foreign project, the rm is a silent
@@ -778,6 +782,20 @@ gc_orphan_session_dirs() {
 		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$"; then
 			continue
 		fi
+		# In-flight grace: if the dir carries a .launching marker whose mtime is
+		# within DRYDOCK_SESSION_GC_GRACE seconds (default 300), the session is
+		# being set up right now — the container has not yet reached docker ps -a.
+		# Protect it.  A missing or expired marker falls through to orphan reap.
+		local _marker="${_dir%/}/.launching"
+		if [ -f "$_marker" ]; then
+			local _now _mtime _age
+			_now="$(date +%s)"
+			_mtime="$(stat -c %Y "$_marker" 2>/dev/null || echo 0)"
+			_age=$((_now - _mtime))
+			if [ "$_age" -lt "${DRYDOCK_SESSION_GC_GRACE:-300}" ]; then
+				continue
+			fi
+		fi
 		# Orphan — rescue durable conversation history, then prune the dir
 		# and its sibling .json (issue #68).
 		harvest_session_projects "$_dir"
@@ -840,6 +858,10 @@ seed_session_config_dir() {
 	# find -mindepth 1 -maxdepth 1 also catches dotfiles a bare glob would miss;
 	# -print0 / read -d '' is the same NUL-safe idiom as harvest_session_projects.
 	mkdir -p "$session_dir"
+	# Mark this dir as in-flight so a concurrent gc pass does not reap it before
+	# the container appears in docker ps -a (container only enters ps at the
+	# caller's later `up -d`).  Fail-safe: if the write fails, continue anyway.
+	: >"$session_dir/.launching" 2>/dev/null || true
 	local _entry
 	while IFS= read -r -d '' _entry; do
 		[ "${_entry##*/}" = projects ] && continue

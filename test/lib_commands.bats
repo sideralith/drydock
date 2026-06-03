@@ -2415,19 +2415,28 @@ STUB
 		printf 'seed-called\n' >> "$call_order_log"
 	}
 
-	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
 	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-integ-$$.log"
 	touch "$DOCKER_CALL_LOG"
+
+	# Docker stub: log calls AND echo 'compose-exec-called' when it is a compose
+	# exec call. This replaces the old exec() override (which no longer fires
+	# because _launch_new now uses _run_claude_lifecycle — a child, not exec).
+	local stub_dir="$BATS_TEST_TMPDIR/docker-integ-stub-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "${DOCKER_CALL_LOG}"
+if echo "\$*" | grep -q "exec"; then
+	printf 'compose-exec-called\n' >> "${call_order_log}"
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
 
 	local project_dir="$BATS_TEST_TMPDIR/integ-proj-$$"
 	mkdir -p "$project_dir"
 
-	# Capture exec call instead of replacing process.
-	exec() {
-		printf 'compose-exec-called\n' >> "$call_order_log"
-		echo "$*" >> "$DOCKER_CALL_LOG"
-		return 0
-	}
 	_drydock_has_tty() { return 0; }
 
 	run cmd_run "$project_dir"
@@ -3281,6 +3290,113 @@ STUB
 	log="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log" != *" up "* ]]
 	[[ "$log" != *"compose"* ]]
+}
+
+# ── T1.9: cmd_run attach branch uses _run_claude_lifecycle (D-8) ────────────
+# cmd_run's TTY menu Attach:* branch must drop exec and delegate to
+# _run_claude_lifecycle so the lifecycle teardown fires after claude exits.
+# Observable: 'rm -f' appears in the call log (exec would never reach teardown).
+
+@test "cmd_run: attach branch (TTY menu) uses lifecycle helper — rm -f appears (D-8)" {
+	# Stub _select_choice to immediately return the Attach: option so the test
+	# reaches the Attach:* branch without needing an interactive TTY.
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 0; }
+	warn_unlinked_skill_symlinks() { :; }
+
+	local proj_name
+	proj_name="$(basename "$CMD_T4_PROJECT_DIR")"
+	local target_name="drydock-${proj_name}-ab12"
+
+	# Docker stub: ps returns one live session; all other calls succeed.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-run-attach-lifecycle-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-${proj_name}-ab12\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	# Stub export_compose_env: the Attach:* branch calls it to set compose vars.
+	# Prevent the real implementation from calling docker to find a free disc.
+	export_compose_env() {
+		export PROJECT_NAME="${proj_name}"
+		export DRYDOCK_DISCRIMINATOR="ab12"
+		export DRYDOCK_SESSION_NAME="${target_name}"
+		export COMPOSE_PROJECT_NAME="${target_name}"
+	}
+
+	# Stub _select_choice to return the Attach option bypassing the real TUI.
+	_select_choice() { printf 'Attach: drydock-%s-ab12\n' "${proj_name}"; }
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	# rm -f must appear — proves lifecycle helper fired, not raw exec.
+	grep -q "rm -f" "$DOCKER_CALL_LOG"
+}
+
+# ── T1.9b: cmd_run attach branch derives disc from target suffix, NOT $DRYDOCK_DISCRIMINATOR ──
+# D-6 clobber hazard: cmd_run's Attach:* branch calls export_compose_env which
+# re-mints DRYDOCK_DISCRIMINATOR to a DIFFERENT value from the target suffix.
+# The test sets export_compose_env to DRYDOCK_DISCRIMINATOR="ff00" while the live
+# container has suffix ab12 and the marker lives under ab12.
+# Correct: disc=ab12 → reads marker → emits --resume <uuid>.
+# Buggy (disc=$DRYDOCK_DISCRIMINATOR=ff00): marker miss → bare --resume (no uuid).
+
+@test "cmd_run: attach branch derives disc from target suffix, NOT \$DRYDOCK_DISCRIMINATOR (D-6, CRITICAL)" {
+	_setup_cmd_run_t4
+	_drydock_has_tty() { return 0; }
+	warn_unlinked_skill_symlinks() { :; }
+
+	local proj_name
+	proj_name="$(basename "$CMD_T4_PROJECT_DIR")"
+	local target_name="drydock-${proj_name}-ab12"
+
+	# Docker stub: ps returns one live session (suffix ab12); all other calls succeed.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-run-d6-$$"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-${proj_name}-ab12\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	# export_compose_env sets DRYDOCK_DISCRIMINATOR to ff00 — a DIFFERENT value
+	# from the target suffix ab12 — exactly what happens in production when the
+	# Attach:* branch calls export_compose_env after session discovery.
+	export_compose_env() {
+		export PROJECT_NAME="${proj_name}"
+		export DRYDOCK_DISCRIMINATOR="ff00"
+		export DRYDOCK_SESSION_NAME="drydock-${proj_name}-ff00"
+		export COMPOSE_PROJECT_NAME="drydock-${proj_name}-ff00"
+	}
+
+	# Stub _select_choice to return the Attach option for the ab12 container.
+	_select_choice() { printf 'Attach: drydock-%s-ab12\n' "${proj_name}"; }
+
+	# Pre-create the marker under the CORRECT disc (ab12), NOT ff00.
+	mkdir -p "$HOME/.claude-container-ab12"
+	printf '550e8400-e29b-41d4-a716-446655440000\n' > "$HOME/.claude-container-ab12/session-id"
+	# Transcript file required for --resume path (Bug 1 fix: transcript present → --resume).
+	mkdir -p "$HOME/.claude-container/projects/myproj"
+	touch "$HOME/.claude-container/projects/myproj/550e8400-e29b-41d4-a716-446655440000.jsonl"
+
+	run cmd_run "$CMD_T4_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+
+	# Must pass the specific uuid from the ab12 marker.
+	# A buggy disc=ff00 path would miss the marker and emit bare --resume (no uuid).
+	grep -q -- "--resume 550e8400-e29b-41d4-a716-446655440000" "$DOCKER_CALL_LOG"
 }
 
 # ── #103: regex tightening — reject discriminators with length != 4 ──────────
