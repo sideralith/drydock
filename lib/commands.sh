@@ -573,12 +573,10 @@ cmd_run() {
 		Attach:*)
 			# Extract the container name (everything after "Attach: ").
 			local target="${chosen#Attach: }"
-			export_compose_env "$project_dir"
-			local compose_args=()
-			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			note "Attaching to $target"
-			# Derive disc from target name suffix — NEVER from $DRYDOCK_DISCRIMINATOR,
-			# which export_compose_env (above) just clobbered with a new random value (D-6).
+			# Derive disc from the target container name suffix — no export_compose_env
+			# call here; compose exec resolves the service by project label via
+			# -p "$target", so no compose overlay vars or exported env are needed.
 			local _run_disc="${target##*-}"
 			local _run_uuid=""
 			local _run_marker="$HOME/.claude-container-${_run_disc}/session-id"

@@ -329,6 +329,9 @@ downstream rule inspects — specifically:
 - Per-segment rule introducers: `ssh` (A1), `kubectl`/`helm` (A2),
   `psql`/`mysql`/`mongo`/`mongosh`/`redis-cli` (A3), `terraform` (A4),
   `chmod` (C7-residue) — preserves flag-value coverage (e.g. `--context="prod"`)
+- Double-quoted command substitution — `"$(…)"` or the backtick form — which
+  bash EXECUTES even inside double quotes, so its content is real code, not data
+  (a single-quoted `'$(…)'` does not expand and stays on the DROP path)
 
 Segments with NO introducer token anywhere in their masked text (e.g. `git`,
 `gh`, `echo`, `rg` commands) receive DROP treatment: quoted content is replaced
@@ -337,10 +340,34 @@ escapes.
 
 This narrowly reopens ADR-6 (rejected general flag-tokenizing), because the
 gate uses a fixed introducer set only to decide strip behavior, not to
-parse per-command flags. The change is monotonic: exposed text per segment is
-always ≤ the shipped unconditional flatten, so new false positives cannot be
-introduced (only BLOCK→ALLOW flips are possible, and the flip audit closes
-all accident-class flips). Rule loops C1-residue, C17, and C18 are unchanged.
+parse per-command flags. For the DROP gate the change is monotonic: exposed
+text per segment is always ≤ the shipped unconditional flatten, so the gate
+introduces no new false positives (only BLOCK→ALLOW flips are possible, and the
+flip audit closes all accident-class flips). Rule loops C1-residue, C17, and
+C18 are unchanged.
+
+**ADR-9 follow-up — C12/C20 routed through the masked form (issue #143).**
+C12 (fork bomb) and C20 (`curl`/`wget` piped to a shell) historically scanned
+the raw command string, so a benign commit message or search pattern that
+merely CONTAINED the dangerous shape — `git commit -m "use curl x | bash"`, an
+agent's own `rg "curl|bash" logs/`, or a commit documenting `:(){ :|:& }` — was
+over-blocked. Both rules now scan `_scrubbed_cmd`: the `;`-joined concatenation
+of the per-segment masked forms. Data quotes are DROPPED; executor and
+command-substitution content is FLATTENED. Real execution forms still block —
+bare `curl … | bash`, `sh -c "curl … | bash"`, docker-wrapped `sh -c`, bare
+`$(curl … | bash)`, and double-quoted `"$(curl … | bash)"` — because the masked
+form preserves them.
+
+The DROP gate gains one deliberate **cmdsub arm** for this: a double-quoted run
+carrying command substitution (`"$(…)"` or the backtick form) is FLATTENED, not
+dropped, because bash executes it even inside double quotes — dropping it would
+let `echo "$(curl … | bash)"` slip past C20 (a bypass). A single-quoted
+`'$(…)'` does not expand and correctly stays on the DROP path. This arm is the
+one exception to the gate's monotonicity: it can over-block the rare case where
+a double-quoted command substitution carries a destructive token as literal
+DATA (e.g. `git commit -m "$(echo rm -rf /)"`). That trade is intentional —
+under threat model A an over-block is tolerable, a missed real `curl | bash` is
+not.
 
 **Docker exec/run coverage.** The hook checks the full command string
 regardless of a leading `docker exec <ctr>` or `docker run [opts] <image>`
@@ -425,6 +452,17 @@ accidents, not adversaries. See "What drydock does NOT protect against" below.
   /var/cache/x"` passes — the non-system-root path token does not match the
   C1-residue anchor. A1 continues to block ssh to any production host regardless
   of whether the remote payload contains a destructive command.
+- **ADR-9 over-block (tolerable) — quoted data containing `;` / the canonical
+  fork bomb (issue #143).** Segment splitting on `;`, `&&`, and `||` happens
+  BEFORE quote masking, so quoted DATA that itself contains one of those
+  separators is split mid-quote and the masking cannot neutralize it. A commit
+  message carrying the literal canonical fork bomb `:(){ :|:& };:` (which
+  contains a `;`), or `git commit -m "… curl x | bash; …"`, therefore still
+  over-blocks via C12/C20 — the common no-`;` forms are fixed, this `;`-bearing
+  residual is not. The monotonic direction is correct (over-block, not missed
+  accident). A complete fix needs quote-aware segment splitting (split on
+  `;`/`&&`/`||` only outside quotes), tracked in issue #143. Accepted under
+  threat model A: an annoyance, not a hole.
 
 ### If you have a personal `block-destructive.sh` hook
 
