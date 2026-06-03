@@ -1229,6 +1229,116 @@ STUB
 	[ "$count" -eq 0 ]
 }
 
+# ── concurrent-launch race hardening ──────────────────────────────────────────
+# GRACE: a dir with a FRESH .launching marker is protected from gc reap even
+# when no matching container exists in docker ps -a.
+# SENTINEL: seed_session_config_dir creates .launching in the new session dir.
+# DIR-CHECK: collision loop treats a dir with .launching as "disc taken".
+
+@test "gc_orphan_session_dirs: GRACE protect — fresh .launching marker shields orphan dir from reap" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-grace-protect-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-aaaa"
+	touch "$fake_home/.claude-container-aaaa.json"
+	# Create a FRESH .launching marker (mtime = now — well within grace window).
+	: >"$fake_home/.claude-container-aaaa/.launching"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: ps -a returns empty (no matching container exists yet).
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Dir must NOT have been removed — fresh marker protects it.
+	[ -d "$fake_home/.claude-container-aaaa" ]
+}
+
+@test "gc_orphan_session_dirs: GRACE reap-stale — expired .launching marker → dir IS reaped" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-grace-stale-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-bbbb"
+	touch "$fake_home/.claude-container-bbbb.json"
+	# Create a .launching marker aged well past the grace window (>300 s).
+	local marker="$fake_home/.claude-container-bbbb/.launching"
+	: >"$marker"
+	touch -d "@$(( $(date +%s) - 1000 ))" "$marker"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Stale marker should not protect the dir — it must be removed.
+	[ ! -d "$fake_home/.claude-container-bbbb" ]
+}
+
+@test "gc_orphan_session_dirs: GRACE compat — no .launching marker preserves existing orphan semantics" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-grace-compat-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-cccc"
+	touch "$fake_home/.claude-container-cccc.json"
+	# Deliberately NO .launching marker.
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# No marker → existing orphan semantics: dir is removed.
+	[ ! -d "$fake_home/.claude-container-cccc" ]
+}
+
+@test "seed_session_config_dir: SENTINEL — creates .launching marker in new session dir" {
+	local fake_home="$BATS_TEST_TMPDIR/seed-home-sentinel-$$"
+	mkdir -p "$fake_home"
+	_make_prototype "$fake_home"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	seed_session_config_dir "dddd"
+	# .launching must exist immediately after seed.
+	[ -f "$fake_home/.claude-container-dddd/.launching" ]
+}
+
+@test "export_compose_env: DIR-CHECK — disc with existing session dir treated as taken; uses next free disc" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-dircheck-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# Pre-create the session dir for disc "eeee" WITH a fresh .launching marker so
+	# the GRACE check protects it through the gc pass (gc runs first in export_compose_env).
+	mkdir -p "$fake_home/.claude-container-eeee"
+	: >"$fake_home/.claude-container-eeee/.launching"
+	# Discriminator fn: first call returns "eeee" (dir exists → taken), second "ffff" (free).
+	local call_count_file="$BATS_TEST_TMPDIR/disc-dircheck-count-$$"
+	printf '0' >"$call_count_file"
+	_seq_disc_dircheck() {
+		local n
+		n="$(cat "$call_count_file")"
+		printf '%s' "$((n + 1))" >"$call_count_file"
+		case "$n" in
+			0) printf 'eeee' ;;
+			*) printf 'ffff' ;;
+		esac
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc_dircheck
+	# Docker stub: always empty (no running containers — dir-existence is the only "taken" signal).
+	# gc pre-check (call 0): "" — no orphans (eeee has fresh marker, protected).
+	# collision check "eeee" (call 1): "" — no container, BUT dir exists → taken by DIR-CHECK.
+	# collision check "ffff" (call 2): "" — no container, no dir → free, break.
+	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-dircheck-$$"
+	printf '0' >"$counter_file"
+	local stub
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "" "" "")"
+	export DOCKER="$stub"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-dircheck-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# Must have treated "eeee" as taken — final disc must be "ffff".
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-ffff" ]]
+}
+
 # ── harvest_session_projects (issue #68 — conversation-history data loss) ─────
 # The per-session ~/.claude-container-<disc>/ dir conflates ephemeral config
 # with durable conversation history under projects/. Before the GC rm -rf's an
