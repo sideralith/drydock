@@ -880,6 +880,30 @@ MI
 	[ "$inode_before" = "$inode_after" ]
 }
 
+@test "sync_submount_env_file: heals a pre-existing glued-marker .env (#140 upgrade path)" {
+	local proj="$BATS_TEST_TMPDIR/proj-marker-heal"
+	mkdir -p "$proj"
+	# Simulate an .env already corrupted by the pre-fix serializer: the close
+	# marker glued onto the (otherwise correct) last value. The seed value MUST
+	# match the detected sub-mount so this exercises the no-skip idempotency path
+	# (only the glued marker differs), not a trivial value-diff rewrite.
+	cat >"$proj/.env" <<'GLUED'
+# >>> drydock managed (auto-generated, do not edit manually) <<<
+DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=/mnt/c/Users/X/Vault# <<< end drydock managed >>>
+GLUED
+	local tmp_mi="$BATS_TEST_TMPDIR/mi-heal.txt"
+	cat >"$tmp_mi" <<MI
+24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+686 80 0:67 /Users/X/Vault $proj/docs rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\;uid=1000;gid=1000;symlinkroot=/mnt/
+MI
+	MOUNTINFO_FILE="$tmp_mi" sync_submount_env_file "$proj"
+	# The var survives and the close marker is repaired onto its own line.
+	grep -qE '^DRYDOCK_SUBMOUNT_DOCS_HOST_PATH=' "$proj/.env"
+	grep -qxF '# <<< end drydock managed >>>' "$proj/.env"
+	run grep -qE '=.*# <<< end drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+}
+
 # ── sanitize_project_name (REQ-1, S1.1–S1.11) ────────────────────────────────
 
 @test "sanitize_project_name: S1.1 — period mapped to dash" {
