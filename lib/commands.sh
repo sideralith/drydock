@@ -513,7 +513,10 @@ cmd_run() {
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		local _name="$DRYDOCK_SESSION_NAME"
-		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" drydock claude "${passthrough[@]}"
+		# Capture host mux labels to stamp onto the nested container (REQ-4, S-4A-4E).
+		local -a mux_args=()
+		while IFS= read -r _a; do mux_args+=("$_a"); done < <(_capture_mux_labels)
+		exec "$DOCKER" compose "${compose_args[@]}" run --rm --name "$_name" "${mux_args[@]}" drydock claude "${passthrough[@]}"
 		# exec replaces the process in production. return 0 is a test safety-net:
 		# if exec() is overridden by a test stub (which returns without replacing
 		# the process), return ensures we don't fall through to the non-nested path.
@@ -580,6 +583,12 @@ cmd_run() {
 			local _run_uuid=""
 			local _run_marker="$HOME/.claude-container-${_run_disc}/session-id"
 			[ -f "$_run_marker" ] && _run_uuid="$(cat "$_run_marker")"
+			# Oneoff gate (REQ-2, S-2A): inside _drydock_has_tty block, no TTY conflict.
+			# Fires after marker read, before reap — ephemeral containers must not be reaped.
+			if _is_oneoff_container "$target"; then
+				_mux_reattach_guidance "$target"
+				return 0
+			fi
 			# Reap orphan unconditionally (D-7, REQ-5); then resume unless the user
 			# already supplied a session flag in passthrough (REQ-PT-1).
 			_reap_orphan_claude "$target" "$_run_uuid"
@@ -587,8 +596,13 @@ cmd_run() {
 				_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude "${passthrough[@]}"
 			else
 				[ -n "$_run_uuid" ] && _write_session_marker "$_run_disc" "$_run_uuid"
+				# Bug 1 fix (REQ-1): use --session-id for zero-turn sessions (transcript absent).
 				if [ -n "$_run_uuid" ]; then
-					_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+					if _session_has_transcript "$_run_uuid"; then
+						_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "$_run_uuid" "${passthrough[@]}"
+					else
+						_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --session-id "$_run_uuid" "${passthrough[@]}"
+					fi
 				else
 					_run_claude_lifecycle "$target" compose -p "$target" exec -it drydock claude --resume "${passthrough[@]}"
 				fi
@@ -711,6 +725,110 @@ _passthrough_has_session_flag() {
 		esac
 	done
 	return 1
+}
+
+# _is_oneoff_container name
+# Returns 0 if the container's com.docker.compose.oneoff label is exactly "True"
+# (capital T — the value Docker itself sets for compose run containers, OQ-5).
+# Returns 1 for "False", absent, or any inspect failure (OQ-4: degrade to persistent).
+# Used as the oneoff gate in cmd_attach and cmd_run attach branch (REQ-2, S-2A).
+_is_oneoff_container() {
+	local _name="$1"
+	local _label
+	_label=$("$DOCKER" inspect -f '{{index .Config.Labels "com.docker.compose.oneoff"}}' \
+		"$_name" 2>/dev/null || true)
+	[ "$_label" = "True" ]
+}
+
+# _session_has_transcript uuid
+# Returns 0 if a transcript file exists at
+# $HOME/.claude-container/projects/*/<uuid>.jsonl (the shared projects/ carve-out,
+# INV-2). Transcript-present is an explicit proxy for "≥1 turn completed" (REQ-1).
+# Returns 1 when uuid is empty, the glob finds nothing, or compgen fails.
+# compgen -G is errexit-safe: returns non-zero when no match, does not expand the
+# literal glob into the argument list the way a bare glob would under set -e.
+_session_has_transcript() {
+	local uuid="$1"
+	[ -n "$uuid" ] || return 1
+	local _m
+	_m=$(compgen -G "$HOME/.claude-container/projects/*/${uuid}.jsonl" 2>/dev/null || true)
+	[ -n "$_m" ]
+}
+
+# _capture_mux_labels
+# Detects the host multiplexer (zellij → tmux → screen) and emits --label tokens
+# ONE PER LINE so the caller can read them into an array via:
+#   while IFS= read -r a; do args+=("$a"); done < <(_capture_mux_labels)
+# This idiom (used by compose_files) survives session names with spaces.
+# Precedence: zellij ($ZELLIJ/$ZELLIJ_SESSION_NAME) → tmux ($TMUX/tmux display-message)
+# → screen ($STY). When no mux is detected, emits nothing.
+# OQ-3: OMIT the drydock.mux_session token entirely when session name is empty —
+# do NOT emit an empty-valued label (simplifies detection on the attach side).
+_capture_mux_labels() {
+	local _mux="" _ms=""
+	if [ -n "${ZELLIJ:-}" ]; then
+		_mux="zellij"
+		_ms="${ZELLIJ_SESSION_NAME:-}"
+	elif [ -n "${TMUX:-}" ]; then
+		_mux="tmux"
+		_ms=$(tmux display-message -p '#S' 2>/dev/null || true)
+	elif [ -n "${STY:-}" ]; then
+		_mux="screen"
+		_ms="${STY:-}"
+	fi
+	[ -n "$_mux" ] || return 0
+	printf '%s\n' "--label" "drydock.mux=${_mux}"
+	if [ -n "$_ms" ]; then
+		printf '%s\n' "--label" "drydock.mux_session=${_ms}"
+	fi
+}
+
+# _mux_reattach_guidance name
+# Prints reattach guidance for an ephemeral (oneoff) nested session container.
+# Inspects the drydock.mux and drydock.mux_session labels on the container (TWO
+# docker inspect calls) and emits the correct mux command or a generic fallback.
+# Always exits 0 — must not crash or destroy the container (S-3D, S-3E, REQ-3).
+_mux_reattach_guidance() {
+	local _name="$1"
+	local _mux _ms
+	_mux=$("$DOCKER" inspect -f '{{index .Config.Labels "drydock.mux"}}' \
+		"$_name" 2>/dev/null || true)
+	_ms=$("$DOCKER" inspect -f '{{index .Config.Labels "drydock.mux_session"}}' \
+		"$_name" 2>/dev/null || true)
+	case "$_mux" in
+	zellij)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your zellij terminal.\n'
+			printf 'To reattach, switch to that window or run:  zellij attach %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your zellij terminal.\n'
+			printf 'To reattach, switch back to your zellij session.\n'
+		fi
+		;;
+	tmux)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your tmux terminal.\n'
+			printf 'To reattach, switch to that window or run:  tmux attach -t %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your tmux terminal.\n'
+			printf 'To reattach, switch back to your tmux session.\n'
+		fi
+		;;
+	screen)
+		if [ -n "$_ms" ]; then
+			printf 'This is a nested drydock session in your screen terminal.\n'
+			printf 'To reattach, switch to that window or run:  screen -r %s\n' "$_ms"
+		else
+			printf 'This is a nested drydock session in your screen terminal.\n'
+			printf 'To reattach, switch back to your screen session.\n'
+		fi
+		;;
+	*)
+		printf 'This container is a live nested drydock session.\n'
+		printf 'To interact with it, reattach to the terminal where it was launched.\n'
+		;;
+	esac
+	return 0
 }
 
 # _write_session_marker disc uuid
@@ -2147,6 +2265,14 @@ cmd_attach() {
 		fi
 	fi
 
+	# Oneoff gate (REQ-2, OQ-1): fires AFTER target is resolved, BEFORE TTY guard.
+	# Ephemeral (compose run) containers must not be reaped or resumed — print mux
+	# guidance and exit 0 (S-2A/S-2B). The TTY guard does NOT move (OQ-1).
+	if _is_oneoff_container "$target_name"; then
+		_mux_reattach_guidance "$target_name"
+		return 0
+	fi
+
 	if ! _drydock_has_tty; then
 		printf 'drydock attach requires a TTY — not called from a terminal\n' >&2
 		return 2
@@ -2177,10 +2303,15 @@ cmd_attach() {
 		# Only write when a uuid is known; the bare --resume fallback has no uuid to record.
 		[ -n "$_uuid" ] && _write_session_marker "$_disc" "$_uuid"
 
-		# Resume the specific session by uuid (no picker), or fall back to bare --resume
-		# (picker) when no marker existed (pre-#131 detach / lookup miss) (D-6, REQ-6).
+		# Bug 1 fix (REQ-1): use --session-id when transcript is absent (zero-turn session)
+		# to avoid "session not found" on --resume; use --resume only when transcript
+		# confirms ≥1 turn. Reap stays UNCONDITIONAL above (design invariant).
 		if [ -n "$_uuid" ]; then
-			_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+			if _session_has_transcript "$_uuid"; then
+				_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "$_uuid" "${passthrough[@]}"
+			else
+				_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --session-id "$_uuid" "${passthrough[@]}"
+			fi
 		else
 			_run_claude_lifecycle "$target_name" compose -p "$target_name" exec -it drydock claude --resume "${passthrough[@]}"
 		fi
