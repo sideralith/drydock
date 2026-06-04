@@ -58,6 +58,9 @@ usage() {
 	_dr_help_row "link [--rw] PATH [TGT]" "Mount a sibling project inside the container"
 	_dr_help_row "unlink [--rw] PATH" "Remove a sibling mount from the project list"
 	_dr_help_row "links" "Show all linked siblings for the current project"
+	_dr_help_row "default <dood|contain>" "Set the global default network/socket mode for new projects"
+	_dr_help_row "dood <proj> [--remove]" "Pin a project to DooD mode (Docker socket + host network; INV-6)"
+	_dr_help_row "contain <proj> [--remove]" "Pin a project to contained mode (no socket, no host net)"
 	_dr_help_row "version" "Show drydock version"
 	_dr_help_row "help" "Show this help"
 
@@ -1490,6 +1493,100 @@ cmd_revoke_token() {
 		note "No local token file to remove (already absent)"
 	fi
 	note "IMPORTANT: drydock cannot revoke the token server-side. To fully revoke, visit claude.ai → Settings and revoke the token there."
+}
+
+# ── dual-mode network/socket pins (INV-9) ─────────────────────────────────────
+
+# _pin_project_mode <mode> <project> [--remove]
+# mode ∈ {dood, contain}. Sets/removes the per-project sentinel under
+# ~/.config/drydock/<mode>/<project>; setting one mode CLEARS the opposite mode's
+# sentinel (mutual exclusion in ONE place, so the cmd_dood/cmd_contain wrappers
+# can never drift). Idempotent: --remove on an unpinned project is a note (not an
+# error, mirroring cmd_revoke_token); re-pinning is a clean no-op. The sentinels
+# are interpreted at run time by resolve_run_mode() (lib/compose.sh).
+_pin_project_mode() {
+	local mode="$1"
+	shift
+	local remove=0 project=""
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--remove)
+			remove=1
+			shift
+			;;
+		-*) err "unknown option: $1" ;;
+		*)
+			project="$1"
+			shift
+			;;
+		esac
+	done
+	[ -n "$project" ] || err "usage: drydock $mode <project> [--remove]"
+	# Sanitize identically to export_compose_env / resolve_run_mode so the sentinel
+	# filename matches what the gate looks up.
+	project="$(sanitize_project_name "$project")"
+	local base="$HOME/.config/drydock"
+	local this="$base/$mode/$project"
+	local other_mode="dood"
+	[ "$mode" = "dood" ] && other_mode="contain"
+	local other="$base/$other_mode/$project"
+
+	if [ "$remove" -eq 1 ]; then
+		if [ -f "$this" ]; then
+			rm -f "$this"
+			ok "$mode pin removed: $project (now follows the global default)"
+		else
+			note "$mode not pinned for: $project (already absent)"
+		fi
+		return 0
+	fi
+
+	mkdir -p "$base/$mode"
+	rm -f "$other" # mutual exclusion: clear the opposite pin
+	touch "$this"
+	ok "$mode pinned: $project"
+	if [ "$mode" = "dood" ]; then
+		note "The Docker socket and host network are now active for this project."
+		note "INV-6: the Docker socket is root-equivalent on the host."
+	else
+		note "No Docker socket and no host network for this project (egress still open — Phase 1)."
+	fi
+}
+
+# cmd_dood / cmd_contain — thin wrappers over _pin_project_mode (keep the three
+# proposal verbs as UX; the mutual-exclusion logic lives in one place above).
+cmd_dood() { _pin_project_mode dood "$@"; }
+cmd_contain() { _pin_project_mode contain "$@"; }
+
+# cmd_default <dood|contain>
+# Manages the single global default sentinel ~/.config/drydock/default-dood.
+#   dood    → create it  (global default becomes DooD for new/unpinned projects)
+#   contain → remove it  (global default returns to contained = factory)
+# Secure-by-default lives at the DISTRIBUTION level (a fresh install has no
+# sentinel = contained); flipping the global default to dood is an explicit,
+# documented choice.
+cmd_default() {
+	local choice="${1:-}"
+	local sentinel="$HOME/.config/drydock/default-dood"
+	case "$choice" in
+	dood)
+		mkdir -p "$HOME/.config/drydock"
+		touch "$sentinel"
+		ok "global default mode: dood"
+		note "New/unpinned projects now run with the Docker socket + host network by default."
+		note "INV-6: the Docker socket is root-equivalent on the host."
+		;;
+	contain)
+		if [ -f "$sentinel" ]; then
+			rm -f "$sentinel"
+			ok "global default mode: contained"
+		else
+			note "global default already contained (factory)"
+		fi
+		;;
+	"") err "usage: drydock default <dood|contain>" ;;
+	*) err "unknown mode: $choice — expected 'dood' or 'contain'" ;;
+	esac
 }
 
 # ── cmd_link ──────────────────────────────────────────────────────────────────
