@@ -46,19 +46,20 @@ file.
 | [integration-in-ci](#integration-in-ci) | v0.2.2 | [#74][i74] | Done |
 | [session-persistence](#session-persistence) | v0.3.0 | [#64][i64] | Done |
 | [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Not planned (closed; successor: external [drydock-zellij-plugin][i97], post-v0.3.0) |
-| [session-persistence-polish](#session-persistence-polish) | v0.3.1 | [milestone v0.3.1][m031] | Planned |
-| [config-gh-mkdir](#config-gh-mkdir) | v0.3.1 | [#109][i109] | Planned |
-| [toolchain-mise](#toolchain-mise) | v0.4.0 | [#16][i16] | Planned |
-| [per-project-image-layer](#per-project-image-layer) | v0.4.0 | [#17][i17] | Planned |
-| [forge-agnostic-base](#forge-agnostic-base) | v0.4.0 | [#110][i110] | Planned |
-| [agent-adapter](#agent-adapter) | v0.5.0 | [#18][i18] | Planned |
-| [sandcastle-sandbox-provider](#sandcastle-sandbox-provider) | v0.6.0 | [#66][i66] | Planned |
+| [session-persistence-polish](#session-persistence-polish) | v0.3.1 | [milestone v0.3.1][m031] | Done |
+| [config-gh-mkdir](#config-gh-mkdir) | v0.3.1 | [#109][i109] | Done |
+| [dual-mode-containment](#dual-mode-containment) | v0.4.0 | [#147][i147] | Planned |
+| [toolchain-mise](#toolchain-mise) | v0.5.0 | [#16][i16] | Planned |
+| [per-project-image-layer](#per-project-image-layer) | v0.5.0 | [#17][i17] | Planned |
+| [forge-agnostic-base](#forge-agnostic-base) | v0.5.0 | [#110][i110] | Planned |
+| [agent-adapter](#agent-adapter) | v0.6.0 | [#18][i18] | Planned |
+| [sandcastle-sandbox-provider](#sandcastle-sandbox-provider) | v0.7.0 | [#66][i66] | Planned |
 
 Release themes — **v0.2.0**: ergonomics & dogfooding · **v0.2.1**: CI hygiene & post-v0.2.0 polish ·
 **v0.2.2**: CI hygiene & infrastructure polish · **v0.3.0**: session persistence & multi-session UX ·
 **v0.3.1**: session-persistence polish (judgment-day follow-ups) ·
-**v0.4.0**: per-project environment customization · **v0.5.0**: drydock as agent-agnostic infrastructure ·
-**v0.6.0**: programmatic agent orchestration.
+**v0.4.0**: dual-mode network/socket containment (threat-model B opt-in) · **v0.5.0**: per-project environment customization ·
+**v0.6.0**: drydock as agent-agnostic infrastructure · **v0.7.0**: programmatic agent orchestration.
 
 Resolution order — **v0.2.0**: install-interactive → auto-sync →
 concurrent-sessions → link-sibling-projects.
@@ -94,6 +95,7 @@ Order for later releases is not yet decided.
 [i106]: https://github.com/sideralith/drydock/issues/106
 [i109]: https://github.com/sideralith/drydock/issues/109
 [i110]: https://github.com/sideralith/drydock/issues/110
+[i147]: https://github.com/sideralith/drydock/issues/147
 [m031]: https://github.com/sideralith/drydock/milestone/8
 
 ---
@@ -672,7 +674,7 @@ that drove `session-persistence`.
 
 ### session-persistence-polish
 
-**Status: Planned (v0.3.1, [milestone][m031]).** Five follow-up items surfaced
+**Status: Done (v0.3.1, [milestone][m031]).** Five follow-up items surfaced
 by the Judgment Day pass on v0.3.0 (engram
 `sdd/session-persistence/judgment-day-pr101`, obs #2789) that the maintainer
 accepted as worth fixing but did not block the v0.3.0 release.
@@ -718,7 +720,7 @@ and the five follow-up issues opened in the same session: #102, #103, #104,
 
 ### config-gh-mkdir
 
-**Status: Planned (v0.3.1, issue [#109][i109]).**
+**Status: Done (v0.3.1, issue [#109][i109]).**
 
 **Problem.** `docker-compose.yml:97` bind-mounts `${HOME}/.config/gh` into the
 container unconditionally. On a host without `gh` installed (no `~/.config/gh/`
@@ -744,14 +746,81 @@ the question "is `gh` truly optional on host?" — surfaced that "optional"
 came with a silent root-owned-dir side effect. Independent of the v0.3.0
 judgment-day pass that surfaced the other v0.3.1 items.
 
-**Relationship to [forge-agnostic-base](#forge-agnostic-base) (v0.4.0).** When
+**Relationship to [forge-agnostic-base](#forge-agnostic-base) (v0.5.0).** When
 forge-agnostic-base lands, the `~/.config/gh` mount moves to an auto-included
 overlay and this `mkdir -p` becomes redundant — cleaned up in the same
 change.
 
 ---
 
-## v0.4.0 — Per-project environment customization
+## v0.4.0 — Dual-mode network/socket containment
+
+### dual-mode-containment
+
+**Status: Planned (v0.4.0, issue [#147][i147]).**
+
+**Problem.** drydock does not prevent prompt injection (nothing can) *and it does not
+contain its consequences either.* The bind-mounted Docker socket (INV-6,
+root-equivalent on the host) plus `network_mode: host` leave the blast radius of a
+successful injection at "the entire host" — there is no mode in which an agent
+ingesting untrusted external content (researching, reading third-party dependencies,
+triaging foreign issues/PRs, scraping) runs with a smaller surface. The threat model
+is fixed by the TASK, not the tool: *stack* work (`compose exec`, `curl localhost:PORT`,
+a DB client to a local port) is threat model A and already well-covered (INV-3 deny
+hooks, filesystem scope, INV-8 hardening); *external-ingestion* work is threat model B
+and has no contained mode today.
+
+**Proposed solution.** Two modes, exactly one active per session. `contained` (default)
+— isolated bridge network, no socket, containment; `dood` (opt-in) — `network_mode:
+host` + socket, drydock exactly as it is today, for the stack flow. The gate is a
+per-project sentinel (`drydock dood <project>` → marks `~/.config/drydock/dood/<project>`;
+`DRYDOCK_DOOD=1` per-invocation override), mirroring the `engram-shared` sentinel and
+the auto-included `docker-compose.hardening.yml` overlay pattern. Mark your 2–3 stack
+projects once; everything else starts contained.
+
+Two phases, decoupling architecture from the egress jail:
+
+- **Phase 1 — dual architecture.** Split `network_mode: host` + the socket mount out of
+  the base `docker-compose.yml` into `docker-compose.dood.yml`; add
+  `docker-compose.contain.yml` with an isolated `internal` bridge network (no egress jail
+  yet). `compose_files()` includes exactly one. `dood` mode = current behavior, so the
+  maintainer's stack flow is intact from day 1. **This phase alone closes the largest
+  standing wound (INV-6, socket always present) almost for free, and is the prerequisite
+  for everything else.**
+- **Phase 2 — egress jail in contained mode.** An egress sidecar in
+  `docker-compose.contain.yml` — transparent netfilter (dnsmasq allowlist + ipset +
+  iptables DROP-default) vs. a userspace allowlist proxy. ~80% of the value is
+  deny-by-default + a domain allowlist; clawker's heavier machinery (eBPF, mTLS,
+  control-plane, Envoy, CoreDNS) is explicitly out of scope.
+
+**Why this scope.** Its own release theme — security containment, orthogonal to the
+"per-project environment customization" of v0.5.0. Placed first because Phase 1 is the
+highest-impact, lowest-cost item on the roadmap (it closes the INV-6 always-on-socket
+wound), and because it proves out the sentinel-gated overlay pattern that
+[forge-agnostic-base](#forge-agnostic-base) (v0.5.0) then reuses for `DRYDOCK_NO_GITHUB`.
+
+**Invariants touched.** This is a deliberate, documented move toward threat model B. It
+**reopens INV-7** (or adds a new INV) with explicit citation — not a redefinition that
+pretends nothing changed — and it changes the §3 contract ("DooD via the host Docker
+socket is the contract") so the socket becomes opt-in. Per §4, the justification is
+documented real demand — the [clawker](https://github.com/schmitthub/clawker)
+threat-model page ("containment over prevention") — not release cadence. INV-6 is the
+reason `dood` mode is NOT half-contained: an egress jail with the socket still present
+is a Maginot line a single `docker run --network host -v /:/host …` jumps.
+
+**Open questions.** Default direction (contained-by-default — the recommendation — vs.
+dood-by-default) to confirm in the SDD. `ipset`/`xt_set` availability on the WSL2 kernel
+(load-bearing for the netfilter fork; fall back to a userspace proxy if absent) — VERIFY
+before Phase 2. Whether Phase 1 and Phase 2 ship as separate changes / chained PRs
+(likely yes). Socket-proxy hardening of `dood` mode is explicitly *not* pursued — a proxy
+can't distinguish a legitimate `compose up` bind-mount (`./frontend:/app`) from `-v /:/host`.
+
+**Provenance.** Consultation session comparing drydock with clawker; design memo closed,
+implementation not started. Issue [#147][i147].
+
+---
+
+## v0.5.0 — Per-project environment customization
 
 ### toolchain-mise
 
@@ -836,7 +905,7 @@ default forge in four places: the `gh` CLI install (`Dockerfile:69-76`), the
 (`docker-compose.yml:97`), and the GitHub-specific deploy-key suggestions in
 `cmd_link --rw`'s informational output (`lib/commands.sh:1452,1566`). A user
 on GitLab, Codeberg, sr.ht, or self-hosted Forgejo pays the full cost of all
-four and gets nothing in return. This is at odds with v0.5.0's "drydock as
+four and gets nothing in return. This is at odds with v0.6.0's "drydock as
 agent-agnostic infrastructure" theme: if drydock claims to be neutral
 infrastructure, baking one forge into the base is a credibility cost.
 
@@ -849,7 +918,7 @@ configured) OR the current project has a `github.com` remote. Opt-out via
 `DRYDOCK_NO_GITHUB=1` (literal `"1"` only, matching `DRYDOCK_NO_HARDENING`
 semantics).
 
-**Why this scope.** A third dimension under the v0.4.0 "per-project
+**Why this scope.** A third dimension under the v0.5.0 "per-project
 environment customization" theme: `toolchain-mise` handles language runtimes,
 `per-project-image-layer` handles system packages, and this handles forge
 CLIs. Together they form a complete "your project, your environment" story
@@ -879,7 +948,7 @@ turned a single-binary question into a base-image-architecture one.
 
 ---
 
-## v0.5.0 — drydock as agent-agnostic infrastructure
+## v0.6.0 — drydock as agent-agnostic infrastructure
 
 ### agent-adapter
 
@@ -892,9 +961,9 @@ config paths, container state layout, MCP wiring — so drydock can host more th
 one agent.
 
 **Why this scope.** A release of its own — abstracting the agent boundary is a
-large, distinct effort, separate from the per-project-environment theme of v0.4.0.
+large, distinct effort, separate from the per-project-environment theme of v0.5.0.
 Sequenced before [sandcastle-sandbox-provider](#sandcastle-sandbox-provider)
-(v0.6.0) so drydock is already agent-agnostic at the per-session level before
+(v0.7.0) so drydock is already agent-agnostic at the per-session level before
 the orchestration layer plugs in.
 
 **Invariants touched.** INV-2 (each agent needs its own container-state split);
@@ -910,11 +979,11 @@ dedicated memo.
 
 ---
 
-## v0.6.0 — Programmatic agent orchestration
+## v0.7.0 — Programmatic agent orchestration
 
 ### sandcastle-sandbox-provider
 
-**Status: Planned (v0.6.0, issue #66).**
+**Status: Planned (v0.7.0, issue #66).**
 
 **Problem.** drydock is a CLI today — a human types `drydock run` to start
 an agent session. Programmatic orchestration (another agent or a dashboard
@@ -932,7 +1001,7 @@ remains the source of truth for its own session semantics.
 **Why this scope.** A release of its own — drydock-as-library is a
 distinct surface from drydock-as-CLI, and the sandcastle interface
 contract is the authoritative shape. Sequenced after
-[agent-adapter](#agent-adapter) (v0.5.0) so drydock is already
+[agent-adapter](#agent-adapter) (v0.6.0) so drydock is already
 agent-agnostic at the per-session level before the orchestration layer
 plugs in.
 
