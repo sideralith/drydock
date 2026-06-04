@@ -3685,7 +3685,10 @@ STUB
 
 	run cmd_doctor
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"network/socket mode"* ]]
+	# The active mode renders as its overlay filename (section convention), with
+	# the mode + honest posture in the value/meta columns.
+	[[ "$output" == *"docker-compose.contain.yml"* ]]
+	[[ "$output" == *"contained"* ]]
 	[[ "$output" == *"no host network"* ]]
 	# Honest framing: contained mode must NOT overclaim egress containment.
 	[[ "$output" != *"isolated net"* ]]
@@ -3720,7 +3723,8 @@ STUB
 
 	run cmd_doctor
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"network/socket mode"* ]]
+	# dood renders as its overlay filename + the INV-6 root-equivalent warning.
+	[[ "$output" == *"docker-compose.dood.yml"* ]]
 	[[ "${output,,}" == *"dood"* ]]
 	[[ "$output" == *"root-equivalent"* ]]
 

@@ -1239,6 +1239,20 @@ cmd_doctor() {
 	_dr_section "COMPOSE OVERLAYS" "what would activate now"
 	local _DR_LABEL_WIDTH=32
 	_dr_item "✓" "docker-compose.yml" "" "base"
+	# Network/socket posture (INV-9): report which of the two mutually-exclusive
+	# mode overlays resolve_run_mode() would select right now, with the deciding
+	# reason. Use resolve_run_mode (a pure fn of env + sentinels) — NOT
+	# compose_files, which writes temp overlay files as a side effect. _proj_name
+	# is the sanitized current-project name resolved in the ACTIVE SESSIONS block.
+	local _mode_line _mode _reason
+	_mode_line="$(resolve_run_mode "$_proj_name")"
+	_mode="${_mode_line%% *}"
+	_reason="${_mode_line#* }"
+	if [ "$_mode" = "dood" ]; then
+		_dr_item "⚠" "docker-compose.dood.yml" "dood" "Docker socket + host network — INV-6 root-equivalent · reason: $_reason"
+	else
+		_dr_item "✓" "docker-compose.contain.yml" "contained" "no Docker socket · no host network (egress open — Phase 1) · reason: $_reason"
+	fi
 	if [ "${DRYDOCK_NO_HARDENING:-0}" != "1" ]; then
 		_dr_item "✓" "docker-compose.hardening.yml" "" "INV-8: cap_drop, no-new-privileges, tmpfs cap"
 	else
