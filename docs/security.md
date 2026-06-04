@@ -514,12 +514,14 @@ root-equivalent (see below) — INV-8 is additive defense in depth, not a replac
 
 ## What drydock does NOT protect against
 
-- **Adversarial agent using the Docker socket** — a process with
-  `/var/run/docker.sock` access can run
+- **Adversarial agent using the Docker socket (dood mode only)** — in dood
+  mode (opt-in), a process with `/var/run/docker.sock` access can run
   `docker run -v /:/host --privileged alpine sh` and then it's root on the
-  host. The socket is root-equivalent. drydock mounts the socket because
-  that's what makes `make shell-api` / `docker exec` work; the trade-off is
-  explicit.
+  host. The socket is root-equivalent (INV-6). Dood mode is the unchanged
+  drydock posture (threat model A). In contained mode (the factory default)
+  the socket is NOT mounted — this attack class is blocked. See INV-9 in
+  CLAUDE.md for mode selection; to opt in set `DRYDOCK_DOOD=1` or create
+  `~/.config/drydock/dood/<proj>`.
 - **Agent committing nonsense to the project tree** — `$PROJECT_DIR` is
   mounted RW. The agent can write anything in it. (That's the point — it
   needs to do its job.) Use git review discipline.
@@ -534,9 +536,15 @@ root-equivalent (see below) — INV-8 is additive defense in depth, not a replac
   (they hold variable names and dummy values, not secrets). If your project
   stores secrets under non-conventional filenames (custom `.creds`,
   `.env.private`, etc.) add a project-level deny in `.claude/settings.json`.
-- **Network exfiltration** — the container shares the host's network
-  namespace (`network_mode: host`). The agent can make arbitrary outbound
-  connections.
+- **Network exfiltration** — in dood mode (opt-in) the container shares the
+  host's network namespace (`network_mode: host`) and the agent can make
+  arbitrary outbound connections. In contained mode (the factory default) the
+  container runs on a drydock-managed bridge network with NO Docker socket and
+  NO host networking — the socket-escape class and host-network reach are both
+  removed. PHASE 1 NOTE: contained mode does NOT filter egress; the agent can
+  still make outbound internet connections over the bridge's default NAT. An
+  egress allowlist is a separate future change. Contained mode is not a
+  replacement for egress filtering.
 
 ## If you need adversarial-resistant isolation
 

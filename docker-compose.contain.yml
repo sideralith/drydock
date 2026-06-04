@@ -1,0 +1,33 @@
+# drydock — contained mode overlay (factory default, targets threat model B).
+#
+# Included by lib/compose.sh:compose_files() when resolve_run_mode() returns
+# "contained" (the factory default: no DooD env override and no dood sentinel).
+# Attaches the service to a dedicated drydock-managed bridge network and adds
+# NO Docker socket. Removing the socket + host networking shrinks the blast
+# radius for external-ingestion work (research, third-party review, foreign-PR
+# triage) where the agent processes untrusted content.
+#
+# PHASE 1 SCOPE — EGRESS IS OPEN. driver: bridge with NO `internal: true`. The
+# container still reaches the internet (Claude Code needs api.anthropic.com to
+# start, and a fresh install must run). This overlay does NOT filter egress; a
+# domain-allowlist egress jail is Phase 2 and is OUT OF SCOPE here. Doctrine must
+# NOT label this as real egress containment.
+#
+# Sole-attachment note: the explicit per-service `networks:` list REPLACES the
+# implicit default-bridge attachment (render-verified) — there is no silent
+# default-bridge leak. This holds INDEPENDENTLY of `internal: true`, so
+# removing that flag adds egress without reintroducing a second network.
+services:
+  drydock:
+    networks:
+      - drydock_net
+networks:
+  drydock_net:
+    name: drydock_net
+    driver: bridge
+    # NO `internal: true` in Phase 1 — egress is open by design (see header).
+    # name: is explicit so all contained sessions share ONE network instead of
+    # creating a new Compose-namespaced network per session. Without this,
+    # every `docker rm -f` teardown (REQ-4 — never `compose down`) would leak
+    # a unique drydock-<proj>-<disc>_drydock_net network, exhausting Docker's
+    # ~31-network bridge pool and breaking all host docker networking.

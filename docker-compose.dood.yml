@@ -1,0 +1,20 @@
+# drydock — DooD mode overlay (opt-in, threat model A).
+#
+# Included by lib/compose.sh:compose_files() when resolve_run_mode() returns "dood":
+# either DRYDOCK_DOOD=1 (literal "1"), a per-project sentinel
+# ~/.config/drydock/dood/<project>, or the global default sentinel
+# ~/.config/drydock/default-dood. Re-adds the two pieces removed from the
+# network-neutral base: host networking and the Docker-out-of-Docker socket.
+#
+# WARNING (INV-6): the bind-mounted Docker socket is root-equivalent on the host.
+# This is the current, unchanged drydock posture — threat model A (accidents).
+# See INV-9 in CLAUDE.md for the dual-mode rationale and opt-in instructions.
+services:
+  drydock:
+    # Share the host network namespace so `curl http://localhost:PORT/...` works
+    # identically to host-side and the container can reach sibling compose stacks
+    # via their published host ports.
+    network_mode: host
+    volumes:
+      # Docker-out-of-Docker socket (root-equivalent on the host — INV-6).
+      - /var/run/docker.sock:/var/run/docker.sock

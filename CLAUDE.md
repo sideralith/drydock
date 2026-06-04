@@ -248,9 +248,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 ### INV-6: Docker Socket = Root-Equivalent on Host
 
 - **Rule**: Documentation, error messages, and proposals MUST NOT describe the container as
-  adversarially isolated. The bind-mounted Docker socket (`docker-compose.yml:53`) gives any
-  process inside the container with socket access the ability to run
-  `docker run -v /:/host --privileged` and read the entire host filesystem.
+  adversarially isolated. In dood mode (opt-in), the bind-mounted Docker socket
+  (`docker-compose.dood.yml`) gives any process inside the container with socket access the
+  ability to run `docker run -v /:/host --privileged` and read the entire host filesystem.
+  In contained mode (the factory default) the socket is absent.
 - **Why**: This is THE foundational reason the threat model is A (accidents), not B (adversarial).
   A contributor who believes the container is a security sandbox will run untrusted code or allow
   adversarial prompt-injection under that false mental model. The socket-escape command is one
@@ -258,7 +259,8 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 - **Consequence of violating**: Contributors onboarded with the wrong threat model run untrusted
   workloads or allow prompt-injection attempts inside the container. The eventual outcome is host
   compromise via the Docker socket — a high-severity trust-loss incident against the project.
-- **Where this lives in code**: `docker-compose.yml:53` (the socket mount line).
+- **Where this lives in code**: `docker-compose.dood.yml` (the socket mount line) — present
+  only in dood mode (opt-in); ABSENT in contained mode (the factory default). See INV-9.
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ### INV-7: Threat Model A — Defense Against Accidents, Not Adversaries
@@ -329,11 +331,16 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
 ### Docker
 
 - **Rule**: No daemon-in-container. The image stays minimal. DooD via the host Docker socket is
-  the contract.
+  OPT-IN per session (dood mode); the factory default is contained mode (no socket, no host
+  network). See INV-9.
 - **Why**: Running a nested daemon defeats the DooD model and breaks `make shell-api` against the
   host stack because the container's daemon has no knowledge of the host's running services.
-- **Consequence of violating**: `make shell-api` and all compose-targeting commands stop working;
-  the container becomes an isolated bubble disconnected from the host dev stack drydock augments.
+- **Consequence of violating**: `make shell-api` and all compose-targeting commands that require
+  the Docker socket or the host network stack require dood mode; they do NOT work in the default
+  contained mode. To switch a project to dood mode set `DRYDOCK_DOOD=1` in the environment, or
+  create the sentinel file `~/.config/drydock/dood/<proj>`. To make dood the global default
+  create `~/.config/drydock/default-dood`. (An ergonomic `drydock dood`/`drydock default` CLI
+  lands in a later slice.)
 
 See `→ CONTRIBUTING.md` for the testing and lint contract.
 
