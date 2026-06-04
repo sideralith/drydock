@@ -2947,6 +2947,238 @@ _make_rw_sibling_with_url() {
 	[ -z "${DRYDOCK_GITCONFIG:-}" ]
 }
 
+# ── dual-mode network/socket gate (contained default, literal-"1" overrides) ──
+# Design §7a + §7b. Factory default = contained. Only the exact literal "1"
+# activates an env override (mirrors DRYDOCK_NO_HARDENING gate).
+# Each test isolates HOME + unsets both env vars so ambient container env can't leak.
+
+@test "compose_files: no sentinels, no env — contain overlay present, dood absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-contain-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.contain.yml"* ]]
+	[[ "$output" != *"docker-compose.dood.yml"* ]]
+}
+
+@test "compose_files: dood sentinel present — dood overlay present, contain absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-dood-sent-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	mkdir -p "$HOME/.config/drydock/dood" && touch "$HOME/.config/drydock/dood/myproject"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.dood.yml"* ]]
+	[[ "$output" != *"docker-compose.contain.yml"* ]]
+}
+
+@test "compose_files: contain sentinel present — contain overlay present, dood absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-cont-sent-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	mkdir -p "$HOME/.config/drydock/contain" && touch "$HOME/.config/drydock/contain/myproject"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.contain.yml"* ]]
+	[[ "$output" != *"docker-compose.dood.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_DOOD=1 — dood overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-env-dood-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	unset DRYDOCK_CONTAIN
+	export DRYDOCK_DOOD=1
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.dood.yml"* ]]
+	[[ "$output" != *"docker-compose.contain.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_CONTAIN=1 — contain overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-env-cont-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	unset DRYDOCK_DOOD
+	export DRYDOCK_CONTAIN=1
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.contain.yml"* ]]
+	[[ "$output" != *"docker-compose.dood.yml"* ]]
+}
+
+@test "compose_files: both DRYDOCK_DOOD=1 and DRYDOCK_CONTAIN=1 — contain overlay (fail-closed)" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-both-env-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	export DRYDOCK_DOOD=1
+	export DRYDOCK_CONTAIN=1
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.contain.yml"* ]]
+	[[ "$output" != *"docker-compose.dood.yml"* ]]
+}
+
+@test "compose_files: both dood+contain sentinels — contain overlay (fail-closed)" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-both-sent-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	mkdir -p "$HOME/.config/drydock/dood" && touch "$HOME/.config/drydock/dood/myproject"
+	mkdir -p "$HOME/.config/drydock/contain" && touch "$HOME/.config/drydock/contain/myproject"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.contain.yml"* ]]
+	[[ "$output" != *"docker-compose.dood.yml"* ]]
+}
+
+@test "compose_files: default-dood present, no project pin — dood overlay" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-global-dood-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	mkdir -p "$HOME/.config/drydock" && touch "$HOME/.config/drydock/default-dood"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.dood.yml"* ]]
+	[[ "$output" != *"docker-compose.contain.yml"* ]]
+}
+
+@test "compose_files: DRYDOCK_DOOD=true (non-\"1\") — contain overlay (env inactive)" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	export HOME="$BATS_TEST_TMPDIR/dm-dood-true-$$"
+	mkdir -p "$HOME/.claude-container" && touch "$HOME/.claude-container.json"
+	unset DRYDOCK_CONTAIN
+	export DRYDOCK_DOOD="true"
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"docker-compose.contain.yml"* ]]
+	[[ "$output" != *"docker-compose.dood.yml"* ]]
+}
+
+# ── resolve_run_mode precedence (direct unit tests) ───────────────────────────
+# Design §7b. Tests call resolve_run_mode directly and inspect field-1 (mode)
+# or field-2+ (reason). Each test isolates HOME and unsets env vars.
+
+@test "resolve_run_mode: field-1 factory default → contained" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-factory-$$"
+	mkdir -p "$HOME"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	result="$(resolve_run_mode "myproject")"
+	mode="${result%% *}"
+	[ "$mode" = "contained" ]
+}
+
+@test "resolve_run_mode: field-1 DRYDOCK_DOOD=1 → dood" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-dood-env-$$"
+	mkdir -p "$HOME"
+	unset DRYDOCK_CONTAIN
+	export DRYDOCK_DOOD=1
+	result="$(resolve_run_mode "myproject")"
+	mode="${result%% *}"
+	[ "$mode" = "dood" ]
+}
+
+@test "resolve_run_mode: field-1 DRYDOCK_CONTAIN=1 → contained" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-cont-env-$$"
+	mkdir -p "$HOME"
+	unset DRYDOCK_DOOD
+	export DRYDOCK_CONTAIN=1
+	result="$(resolve_run_mode "myproject")"
+	mode="${result%% *}"
+	[ "$mode" = "contained" ]
+}
+
+@test "resolve_run_mode: field-1 DRYDOCK_DOOD=true → contained (non-\"1\" inactive)" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-dood-true-$$"
+	mkdir -p "$HOME"
+	unset DRYDOCK_CONTAIN
+	export DRYDOCK_DOOD="true"
+	result="$(resolve_run_mode "myproject")"
+	mode="${result%% *}"
+	[ "$mode" = "contained" ]
+}
+
+@test "resolve_run_mode: field-1 both env vars → contained (fail-closed)" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-both-env-$$"
+	mkdir -p "$HOME"
+	export DRYDOCK_DOOD=1
+	export DRYDOCK_CONTAIN=1
+	result="$(resolve_run_mode "myproject")"
+	mode="${result%% *}"
+	[ "$mode" = "contained" ]
+}
+
+@test "resolve_run_mode: field-2 env override → reason contains 'env override'" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-reason-env-$$"
+	mkdir -p "$HOME"
+	unset DRYDOCK_CONTAIN
+	export DRYDOCK_DOOD=1
+	result="$(resolve_run_mode "myproject")"
+	reason="${result#* }"
+	[[ "$reason" == *"env override"* ]]
+}
+
+@test "resolve_run_mode: field-2 factory → reason contains 'factory default'" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-reason-factory-$$"
+	mkdir -p "$HOME"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	result="$(resolve_run_mode "myproject")"
+	reason="${result#* }"
+	[[ "$reason" == *"factory default"* ]]
+}
+
+@test "resolve_run_mode: field-2 global default → reason contains 'global default'" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-reason-global-$$"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/default-dood"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	result="$(resolve_run_mode "myproject")"
+	reason="${result#* }"
+	[[ "$reason" == *"global default"* ]]
+}
+
+@test "resolve_run_mode: field-2 project pin → reason contains 'project pin'" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-reason-pin-$$"
+	mkdir -p "$HOME/.config/drydock/dood"
+	touch "$HOME/.config/drydock/dood/myproject"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	result="$(resolve_run_mode "myproject")"
+	reason="${result#* }"
+	[[ "$reason" == *"project pin"* ]]
+}
+
+@test "resolve_run_mode: env beats per-project pin (DRYDOCK_CONTAIN=1 with dood sentinel)" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-env-beats-pin-$$"
+	mkdir -p "$HOME/.config/drydock/dood"
+	touch "$HOME/.config/drydock/dood/myproject"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/default-dood"
+	unset DRYDOCK_DOOD
+	export DRYDOCK_CONTAIN=1
+	result="$(resolve_run_mode "myproject")"
+	mode="${result%% *}"
+	[ "$mode" = "contained" ]
+	reason="${result#* }"
+	[[ "$reason" == *"env override"* ]]
+}
+
+@test "resolve_run_mode: project pin beats global default (contain pin with default-dood)" {
+	export HOME="$BATS_TEST_TMPDIR/rrm-pin-beats-global-$$"
+	mkdir -p "$HOME/.config/drydock/contain"
+	touch "$HOME/.config/drydock/contain/myproject"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/default-dood"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	result="$(resolve_run_mode "myproject")"
+	mode="${result%% *}"
+	[ "$mode" = "contained" ]
+}
+
 @test "#89 RED: export_compose_env does NOT mutate canonical sibling URL during startup migration" {
 	local fake_home="$BATS_TEST_TMPDIR/89-noop-home"
 	mkdir -p "$fake_home/.claude-container"
