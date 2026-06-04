@@ -513,6 +513,7 @@ cmd_run() {
 	if [ -n "${ZELLIJ:-}${TMUX:-}${STY:-}" ] || [ "${DRYDOCK_NESTED:-}" = "1" ]; then
 		note "Nested session detected — launching ephemeral Claude in $project_dir"
 		export_compose_env "$project_dir"
+		_emit_mode_banner "$PROJECT_NAME"
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		local _name="$DRYDOCK_SESSION_NAME"
@@ -549,6 +550,7 @@ cmd_run() {
 		fi
 		note "Launching Claude in $project_dir"
 		export_compose_env "$project_dir"
+		_emit_mode_banner "$PROJECT_NAME"
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		_launch_new "$project_dir" compose_args "${passthrough[@]}"
@@ -612,6 +614,7 @@ cmd_run() {
 		"Start a new session")
 			note "Starting new session alongside existing in $project_dir"
 			export_compose_env "$project_dir"
+			_emit_mode_banner "$PROJECT_NAME"
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
@@ -623,6 +626,7 @@ cmd_run() {
 				[ -n "$sess" ] && "$DOCKER" rm -f "$sess" >/dev/null
 			done <<<"$live_sessions"
 			export_compose_env "$project_dir"
+			_emit_mode_banner "$PROJECT_NAME"
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
@@ -905,6 +909,7 @@ cmd_shell() {
 
 	note "Bash shell in container, mounted at $project_dir"
 	export_compose_env "$project_dir"
+	_emit_mode_banner "$PROJECT_NAME"
 
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
@@ -1587,6 +1592,25 @@ cmd_default() {
 	"") err "usage: drydock default <dood|contain>" ;;
 	*) err "unknown mode: $choice — expected 'dood' or 'contain'" ;;
 	esac
+}
+
+# _emit_mode_banner <project_name>
+# Print the active network/socket mode + the resolution reason. Call ONLY where a
+# container is CREATED (never on pure attach — an existing container's posture was
+# baked in at creation and may differ from a sentinel changed since). Wording is
+# honest: contained states only the two things actually removed (no Docker socket,
+# no host network) and makes NO egress claim — Phase 1 does not filter egress.
+_emit_mode_banner() {
+	local _proj="$1"
+	local _line _mode _reason
+	_line="$(resolve_run_mode "$_proj")"
+	_mode="${_line%% *}"
+	_reason="${_line#* }"
+	if [ "$_mode" = "dood" ]; then
+		note "drydock: DOOD mode (Docker socket · host network) — reason: $_reason"
+	else
+		note "drydock: CONTAINED mode (no Docker socket · no host network) — reason: $_reason"
+	fi
 }
 
 # ── cmd_link ──────────────────────────────────────────────────────────────────
@@ -2275,6 +2299,7 @@ cmd_new() {
 	local project_dir
 	project_dir="$(resolve_project_dir "")"
 	export_compose_env "$project_dir"
+	_emit_mode_banner "$PROJECT_NAME"
 
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
