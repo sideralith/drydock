@@ -3446,3 +3446,284 @@ STUB
 	[ "$status" -eq 0 ]
 	[ "$output" = "drydock-myproj-ab12" ]
 }
+
+# ── dual-mode: _pin_project_mode / cmd_dood / cmd_contain / cmd_default (PR2) ──
+# Per-project network/socket pins + the global default sentinel. These functions
+# read $HOME at runtime (NOT via sourced path constants), so an isolated HOME is
+# the only fixture needed — no re-source required. The sentinels they write are
+# interpreted by resolve_run_mode (lib/compose.sh); the gate/precedence tests
+# live in test/lib_compose.bats. (INV-9, REQ-3.)
+
+@test "_pin_project_mode: dood creates dood sentinel and removes contain sentinel (mutual exclusion)" {
+	export HOME="$BATS_TEST_TMPDIR/pin-dood-$$"
+	mkdir -p "$HOME/.config/drydock/contain"
+	touch "$HOME/.config/drydock/contain/myproj" # pre-existing opposite pin
+
+	_pin_project_mode dood myproj
+
+	[ -f "$HOME/.config/drydock/dood/myproj" ]
+	[ ! -f "$HOME/.config/drydock/contain/myproj" ]
+}
+
+@test "_pin_project_mode: contain creates contain sentinel and removes dood sentinel (mutual exclusion)" {
+	export HOME="$BATS_TEST_TMPDIR/pin-contain-$$"
+	mkdir -p "$HOME/.config/drydock/dood"
+	touch "$HOME/.config/drydock/dood/myproj"
+
+	_pin_project_mode contain myproj
+
+	[ -f "$HOME/.config/drydock/contain/myproj" ]
+	[ ! -f "$HOME/.config/drydock/dood/myproj" ]
+}
+
+@test "_pin_project_mode: --remove on an unpinned project is idempotent (status 0, no file)" {
+	export HOME="$BATS_TEST_TMPDIR/pin-rm-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	run _pin_project_mode dood --remove myproj
+	[ "$status" -eq 0 ]
+	[ ! -f "$HOME/.config/drydock/dood/myproj" ]
+}
+
+@test "_pin_project_mode: re-pinning an already-pinned project is idempotent (no error)" {
+	export HOME="$BATS_TEST_TMPDIR/pin-twice-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	_pin_project_mode dood myproj
+	run _pin_project_mode dood myproj
+	[ "$status" -eq 0 ]
+	[ -f "$HOME/.config/drydock/dood/myproj" ]
+}
+
+@test "_pin_project_mode: project name is sanitized before writing the sentinel" {
+	export HOME="$BATS_TEST_TMPDIR/pin-sani-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	_pin_project_mode dood "My Proj"
+
+	[ -f "$HOME/.config/drydock/dood/my-proj" ]
+	[ ! -e "$HOME/.config/drydock/dood/My Proj" ]
+}
+
+@test "cmd_default dood: creates the default-dood sentinel" {
+	export HOME="$BATS_TEST_TMPDIR/def-dood-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	cmd_default dood
+
+	[ -f "$HOME/.config/drydock/default-dood" ]
+}
+
+@test "cmd_default contain: removes default-dood and is idempotent when already absent" {
+	export HOME="$BATS_TEST_TMPDIR/def-contain-$$"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/default-dood"
+
+	cmd_default contain
+	[ ! -f "$HOME/.config/drydock/default-dood" ]
+
+	run cmd_default contain # already absent → no-op, not an error
+	[ "$status" -eq 0 ]
+	[ ! -f "$HOME/.config/drydock/default-dood" ]
+}
+
+@test "cmd_default: no subargument exits non-zero with usage" {
+	export HOME="$BATS_TEST_TMPDIR/def-noarg-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	run cmd_default
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"usage"* ]]
+}
+
+@test "cmd_default: unknown subargument exits non-zero" {
+	export HOME="$BATS_TEST_TMPDIR/def-bogus-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	run cmd_default bogus
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"unknown"* ]]
+}
+
+@test "cmd_dood: missing project argument exits non-zero with usage" {
+	export HOME="$BATS_TEST_TMPDIR/dood-noarg-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	run cmd_dood
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"usage"* ]]
+}
+
+@test "cmd_contain: missing project argument exits non-zero with usage" {
+	export HOME="$BATS_TEST_TMPDIR/contain-noarg-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	run cmd_contain
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"usage"* ]]
+}
+
+@test "cmd_dood: prints INV-6 root-equivalent warning" {
+	export HOME="$BATS_TEST_TMPDIR/dood-warn-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	run cmd_dood myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"root-equivalent"* ]]
+}
+
+# ── dual-mode: _emit_mode_banner (PR2) ────────────────────────────────────────
+# The creation-time banner. Honest wording is the contract: contained mode names
+# only what it actually removes (no Docker socket, no host network) and makes NO
+# egress-filtering claim (Phase 1 does not filter egress). resolve_run_mode reads
+# $HOME at runtime, so the sentinels under an isolated HOME drive the mode/reason.
+# (INV-9, REQ-4.)
+
+@test "_emit_mode_banner: contained mode output contains 'no host network'" {
+	export HOME="$BATS_TEST_TMPDIR/ban-contain-$$"
+	mkdir -p "$HOME/.config/drydock"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"no host network"* ]]
+}
+
+@test "_emit_mode_banner: contained mode does NOT claim 'isolated net'" {
+	export HOME="$BATS_TEST_TMPDIR/ban-iso-$$"
+	mkdir -p "$HOME/.config/drydock"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"isolated net"* ]]
+}
+
+@test "_emit_mode_banner: contained mode makes no egress-filtering claim ('filtered'/'blocked')" {
+	export HOME="$BATS_TEST_TMPDIR/ban-egress-$$"
+	mkdir -p "$HOME/.config/drydock"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filtered"* ]]
+	[[ "$output" != *"blocked"* ]]
+}
+
+@test "_emit_mode_banner: dood mode identifies the dood mode (case-insensitive)" {
+	export HOME="$BATS_TEST_TMPDIR/ban-dood-$$"
+	mkdir -p "$HOME/.config/drydock/dood"
+	touch "$HOME/.config/drydock/dood/myproj"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	# The banner emits "DOOD" (all caps); match case-insensitively.
+	[[ "${output,,}" == *"dood"* ]]
+}
+
+@test "_emit_mode_banner: reason names 'global default' when default-dood is present" {
+	export HOME="$BATS_TEST_TMPDIR/ban-gd-$$"
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/default-dood"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"global default"* ]]
+}
+
+@test "_emit_mode_banner: reason names 'factory default' when no config is present" {
+	export HOME="$BATS_TEST_TMPDIR/ban-fd-$$"
+	mkdir -p "$HOME/.config/drydock"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"factory default"* ]]
+}
+
+@test "_emit_mode_banner: reason names 'env override' when DRYDOCK_DOOD=1" {
+	export HOME="$BATS_TEST_TMPDIR/ban-env-$$"
+	mkdir -p "$HOME/.config/drydock"
+	export DRYDOCK_DOOD=1
+	unset DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"env override"* ]]
+}
+
+# ── dual-mode: cmd_doctor reports the active network/socket mode (PR2 / M2) ────
+# With contained the factory default, `make shell-api` / `curl localhost:PORT`
+# fail silently unless the operator can see which mode is active. doctor reads
+# the same resolve_run_mode the gate uses (NOT compose_files — that writes temp
+# overlay files, forbidden in the doctor render path). (INV-9, M2.)
+
+@test "cmd_doctor: COMPOSE OVERLAYS reports contained mode by default (honest wording)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"network/socket mode"* ]]
+	[[ "$output" == *"no host network"* ]]
+	# Honest framing: contained mode must NOT overclaim egress containment.
+	[[ "$output" != *"isolated net"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: COMPOSE OVERLAYS reports dood mode + INV-6 when DRYDOCK_DOOD=1" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	export DRYDOCK_DOOD=1
+	unset DRYDOCK_CONTAIN
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"network/socket mode"* ]]
+	[[ "${output,,}" == *"dood"* ]]
+	[[ "$output" == *"root-equivalent"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
