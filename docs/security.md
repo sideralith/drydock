@@ -520,7 +520,8 @@ root-equivalent (see below) — INV-8 is additive defense in depth, not a replac
   host. The socket is root-equivalent (INV-6). Dood mode is the unchanged
   drydock posture (threat model A). In contained mode (the factory default)
   the socket is NOT mounted — this attack class is blocked. See INV-9 in
-  CLAUDE.md for mode selection; use `drydock dood <proj>` to opt in.
+  CLAUDE.md for mode selection; to opt in set `DRYDOCK_DOOD=1` or create
+  `~/.config/drydock/dood/<proj>`.
 - **Agent committing nonsense to the project tree** — `$PROJECT_DIR` is
   mounted RW. The agent can write anything in it. (That's the point — it
   needs to do its job.) Use git review discipline.

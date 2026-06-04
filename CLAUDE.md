@@ -337,7 +337,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   host stack because the container's daemon has no knowledge of the host's running services.
 - **Consequence of violating**: `make shell-api` and all compose-targeting commands that require
   the Docker socket or the host network stack require dood mode; they do NOT work in the default
-  contained mode. Use `drydock dood <proj>` or `drydock default dood` to restore dood mode.
+  contained mode. To switch a project to dood mode set `DRYDOCK_DOOD=1` in the environment, or
+  create the sentinel file `~/.config/drydock/dood/<proj>`. To make dood the global default
+  create `~/.config/drydock/default-dood`. (An ergonomic `drydock dood`/`drydock default` CLI
+  lands in a later slice.)
 
 See `→ CONTRIBUTING.md` for the testing and lint contract.
 
