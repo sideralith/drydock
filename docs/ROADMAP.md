@@ -48,7 +48,7 @@ file.
 | [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Not planned (closed; successor: external [drydock-zellij-plugin][i97], post-v0.3.0) |
 | [session-persistence-polish](#session-persistence-polish) | v0.3.1 | [milestone v0.3.1][m031] | Done |
 | [config-gh-mkdir](#config-gh-mkdir) | v0.3.1 | [#109][i109] | Done |
-| [dual-mode-containment](#dual-mode-containment) | v0.4.0 | [#147][i147] | Planned |
+| [dual-mode-containment](#dual-mode-containment) | v0.4.0 | [#149][i149] | Planned |
 | [toolchain-mise](#toolchain-mise) | v0.5.0 | [#16][i16] | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.5.0 | [#17][i17] | Planned |
 | [forge-agnostic-base](#forge-agnostic-base) | v0.5.0 | [#110][i110] | Planned |
@@ -95,7 +95,7 @@ Order for later releases is not yet decided.
 [i106]: https://github.com/sideralith/drydock/issues/106
 [i109]: https://github.com/sideralith/drydock/issues/109
 [i110]: https://github.com/sideralith/drydock/issues/110
-[i147]: https://github.com/sideralith/drydock/issues/147
+[i149]: https://github.com/sideralith/drydock/issues/149
 [m031]: https://github.com/sideralith/drydock/milestone/8
 
 ---
@@ -757,7 +757,7 @@ change.
 
 ### dual-mode-containment
 
-**Status: Planned (v0.4.0, issue [#147][i147]).**
+**Status: Planned (v0.4.0, issue [#149][i149]).**
 
 **Problem.** drydock does not prevent prompt injection (nothing can) *and it does not
 contain its consequences either.* The bind-mounted Docker socket (INV-6,
@@ -790,8 +790,8 @@ Two phases, decoupling architecture from the egress jail:
 - **Phase 2 — egress jail in contained mode.** An egress sidecar in
   `docker-compose.contain.yml` — transparent netfilter (dnsmasq allowlist + ipset +
   iptables DROP-default) vs. a userspace allowlist proxy. ~80% of the value is
-  deny-by-default + a domain allowlist; clawker's heavier machinery (eBPF, mTLS,
-  control-plane, Envoy, CoreDNS) is explicitly out of scope.
+  deny-by-default + a domain allowlist; heavyweight service-mesh machinery (eBPF, mTLS,
+  control-plane, sidecar proxies) is explicitly out of scope.
 
 **Why this scope.** Its own release theme — security containment, orthogonal to the
 "per-project environment customization" of v0.5.0. Placed first because Phase 1 is the
@@ -803,8 +803,8 @@ wound), and because it proves out the sentinel-gated overlay pattern that
 **reopens INV-7** (or adds a new INV) with explicit citation — not a redefinition that
 pretends nothing changed — and it changes the §3 contract ("DooD via the host Docker
 socket is the contract") so the socket becomes opt-in. Per §4, the justification is
-documented real demand — the [clawker](https://github.com/schmitthub/clawker)
-threat-model page ("containment over prevention") — not release cadence. INV-6 is the
+documented real demand — the maintainer's own external-ingestion workflow (research,
+third-party dependency review, foreign-issue/PR triage) — not release cadence. INV-6 is the
 reason `dood` mode is NOT half-contained: an egress jail with the socket still present
 is a Maginot line a single `docker run --network host -v /:/host …` jumps.
 
@@ -815,8 +815,8 @@ before Phase 2. Whether Phase 1 and Phase 2 ship as separate changes / chained P
 (likely yes). Socket-proxy hardening of `dood` mode is explicitly *not* pursued — a proxy
 can't distinguish a legitimate `compose up` bind-mount (`./frontend:/app`) from `-v /:/host`.
 
-**Provenance.** Consultation session comparing drydock with clawker; design memo closed,
-implementation not started. Issue [#147][i147].
+**Provenance.** Consultation session on containment posture; design memo closed,
+implementation not started. Issue [#149][i149].
 
 ---
 
