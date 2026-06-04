@@ -28,11 +28,6 @@ services:
     image: drydock:latest
     container_name: "drydock-${PROJECT_NAME}-${DRYDOCK_DISCRIMINATOR:?DRYDOCK_DISCRIMINATOR not set — invoke via the drydock CLI}"
 
-    # Share host network namespace. Lets `curl http://localhost:PORT/...` work
-    # identically to host-side, and lets the container reach sibling
-    # docker-compose stacks via their published host ports.
-    network_mode: host
-
     stdin_open: true
     tty: true
     working_dir: "${PROJECT_DIR}"
@@ -49,8 +44,10 @@ services:
       - DRYDOCK_VERSION
 
     volumes:
-      # ── Docker-out-of-Docker socket ────────────────────────────────────────
-      - /var/run/docker.sock:/var/run/docker.sock
+      # ── Docker socket / host network: delivered by the mode overlay ─────────
+      #   contained (default): docker-compose.contain.yml — bridge net, NO socket
+      #   dood (opt-in):       docker-compose.dood.yml     — host net + socket
+      # See lib/compose.sh:resolve_run_mode() / compose_files(); CLAUDE.md INV-9.
 
       # ── Project tree (same path inside as outside so Makefile resolves) ────
       - "${PROJECT_DIR}:${PROJECT_DIR}:rw"

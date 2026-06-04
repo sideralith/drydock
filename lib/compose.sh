@@ -22,6 +22,8 @@ COMPOSE_MCP_AUTH="$DRYDOCK_HOME/docker-compose.mcp-auth.yml"
 COMPOSE_CCSTATUSLINE="$DRYDOCK_HOME/docker-compose.ccstatusline.yml"
 COMPOSE_HARDENING="$DRYDOCK_HOME/docker-compose.hardening.yml"
 COMPOSE_OAUTH="$DRYDOCK_HOME/docker-compose.oauth.yml"
+COMPOSE_DOOD="$DRYDOCK_HOME/docker-compose.dood.yml"
+COMPOSE_CONTAIN="$DRYDOCK_HOME/docker-compose.contain.yml"
 
 # ── Functions ─────────────────────────────────────────────────────────────────
 
@@ -420,6 +422,65 @@ _maybe_export_session_gitconfig() {
 	export DRYDOCK_GITCONFIG="$gitconfig_path"
 }
 
+# resolve_run_mode <project_name>
+# Pure function of environment + sentinel files. Echoes "<mode> <reason>" where
+# mode is "dood" or "contained". No globals read or written. Precedence
+# (most-specific wins; STOPS at the deciding level; fail-closed = contained on
+# any same-level conflict):
+#   1. env conflict (both DRYDOCK_DOOD=1 and DRYDOCK_CONTAIN=1)  → contained
+#   2. DRYDOCK_DOOD=1 (literal "1")                              → dood
+#   3. DRYDOCK_CONTAIN=1 (literal "1")                           → contained
+#   4. project pinned BOTH (dood + contain sentinels present)   → contained
+#   5. project pinned dood   (~/.config/drydock/dood/<proj>)     → dood
+#   6. project pinned contain (~/.config/drydock/contain/<proj>) → contained
+#   7. global default sentinel (~/.config/drydock/default-dood)  → dood
+#   8. factory fallback                                          → contained
+# Only the exact literal "1" activates an env override (mirrors DRYDOCK_NO_HARDENING).
+resolve_run_mode() {
+	local _proj="$1"
+	local _dood_env="${DRYDOCK_DOOD:-0}"
+	local _contain_env="${DRYDOCK_CONTAIN:-0}"
+	local _dood_pin="$HOME/.config/drydock/dood/$_proj"
+	local _contain_pin="$HOME/.config/drydock/contain/$_proj"
+	local _default_dood="$HOME/.config/drydock/default-dood"
+
+	# 1. env-level conflict → fail-closed
+	if [ "$_dood_env" = "1" ] && [ "$_contain_env" = "1" ]; then
+		printf '%s %s\n' "contained" "env conflict (DRYDOCK_DOOD and DRYDOCK_CONTAIN both set) — fail-closed"
+		return 0
+	fi
+	# 2/3. single env override
+	if [ "$_dood_env" = "1" ]; then
+		printf '%s %s\n' "dood" "env override DRYDOCK_DOOD=1"
+		return 0
+	fi
+	if [ "$_contain_env" = "1" ]; then
+		printf '%s %s\n' "contained" "env override DRYDOCK_CONTAIN=1"
+		return 0
+	fi
+	# 4. project pinned both → fail-closed
+	if [ -f "$_dood_pin" ] && [ -f "$_contain_pin" ]; then
+		printf '%s %s\n' "contained" "project pinned both modes — fail-closed"
+		return 0
+	fi
+	# 5/6. project pin
+	if [ -f "$_dood_pin" ]; then
+		printf '%s %s\n' "dood" "project pin (drydock dood $_proj)"
+		return 0
+	fi
+	if [ -f "$_contain_pin" ]; then
+		printf '%s %s\n' "contained" "project pin (drydock contain $_proj)"
+		return 0
+	fi
+	# 7. global default
+	if [ -f "$_default_dood" ]; then
+		printf '%s %s\n' "dood" "global default (drydock default dood)"
+		return 0
+	fi
+	# 8. factory fallback
+	printf '%s %s\n' "contained" "factory default"
+}
+
 # Print one compose -f arg per line, in order. Caller assembles into array.
 compose_files() {
 	local project_dir="$1"
@@ -431,6 +492,17 @@ compose_files() {
 	generate_links_overlay "$project_dir"
 	if [ -f "${LINKS_OVERLAY:-}" ] && [ -s "${LINKS_OVERLAY:-}" ]; then
 		printf '%s\n' "-f" "$LINKS_OVERLAY"
+	fi
+	# Network/socket posture: include EXACTLY ONE of the dood/contain overlays.
+	# Re-derive the project name defensively from project_dir (NOT the exported
+	# PROJECT_NAME) so this works when called directly (e.g. bats) without a prior
+	# export_compose_env. resolve_run_mode is a pure fn of env + sentinel files.
+	local _run_mode
+	_run_mode="$(resolve_run_mode "$(sanitize_project_name "$(basename "$project_dir")")" | cut -d' ' -f1)"
+	if [ "$_run_mode" = "dood" ]; then
+		printf '%s\n' "-f" "$COMPOSE_DOOD"
+	else
+		printf '%s\n' "-f" "$COMPOSE_CONTAIN"
 	fi
 	# Container hardening defaults (cap_drop, no-new-privileges, tmpfs /tmp).
 	# Suppressed ONLY when DRYDOCK_NO_HARDENING is set to the literal value "1"
