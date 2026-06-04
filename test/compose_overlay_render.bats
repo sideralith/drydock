@@ -81,6 +81,31 @@ setup() {
 	[[ "$output" == *"drydock_net"* ]]
 }
 
+@test "render: contain — network named drydock_net (fixed, not per-session namespaced)" {
+	# Regression guard for the network-leak bug: without an explicit name: on the
+	# drydock_net declaration, Compose namespaces the network as
+	# <COMPOSE_PROJECT_NAME>_drydock_net. drydock's teardown is always
+	# `docker rm -f` (never `compose down`) so every session leaks one network —
+	# Docker's ~31-network bridge pool exhausts and all host docker networking fails.
+	# Fix: give the network an explicit shared name so all contained sessions reuse ONE.
+	#
+	# Assertion logic:
+	#  - POSITIVE: rendered config MUST show `name: drydock_net` (fixed name)
+	#  - NEGATIVE: rendered config MUST NOT show a project-namespaced name
+	#    (i.e. must NOT contain `_drydock_net` which is the un-named form)
+	#
+	# We set COMPOSE_PROJECT_NAME explicitly so the namespaced form is deterministic
+	# and the negative assertion is meaningful, not vacuous.
+	export COMPOSE_PROJECT_NAME="drydock-testproj-zzzz"
+	run docker compose \
+		-f "$DRYDOCK_HOME/docker-compose.yml" \
+		-f "$DRYDOCK_HOME/docker-compose.contain.yml" \
+		config --no-path-resolution
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"name: drydock_net"* ]]
+	[[ "$output" != *"_drydock_net"* ]]
+}
+
 # ── DooD mode render assertions ───────────────────────────────────────────────
 
 @test "render: dood — docker.sock present" {
