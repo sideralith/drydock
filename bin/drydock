@@ -103,6 +103,9 @@ main() {
 	link) cmd_link "$@" ;;
 	unlink) cmd_unlink "$@" ;;
 	links) cmd_links "$@" ;;
+	dood) cmd_dood "$@" ;;
+	contain) cmd_contain "$@" ;;
+	default) cmd_default "$@" ;;
 	version | --version | -v) echo "drydock $DRYDOCK_VERSION" ;;
 	help | --help | -h) usage ;;
 	*) err "unknown command: $cmd — run: drydock help" ;;

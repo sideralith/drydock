@@ -58,6 +58,9 @@ usage() {
 	_dr_help_row "link [--rw] PATH [TGT]" "Mount a sibling project inside the container"
 	_dr_help_row "unlink [--rw] PATH" "Remove a sibling mount from the project list"
 	_dr_help_row "links" "Show all linked siblings for the current project"
+	_dr_help_row "default <dood|contain>" "Set the global default network/socket mode for new projects"
+	_dr_help_row "dood <proj> [--remove]" "Pin a project to DooD mode (Docker socket + host network; INV-6)"
+	_dr_help_row "contain <proj> [--remove]" "Pin a project to contained mode (no socket, no host net)"
 	_dr_help_row "version" "Show drydock version"
 	_dr_help_row "help" "Show this help"
 
@@ -510,6 +513,7 @@ cmd_run() {
 	if [ -n "${ZELLIJ:-}${TMUX:-}${STY:-}" ] || [ "${DRYDOCK_NESTED:-}" = "1" ]; then
 		note "Nested session detected — launching ephemeral Claude in $project_dir"
 		export_compose_env "$project_dir"
+		_emit_mode_banner "$PROJECT_NAME"
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		local _name="$DRYDOCK_SESSION_NAME"
@@ -546,6 +550,7 @@ cmd_run() {
 		fi
 		note "Launching Claude in $project_dir"
 		export_compose_env "$project_dir"
+		_emit_mode_banner "$PROJECT_NAME"
 		local compose_args=()
 		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 		_launch_new "$project_dir" compose_args "${passthrough[@]}"
@@ -609,6 +614,7 @@ cmd_run() {
 		"Start a new session")
 			note "Starting new session alongside existing in $project_dir"
 			export_compose_env "$project_dir"
+			_emit_mode_banner "$PROJECT_NAME"
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
@@ -620,6 +626,7 @@ cmd_run() {
 				[ -n "$sess" ] && "$DOCKER" rm -f "$sess" >/dev/null
 			done <<<"$live_sessions"
 			export_compose_env "$project_dir"
+			_emit_mode_banner "$PROJECT_NAME"
 			local compose_args=()
 			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
@@ -902,6 +909,7 @@ cmd_shell() {
 
 	note "Bash shell in container, mounted at $project_dir"
 	export_compose_env "$project_dir"
+	_emit_mode_banner "$PROJECT_NAME"
 
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
@@ -1231,6 +1239,20 @@ cmd_doctor() {
 	_dr_section "COMPOSE OVERLAYS" "what would activate now"
 	local _DR_LABEL_WIDTH=32
 	_dr_item "✓" "docker-compose.yml" "" "base"
+	# Network/socket posture (INV-9): report which of the two mutually-exclusive
+	# mode overlays resolve_run_mode() would select right now, with the deciding
+	# reason. Use resolve_run_mode (a pure fn of env + sentinels) — NOT
+	# compose_files, which writes temp overlay files as a side effect. _proj_name
+	# is the sanitized current-project name resolved in the ACTIVE SESSIONS block.
+	local _mode_line _mode _reason
+	_mode_line="$(resolve_run_mode "$_proj_name")"
+	_mode="${_mode_line%% *}"
+	_reason="${_mode_line#* }"
+	if [ "$_mode" = "dood" ]; then
+		_dr_item "⚠" "docker-compose.dood.yml" "dood" "Docker socket + host network — INV-6 root-equivalent · reason: $_reason"
+	else
+		_dr_item "✓" "docker-compose.contain.yml" "contained" "no Docker socket · no host network (egress open — Phase 1) · reason: $_reason"
+	fi
 	if [ "${DRYDOCK_NO_HARDENING:-0}" != "1" ]; then
 		_dr_item "✓" "docker-compose.hardening.yml" "" "INV-8: cap_drop, no-new-privileges, tmpfs cap"
 	else
@@ -1490,6 +1512,119 @@ cmd_revoke_token() {
 		note "No local token file to remove (already absent)"
 	fi
 	note "IMPORTANT: drydock cannot revoke the token server-side. To fully revoke, visit claude.ai → Settings and revoke the token there."
+}
+
+# ── dual-mode network/socket pins (INV-9) ─────────────────────────────────────
+
+# _pin_project_mode <mode> <project> [--remove]
+# mode ∈ {dood, contain}. Sets/removes the per-project sentinel under
+# ~/.config/drydock/<mode>/<project>; setting one mode CLEARS the opposite mode's
+# sentinel (mutual exclusion in ONE place, so the cmd_dood/cmd_contain wrappers
+# can never drift). Idempotent: --remove on an unpinned project is a note (not an
+# error, mirroring cmd_revoke_token); re-pinning is a clean no-op. The sentinels
+# are interpreted at run time by resolve_run_mode() (lib/compose.sh).
+_pin_project_mode() {
+	local mode="$1"
+	shift
+	local remove=0 project=""
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--remove)
+			remove=1
+			shift
+			;;
+		-*) err "unknown option: $1" ;;
+		*)
+			project="$1"
+			shift
+			;;
+		esac
+	done
+	[ -n "$project" ] || err "usage: drydock $mode <project> [--remove]"
+	# Sanitize identically to export_compose_env / resolve_run_mode so the sentinel
+	# filename matches what the gate looks up.
+	project="$(sanitize_project_name "$project")"
+	local base="$HOME/.config/drydock"
+	local this="$base/$mode/$project"
+	local other_mode="dood"
+	[ "$mode" = "dood" ] && other_mode="contain"
+	local other="$base/$other_mode/$project"
+
+	if [ "$remove" -eq 1 ]; then
+		if [ -f "$this" ]; then
+			rm -f "$this"
+			ok "$mode pin removed: $project (now follows the global default)"
+		else
+			note "$mode not pinned for: $project (already absent)"
+		fi
+		return 0
+	fi
+
+	mkdir -p "$base/$mode"
+	rm -f "$other" # mutual exclusion: clear the opposite pin
+	touch "$this"
+	ok "$mode pinned: $project"
+	if [ "$mode" = "dood" ]; then
+		note "The Docker socket and host network are now active for this project."
+		note "INV-6: the Docker socket is root-equivalent on the host."
+	else
+		note "No Docker socket and no host network for this project (egress still open — Phase 1)."
+	fi
+}
+
+# cmd_dood / cmd_contain — thin wrappers over _pin_project_mode (keep the three
+# proposal verbs as UX; the mutual-exclusion logic lives in one place above).
+cmd_dood() { _pin_project_mode dood "$@"; }
+cmd_contain() { _pin_project_mode contain "$@"; }
+
+# cmd_default <dood|contain>
+# Manages the single global default sentinel ~/.config/drydock/default-dood.
+#   dood    → create it  (global default becomes DooD for new/unpinned projects)
+#   contain → remove it  (global default returns to contained = factory)
+# Secure-by-default lives at the DISTRIBUTION level (a fresh install has no
+# sentinel = contained); flipping the global default to dood is an explicit,
+# documented choice.
+cmd_default() {
+	local choice="${1:-}"
+	local sentinel="$HOME/.config/drydock/default-dood"
+	case "$choice" in
+	dood)
+		mkdir -p "$HOME/.config/drydock"
+		touch "$sentinel"
+		ok "global default mode: dood"
+		note "New/unpinned projects now run with the Docker socket + host network by default."
+		note "INV-6: the Docker socket is root-equivalent on the host."
+		;;
+	contain)
+		if [ -f "$sentinel" ]; then
+			rm -f "$sentinel"
+			ok "global default mode: contained"
+		else
+			note "global default already contained (factory)"
+		fi
+		;;
+	"") err "usage: drydock default <dood|contain>" ;;
+	*) err "unknown mode: $choice — expected 'dood' or 'contain'" ;;
+	esac
+}
+
+# _emit_mode_banner <project_name>
+# Print the active network/socket mode + the resolution reason. Call ONLY where a
+# container is CREATED (never on pure attach — an existing container's posture was
+# baked in at creation and may differ from a sentinel changed since). Wording is
+# honest: contained states only the two things actually removed (no Docker socket,
+# no host network) and makes NO egress claim — Phase 1 does not filter egress.
+_emit_mode_banner() {
+	local _proj="$1"
+	local _line _mode _reason
+	_line="$(resolve_run_mode "$_proj")"
+	_mode="${_line%% *}"
+	_reason="${_line#* }"
+	if [ "$_mode" = "dood" ]; then
+		note "drydock: DOOD mode (Docker socket · host network) — reason: $_reason"
+	else
+		note "drydock: CONTAINED mode (no Docker socket · no host network) — reason: $_reason"
+	fi
 }
 
 # ── cmd_link ──────────────────────────────────────────────────────────────────
@@ -2178,6 +2313,7 @@ cmd_new() {
 	local project_dir
 	project_dir="$(resolve_project_dir "")"
 	export_compose_env "$project_dir"
+	_emit_mode_banner "$PROJECT_NAME"
 
 	local compose_args=()
 	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
