@@ -18,7 +18,9 @@
 #
 # Pre-conditions:
 #   - drydock image built (drydock:latest present)
-#   - Docker socket available (/var/run/docker.sock)
+#   - Docker socket available (/var/run/docker.sock) — provided by dood mode overlay
+#     (docker-compose.dood.yml); DRYDOCK_DOOD=1 is set in setup() so compose_files()
+#     resolves to the dood overlay, keeping host net + socket for these exec tests
 #   - scripts/test.sh used as the test runner
 #
 # NOTE: Double-attach across two terminals (two concurrent compose exec calls) is
@@ -56,6 +58,12 @@ INTEGRATION_SESSION_NAME=""
 # ── Shared setup/teardown ────────────────────────────────────────────────────
 
 setup() {
+	# Pin to DooD mode so compose_files() resolves to docker-compose.dood.yml.
+	# These tests do real compose up/exec against the stack and require the Docker
+	# socket (for compose exec) and host network. Without this, the factory-default
+	# contained mode would attach a bridge network with no socket, breaking exec.
+	export DRYDOCK_DOOD=1
+
 	# Create a real project directory for export_compose_env.
 	mkdir -p "$INTEGRATION_PROJECT_DIR"
 

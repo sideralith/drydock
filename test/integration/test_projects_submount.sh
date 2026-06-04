@@ -36,17 +36,18 @@
 # reliable under DooD and on a bare host alike.
 #
 # CI wiring note: this test is LOCAL-ONLY and cannot run in GitHub Actions.
-# docker-compose.yml uses `network_mode: host`, which maps to the GHA runner's
-# container network namespace rather than a bare Linux host — `docker compose run`
-# with that mode produces unreliable results in DinD CI environments. Run this
-# test locally (host or drydock container) before merging changes to
-# docker-compose.yml or its volume list, or on a self-hosted runner with true
-# host networking.
+# network_mode: host (required here) now lives in docker-compose.dood.yml (the DooD
+# mode overlay); it is no longer in the base docker-compose.yml. The run_container()
+# helper below passes both -f docker-compose.yml and -f docker-compose.dood.yml
+# explicitly (DRYDOCK_DOOD=1 env alone is not enough — this file never calls
+# compose_files()). Run this test locally (host or drydock container) before merging
+# changes to docker-compose.yml, docker-compose.dood.yml, or their volume lists, or
+# on a self-hosted runner with true host networking.
 set -euo pipefail
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
 if [ "${DRYDOCK_INTEGRATION_HOSTNET:-}" != "1" ]; then
-	echo "SKIP: SR-9 integration test (requires Docker daemon and network_mode:host — set DRYDOCK_INTEGRATION_HOSTNET=1 to run)"
+	echo "SKIP: SR-9 integration test (requires Docker daemon and dood mode host network — set DRYDOCK_INTEGRATION_HOSTNET=1 to run)"
 	exit 0
 fi
 
@@ -164,6 +165,11 @@ run_container() {
 	# -e HOME=$FAKE_HOME → the launched container's in-container $HOME matches
 	# those mount targets, so `$HOME/.claude/...` in the test command lands on
 	# the bind mount instead of the image's baked /home/<user>.
+	# network_mode: host + the Docker socket now live in docker-compose.dood.yml
+	# (the DooD mode overlay). This test requires host networking for the
+	# shared-projects-store sub-mount assertion, so both compose files are passed
+	# explicitly. DRYDOCK_DOOD=1 env is not sufficient here because this function
+	# bypasses compose_files() and invokes docker compose directly.
 	env \
 		HOME="$FAKE_HOME" \
 		DRYDOCK_HOME="$DRYDOCK_HOME" \
@@ -180,6 +186,7 @@ run_container() {
 		DRYDOCK_SESSION_NAME="drydock-inttest-sr9-${disc}" \
 		docker compose \
 		-f "$DRYDOCK_HOME/docker-compose.yml" \
+		-f "$DRYDOCK_HOME/docker-compose.dood.yml" \
 		run --rm \
 		-e HOME="$FAKE_HOME" \
 		--name "drydock-inttest-sr9-${disc}" \
