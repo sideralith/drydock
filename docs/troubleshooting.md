@@ -259,6 +259,28 @@ chain. Look for:
 - **A heavy MCP server in `~/.claude.json`** — every Claude Code start
   loads MCP servers in parallel; a slow one delays first output.
 
+## `drydock attach` says my session is managed by zellij/tmux/screen
+
+If you launched drydock from *inside* a terminal multiplexer (zellij, tmux, or
+screen — or with `DRYDOCK_NESTED=1`), the session runs as an **ephemeral nested
+session** (`docker compose run --rm`) that lives in the multiplexer pane where
+you started it — not as a persistent `up -d` container. It still appears in
+`drydock list` and the interactive selector, but it cannot be re-`exec`'d into
+from a second terminal the way a persistent session can.
+
+So when you select it (or run `drydock attach <name>`), drydock detects the
+nested session and — instead of attaching — prints how to get back to it:
+
+```
+This is a nested drydock session in your zellij terminal.
+To reattach, switch to that window or run:  zellij attach <session>
+```
+
+(the equivalent is `tmux attach -t <session>` or `screen -r <session>`). This
+is expected — switch back to the multiplexer window, or run the printed
+command. To start a *fresh* persistent session instead, run `drydock new` from
+a terminal that is not inside a multiplexer.
+
 ## A command was unexpectedly blocked by the guardrail layer
 
 drydock ships a two-tier guardrail layer. Both tiers are tamper-proof — Tier 1
