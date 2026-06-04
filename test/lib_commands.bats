@@ -3572,6 +3572,16 @@ STUB
 	[[ "$output" == *"root-equivalent"* ]]
 }
 
+@test "cmd_dood: unknown flag exits non-zero (unknown option)" {
+	export HOME="$BATS_TEST_TMPDIR/dood-badflag-$$"
+	mkdir -p "$HOME/.config/drydock"
+
+	run cmd_dood myproj --bogus
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"unknown option"* ]]
+	[ ! -f "$HOME/.config/drydock/dood/myproj" ]
+}
+
 # ── dual-mode: _emit_mode_banner (PR2) ────────────────────────────────────────
 # The creation-time banner. Honest wording is the contract: contained mode names
 # only what it actually removes (no Docker socket, no host network) and makes NO
@@ -3692,6 +3702,10 @@ STUB
 	[[ "$output" == *"no host network"* ]]
 	# Honest framing: contained mode must NOT overclaim egress containment.
 	[[ "$output" != *"isolated net"* ]]
+	[[ "$output" != *"filtered"* ]]
+	[[ "$output" != *"blocked"* ]]
+	# The deciding reason must be surfaced (factory default for a fresh project).
+	[[ "$output" == *"factory default"* ]]
 
 	cd - >/dev/null
 	rm -rf "$tmpdir"
@@ -3727,6 +3741,8 @@ STUB
 	[[ "$output" == *"docker-compose.dood.yml"* ]]
 	[[ "${output,,}" == *"dood"* ]]
 	[[ "$output" == *"root-equivalent"* ]]
+	# The deciding reason must be surfaced (env override here).
+	[[ "$output" == *"env override"* ]]
 
 	cd - >/dev/null
 	rm -rf "$tmpdir"
