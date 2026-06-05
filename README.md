@@ -8,8 +8,9 @@
 
 </div>
 
-> Containerized workspace, host Docker socket access for project tooling,
-> isolated memory and config from the host. Multi-project, single-image.
+> Containerized workspace with isolated memory and config from the host —
+> contained by default, with an opt-in Docker-out-of-Docker mode for stack
+> tooling. Multi-project, single-image.
 >
 > Currently supports **Claude Code**. Adapters for other agents are on the
 > [roadmap](#roadmap).
@@ -32,14 +33,19 @@ Debian 12 slim container that:
   the same repo (a human session alongside an agent, or two parallel agents on
   different branches); each gets its own container and isolated Claude config, so
   concurrent sessions never clobber each other's settings or auth state.
-- **Bind-mounts the Docker socket (DooD)** — the containerized agent talks to
-  your host Docker daemon, so it can bring your project's stack up, `docker exec`
-  into a running service, and run its tests or migrations against the host
-  containers, exactly as from the host.
+- **Contained by default; opt-in Docker-out-of-Docker (DooD)** — by default the
+  container has no Docker socket and no host networking (contained mode). Opt a
+  project into dood mode (`drydock dood <proj>`) and the agent talks to your host
+  Docker daemon, so it can bring your project's stack up, `docker exec` into a
+  running service, and run its tests or migrations against the host containers,
+  exactly as from the host. Contained mode still reaches the internet — Phase 1
+  does not filter egress.
 
 > **Threat model**: defense against agent **accidents**, not against an
-> adversarial agent — Docker socket access ≈ root-equivalent on the host.
-> Read [docs/security.md](docs/security.md) before relying on it.
+> adversarial agent. In opt-in dood mode the Docker socket is root-equivalent on
+> the host; contained mode (the default) removes the socket and host networking,
+> but does not filter egress. Read [docs/security.md](docs/security.md) before
+> relying on it.
 
 ### Claude Code's sandbox mode vs. drydock
 
@@ -51,11 +57,11 @@ Debian 12 slim container that:
 | **Scope** | Each Bash command and its subprocesses | The whole session and its environment |
 | **What it's for** | Contain a command's blast radius; cut permission prompts | A reproducible, credential-isolated dev environment |
 | **Filesystem** | Writes limited to the working directory; reads allowed everywhere by default | Host `~/.ssh`, `~/.gnupg`, `~/.aws`… are not mounted at all — invisible, not merely write-protected |
-| **Network** | Per-command domain allowlist | Inherits the container's network — not per-command |
+| **Network** | Per-command domain allowlist | Contained by default (no host network, no socket); opt-in dood mode shares the host network — not per-command |
 | **Reproducible environment** | No — it restricts the host you already have | Yes — pinned Debian image + defined toolchain |
 | **State** | Uses the host's Claude state as-is — no separation | Separate container state — host and container sessions don't race |
 | **Mechanism** | OS sandbox — Seatbelt (macOS), bubblewrap (Linux) | Docker container |
-| **Threat model** | A real OS boundary for a command's writes/network (the network proxy does not inspect TLS) | Accidents, not adversaries — the bind-mounted Docker socket is root-equivalent on the host by design (INV-6) |
+| **Threat model** | A real OS boundary for a command's writes/network (the network proxy does not inspect TLS) | Accidents, not adversaries — contained by default (no socket); in opt-in dood mode the Docker socket is root-equivalent on the host (INV-6) |
 
 **Which one applies.** In practice you use one, by context. Running Claude Code directly on the host — its sandbox mode contains each Bash command. Running it through drydock — the container is the containment. Claude Code's sandbox does **not** run inside a drydock container as drydock ships today: the image includes no bubblewrap, and the container does not permit the unprivileged user namespaces the Linux sandbox is built on.
 
@@ -209,10 +215,25 @@ a project before launching `drydock` in it — `.claude/settings.json` is create
 by Claude Code on demand (when you add MCP servers, hooks, or permissions),
 and stays optional.
 
-Inside the container, everything works as on host: `docker compose` against
-your stack, `docker exec` into a service, `curl http://localhost:PORT/...`,
-`git`, `gh`, etc. Whatever your project wraps those in (a Makefile, npm
-scripts, a justfile) runs the same way.
+By default drydock runs in **contained mode**: no Docker socket and no host
+networking. `git`, `gh`, and the agent's own internet access still work (Phase 1
+does not filter egress), but stack-dependent commands that need the host daemon or
+host network — `docker compose` against your stack, `docker exec` into a service,
+`curl http://localhost:PORT/...`, `make shell-api` — do **not** work in contained
+mode. They require **dood mode** (opt-in), which bind-mounts the host Docker socket
+(root-equivalent on the host, INV-6) and shares the host network:
+
+```bash
+drydock dood <proj>            # pin this project to dood mode (stack tooling works)
+drydock dood --remove <proj>   # drop the pin (follow the global default)
+drydock default dood           # make dood the default for all new/unpinned projects
+drydock contain <proj>         # pin back to contained (mutually exclusive with dood)
+```
+
+Resolution is most-specific-wins (`DRYDOCK_DOOD=1` env > per-project pin > global
+default > factory contained), ties fail closed to contained, and the active mode +
+reason print at container creation and in `drydock doctor`. See INV-9 in CLAUDE.md
+and [docs/security.md](docs/security.md).
 
 | Command | What it does |
 |---|---|
@@ -225,6 +246,9 @@ scripts, a justfile) runs the same way.
 | `drydock link [--rw] [--mirror] <PATH> [CONTAINER-PATH]` | Mount a sibling project inside the container at `/workspace-siblings/<name>` (or a custom path). Without `--rw`: read-only mount, no key needed. With `--rw`: read-write mount; generates a per-sibling deploy key and managed SSH config so the agent can `git push` from the sibling without exposing `~/.ssh/`. With `--mirror`: mount at the same host path inside the container (host-path-mirror — fixes in-project skill symlinks to external paths). |
 | `drydock unlink [--rw\|--mirror] PATH` | Remove a sibling mount from the current project's list (`--rw` and `--mirror` are accepted and ignored — the entry is keyed by host path) |
 | `drydock links` | Show all sibling mounts configured for the current project |
+| `drydock default <dood\|contain>` | Set the global default network/socket mode for new/unpinned projects |
+| `drydock dood <proj> [--remove]` | Pin a project to dood mode (host Docker socket + host network; INV-6 root-equivalent) |
+| `drydock contain <proj> [--remove]` | Pin a project to contained mode (no socket, no host network) |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host — runs automatically when the container copy is stale (set `DRYDOCK_SKIP_AUTOSYNC=1` to disable) |
 | `drydock build` | Build/rebuild `drydock:latest` |
 | `drydock status` / `doctor` | Health snapshot / full diagnostics |
@@ -361,12 +385,14 @@ to `~/.claude/` on the host. To stop applying a config, remove it from
 ## Architecture
 
 The container runs the Claude CLI, your plugins/skills, and — optionally — the
-engram MCP server (see [docs/engram.md](docs/engram.md)), with the Docker socket
+engram MCP server (see [docs/engram.md](docs/engram.md)). The network/socket
+posture is per-session (INV-9): in opt-in dood mode the host Docker socket is
 bind-mounted (Docker-out-of-Docker — talks to the host's daemon, no nested
-daemon). Host config lives in two places (`~/.claude/` directory and
+daemon) and the host network is shared; in contained mode (the default) neither
+is present. Host config lives in two places (`~/.claude/` directory and
 `~/.claude.json` file); drydock mounts per-session container-specific siblings
-of both (seeded from a shared prototype each run), the project tree, and the
-docker socket. Hooks are RO. The image is universal — only
+of both (seeded from a shared prototype each run) and the project tree. Hooks
+are RO. The image is universal — only
 env vars (`PROJECT_DIR` etc.) change per project; a dynamically-generated overlay
 propagates sub-mounts under `$PROJECT_DIR`. A second dynamically-generated overlay
 mounts linked sibling projects (see `drydock link` and [docs/links.md](docs/links.md)).

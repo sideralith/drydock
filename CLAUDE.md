@@ -307,6 +307,46 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   the overlay unless `DRYDOCK_NO_HARDENING` is set to the literal value `"1"`).
 - **Deep dive**: [docs/security.md](docs/security.md)
 
+### INV-9: Dual-Mode Network/Socket Containment
+
+- **Rule**: The container's network/socket posture MUST be a per-session CHOICE delivered by
+  exactly ONE mode overlay, never a hardcoded field in the base `docker-compose.yml`. Two modes
+  exist: **dood** (`network_mode: host` + the `/var/run/docker.sock` bind — threat model A,
+  unchanged, opt-in) and **contained** (a drydock-managed bridge network, NO socket, NO host
+  networking — the factory default, targeting threat model B for external-ingestion work).
+  The base compose file MUST be network-neutral. Mode resolution MUST be most-specific-wins and
+  fail-closed (any same-level conflict resolves to contained), and the active mode + reason MUST
+  be printed at container creation. PHASE 1 NOTE: contained mode does NOT filter egress — the
+  bridge has no `internal: true` and the agent still reaches the internet. A domain-allowlist
+  egress jail is a separate future change; doctrine MUST NOT describe Phase 1 contained mode as
+  real egress containment.
+- **Why**: Until Phase 1, every session — including external-ingestion work (research,
+  third-party dependency review, foreign-issue/PR triage) that processes untrusted content the
+  agent did not author — carried the full host blast radius: host networking plus a
+  root-equivalent socket (INV-6). The §4 boundary is reopened here by documented real demand —
+  the maintainer's external-ingestion workflow — exactly the "concrete use case from a real
+  user" §4 requires. Falsifiable failure mode WITHOUT this invariant: a session reviewing an
+  untrusted third-party dependency runs `docker run -v /:/host --privileged` (one line, INV-6)
+  via the always-present socket and reads the entire host filesystem — with no posture choice
+  available to the operator to prevent it. Contained mode removes that socket and host-network
+  reach for the default case; dood mode keeps them for stack work that genuinely needs them.
+- **Consequence of violating**: If the base hardcodes the socket/host-net again (or the gate
+  emits both/neither overlay), external-ingestion sessions silently regain the full host blast
+  radius with no operator signal — the exact wound this invariant closes — or `docker compose
+  config` fails fatally (`network_mode` and `networks:` are mutually exclusive), breaking every
+  `drydock run`.
+- **Honest framing**: This is a deliberate, documented move toward threat model B FOR THE
+  CONTAINED MODE — not a cosmetic relabelling of an unchanged posture. Both truths hold:
+  contained mode targets B (and Phase 1 reaches it only partially — no egress filter yet);
+  dood mode REMAINS threat model A, unchanged.
+- **Where this lives in code**: `docker-compose.dood.yml` and `docker-compose.contain.yml`
+  (the two mode overlays); `resolve_run_mode()`, `compose_files()`, and the COMPOSE_DOOD /
+  COMPOSE_CONTAIN constants in `lib/compose.sh`; `_emit_mode_banner()`, `cmd_dood` /
+  `cmd_contain` / `cmd_default` / `_pin_project_mode` in `lib/commands.sh`; the dispatch
+  entries in `bin/drydock`; the sentinels under `~/.config/drydock/{dood,contain}/<proj>` and
+  `~/.config/drydock/default-dood`.
+- **Deep dive**: [docs/security.md](docs/security.md)
+
 ## 3. Code / Tooling Conventions
 
 ### Bash
@@ -337,10 +377,10 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   host stack because the container's daemon has no knowledge of the host's running services.
 - **Consequence of violating**: `make shell-api` and all compose-targeting commands that require
   the Docker socket or the host network stack require dood mode; they do NOT work in the default
-  contained mode. To switch a project to dood mode set `DRYDOCK_DOOD=1` in the environment, or
-  create the sentinel file `~/.config/drydock/dood/<proj>`. To make dood the global default
-  create `~/.config/drydock/default-dood`. (An ergonomic `drydock dood`/`drydock default` CLI
-  lands in a later slice.)
+  contained mode. To switch a project to dood mode run `drydock dood <proj>` (or set
+  `DRYDOCK_DOOD=1`, or create the sentinel `~/.config/drydock/dood/<proj>`); to make dood the
+  global default run `drydock default dood` (or create `~/.config/drydock/default-dood`). The
+  active mode + reason print at container creation and in `drydock doctor`. See INV-9.
 
 See `→ CONTRIBUTING.md` for the testing and lint contract.
 
@@ -360,6 +400,12 @@ a motivated attacker who controls the agent's input and is trying to escape the 
 - **Consequence of violating**: drydock becomes a sandbox-platform meta-project, drifts from its
   ergonomic-dev-workspace niche, and fails to ship because it is competing on sandboxing with
   gVisor and firecracker rather than solving the problem it was built for.
+
+Issue #149 Phase 1 reopens this boundary by documented real demand — the maintainer's
+external-ingestion workflow (research, third-party dependency review, foreign-issue/PR triage).
+INV-9 records the outcome: a contained-by-default mode (no Docker socket, no host network)
+targeting threat model B for that work, alongside the unchanged opt-in dood mode (threat model
+A). Phase 1 does NOT filter egress; a domain-allowlist egress jail is a separate future change.
 
 See `→ docs/security.md`.
 

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — network/socket mode is now contained by default** (#149). drydock
+  no longer mounts the host Docker socket or shares the host network by default.
+  A fresh install runs in **contained mode** (no Docker socket, no host network),
+  shrinking the host blast radius for external-ingestion work. The previous
+  always-on behavior is now **dood mode**, opt-in per project. Phase 1 does NOT
+  filter egress — a contained container still reaches the internet; a
+  domain-allowlist egress jail is future work.
+  - **What stops working in contained mode**: `docker` / `docker compose` /
+    `docker exec` against the host stack, `curl http://localhost:PORT/...`, and
+    `make shell-api` — anything that needs the host Docker daemon or host network.
+  - **Restore the previous behavior**: `drydock dood <proj>` (one project) or
+    `drydock default dood` (global). Per invocation: `DRYDOCK_DOOD=1 drydock`.
+
+### Added
+
+- **`drydock default <dood|contain>` / `drydock dood <proj> [--remove]` /
+  `drydock contain <proj> [--remove]`** (#149). Manage the network/socket mode: a
+  global default sentinel plus mutually-exclusive per-project pins. Resolution is
+  most-specific-wins (env > per-project pin > global default > factory contained)
+  and fails closed to contained.
+- **Creation-time mode banner** (#149). `drydock run`/`new`/`shell` print the
+  active mode + the reason it was chosen before the container starts (never on
+  attach).
+- **`drydock doctor` reports the active network/socket mode** (#149) in its
+  COMPOSE OVERLAYS section.
+
 ## [0.3.3] - 2026-06-03
 
 Session-lifecycle completion plus release-hardening. Finishes the #131
