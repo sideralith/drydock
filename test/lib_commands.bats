@@ -3748,9 +3748,12 @@ STUB
 	rm -rf "$tmpdir"
 }
 
-# ── Phase 2 egress jail — cmd_build mode-gated image build ───────────────────
-# Tests use the DOCKER seam (mock-docker logs every call to DOCKER_CALL_LOG) to
-# assert whether the egress sidecar image is built alongside the main image.
+# ── Phase 2 egress jail — cmd_build unconditional egress image build (FIX3) ───
+# drydock-egress:latest is a GLOBAL image — it must be built regardless of the
+# current project's mode. Gating it on resolve_run_mode was a category mismatch:
+# a dood-pinned cwd would produce no sidecar image, then a contained-default
+# project would have none. Build unconditionally per design §6a.
+# Tests use the DOCKER seam; two distinct mode inputs prove mode-independence.
 
 @test "cmd_build: contained mode — builds drydock-egress image" {
 	local fakehome="$BATS_TEST_TMPDIR/build-contain-home-$$"
@@ -3778,7 +3781,7 @@ STUB
 	[[ "$log" == *"Dockerfile.egress"* ]]
 }
 
-@test "cmd_build: dood mode — does NOT build drydock-egress image" {
+@test "cmd_build: dood mode — STILL builds drydock-egress image (not mode-gated, FIX3)" {
 	local fakehome="$BATS_TEST_TMPDIR/build-dood-home-$$"
 	mkdir -p "$fakehome"
 	export HOME="$fakehome"
@@ -3797,9 +3800,10 @@ STUB
 
 	cmd_build
 
-	# Main image must be built; egress image must NOT be built in dood mode.
+	# Both the main image build AND the egress image build must appear — the
+	# image is global; dood mode does NOT gate it out.
 	local log
 	log="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log" == *"drydock:latest"* ]]
-	[[ "$log" != *"Dockerfile.egress"* ]]
+	[[ "$log" == *"Dockerfile.egress"* ]]
 }
