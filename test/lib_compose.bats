@@ -3374,3 +3374,124 @@ _egress_fake_home() {
 	[ "$before" = "$after" ]
 	[ "$after" = "git@github.com:owner/repo.git" ]
 }
+
+# ── Phase 2 egress jail — sidecar lifecycle (gc reap, collision, ensure_image) ─
+
+@test "gc_orphan_session_dirs: reaps an orphaned -egress sidecar when the agent is gone (A2.T3)" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-egress-reap"
+	mkdir -p "$fake_home"
+	# Orphan dir for disc "dead" (4-char hex → passes the generator-shape guard).
+	mkdir -p "$fake_home/.claude-container-dead"
+	touch "$fake_home/.claude-container-dead.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# ps -a: the AGENT (drydock-myproject-dead) is gone, but its per-session sidecar
+	# lingers. The sidecar name does NOT match the liveness regex (…-dead(-shell)?$),
+	# so the dir is correctly seen as orphaned — and the sidecar must be reaped.
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-dead-egress")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Dir reaped (proves the sidecar did NOT falsely protect the orphan dir, A6).
+	[ ! -d "$fake_home/.claude-container-dead" ]
+	# Orphaned sidecar rm -f'd.
+	grep -q "rm -f drydock-myproject-dead-egress" "$DOCKER_CALL_LOG"
+}
+
+@test "gc_orphan_session_dirs: a live agent still protects its dir even with an -egress sidecar present" {
+	# Belt-and-suspenders for A6: the liveness regex must NOT be widened to -egress.
+	# When the AGENT is live, the dir is protected; the (also-present) sidecar is NOT
+	# reaped (it belongs to a live session).
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-egress-live"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-beef"
+	touch "$fake_home/.claude-container-beef.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Both the live agent and its sidecar are present.
+	local stub
+	stub="$(_make_docker_ps_stub "drydock-myproject-beef
+drydock-myproject-beef-egress")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	# Live agent → dir protected.
+	[ -d "$fake_home/.claude-container-beef" ]
+	# Sidecar of a LIVE session must NOT be reaped.
+	! grep -q "rm -f drydock-myproject-beef-egress" "$DOCKER_CALL_LOG"
+}
+
+@test "export_compose_env: COLLISION — a disc whose -egress sidecar lingers is treated as taken (A6)" {
+	local fake_home="$BATS_TEST_TMPDIR/wire-home-egresscoll-$$"
+	_setup_wiring_home "$fake_home"
+	export HOME="$fake_home"
+	# disc fn: first "eeee" (its -egress sidecar lingers → must be rejected),
+	# then "ffff" (free).
+	local call_count_file="$BATS_TEST_TMPDIR/disc-egresscoll-count-$$"
+	printf '0' >"$call_count_file"
+	_seq_disc_egresscoll() {
+		local n
+		n="$(cat "$call_count_file")"
+		printf '%s' "$((n + 1))" >"$call_count_file"
+		case "$n" in
+			0) printf 'eeee' ;;
+			*) printf 'ffff' ;;
+		esac
+	}
+	export DRYDOCK_DISCRIMINATOR_FN=_seq_disc_egresscoll
+	# ps seq: call0 gc → "" (no orphan dirs); call1 collision "eeee" → a lingering
+	# -egress sidecar; call2 collision "ffff" → free.
+	local counter_file="$BATS_TEST_TMPDIR/docker-ps-counter-egresscoll-$$"
+	printf '0' >"$counter_file"
+	local stub
+	stub="$(_make_docker_ps_seq_stub "$counter_file" "" "drydock-myproject-eeee-egress" "")"
+	export DOCKER="$stub"
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/docker-calls-egresscoll-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export_compose_env "$TEST_PROJECT_DIR"
+	# Without the -egress arm in the collision regex, "eeee" would be picked.
+	[[ "$COMPOSE_PROJECT_NAME" == "drydock-myproject-ffff" ]]
+}
+
+@test "ensure_image: contained mode + egress image missing → triggers cmd_build (A2.T4 forward)" {
+	export HOME="$BATS_TEST_TMPDIR/ei-contained-$$"
+	mkdir -p "$HOME"
+	export PROJECT_NAME="myproject"
+	# Agent image present; resolver → contained (clean HOME, no sentinels/env).
+	image_exists() { return 0; }
+	local marker="$BATS_TEST_TMPDIR/ei-build-marker-$$"
+	cmd_build() { printf 'BUILT\n' >>"$marker"; }
+	# docker stub: `image inspect <egress>` → missing (exit 1).
+	local stub="$BATS_TEST_TMPDIR/ei-docker-$$"
+	cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "${DOCKER_CALL_LOG:?}"
+[ "${1:-}" = "image" ] && exit 1
+exit 0
+STUB
+	chmod +x "$stub"
+	export DOCKER="$stub"
+	ensure_image
+	[ -f "$marker" ]
+}
+
+@test "ensure_image: dood mode + egress image missing → does NOT build it (dood unaffected, INV-9)" {
+	export HOME="$BATS_TEST_TMPDIR/ei-dood-$$"
+	mkdir -p "$HOME"
+	export PROJECT_NAME="myproject"
+	export DRYDOCK_DOOD=1
+	image_exists() { return 0; }
+	local marker="$BATS_TEST_TMPDIR/ei-dood-marker-$$"
+	cmd_build() { printf 'BUILT\n' >>"$marker"; }
+	local stub="$BATS_TEST_TMPDIR/ei-dood-docker-$$"
+	cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "${DOCKER_CALL_LOG:?}"
+[ "${1:-}" = "image" ] && exit 1
+exit 0
+STUB
+	chmod +x "$stub"
+	export DOCKER="$stub"
+	ensure_image
+	[ ! -f "$marker" ]
+	unset DRYDOCK_DOOD
+}

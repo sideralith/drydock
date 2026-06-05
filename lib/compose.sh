@@ -648,14 +648,20 @@ export_compose_env() {
 		_disc="$("$DRYDOCK_DISCRIMINATOR_FN")"
 		_session_name="drydock-${PROJECT_NAME}-${_disc}"
 		_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
-		# Check if any container (any project) already uses this disc — match
-		# both the run name (drydock-<proj>-<disc>) and the shell companion
-		# (drydock-<proj>-<disc>-shell).  --format '{{.Names}}' gives one name
-		# per line so ^ and $ anchors are exact; no column-padding false-matches.
+		# Check if any container (any project) already uses this disc — match the
+		# run name (drydock-<proj>-<disc>), the shell companion
+		# (drydock-<proj>-<disc>-shell), AND the Phase 2 egress sidecar
+		# (drydock-<proj>-<disc>-egress).  --format '{{.Names}}' gives one name per
+		# line so ^ and $ anchors are exact; no column-padding false-matches.
+		# Including -egress here (A6) means a disc whose sidecar still lingers after a
+		# run --rm reap-gap is not reused before gc clears it — belt-and-suspenders
+		# against a container_name collision on the next `up`. NOTE: this is the
+		# COLLISION-retry regex ONLY; gc_orphan_session_dirs' liveness regex must NOT
+		# gain -egress (a live sidecar must not protect an orphaned dir — A6).
 		# Also treat a pre-existing session dir as "taken": a concurrent launch has
 		# already reserved that disc and its dir is protected by the GRACE check in
 		# gc_orphan_session_dirs (in-flight marker present, not yet in docker ps).
-		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell)?$" ||
+		if printf '%s\n' "$_ps_out" | grep -qE "^drydock-.+-${_disc}(-shell|-egress)?$" ||
 			[ -d "$HOME/.claude-container-${_disc}" ]; then
 			# The collision check is project-agnostic (any drydock-*-<disc> match),
 			# but the rm targets only THIS project's container for that disc.
@@ -950,6 +956,17 @@ gc_orphan_session_dirs() {
 			if [ "$_age" -lt "${DRYDOCK_SESSION_GC_GRACE:-300}" ]; then
 				continue
 			fi
+		fi
+		# Phase 2: reap an orphaned egress sidecar for this disc. The run --rm paths
+		# (nested run, shell) remove only the oneoff agent and exec away, leaving
+		# drydock-<proj>-<disc>-egress running. We are in the orphan branch, so the
+		# agent for this disc is already confirmed absent — any matching -egress
+		# sidecar is orphaned. Project-agnostic match, like the liveness check above.
+		# Best-effort; never fatal.
+		local _orphan_sidecar
+		_orphan_sidecar="$(printf '%s\n' "$_ps_out" | grep -E "^drydock-.+-${_disc}-egress$" || true)"
+		if [ -n "$_orphan_sidecar" ]; then
+			"$DOCKER" rm -f "$_orphan_sidecar" >/dev/null 2>&1 || true
 		fi
 		# Orphan — rescue durable conversation history, then prune the dir
 		# and its sibling .json (issue #68).
@@ -1246,6 +1263,20 @@ ensure_runtime_dirs() {
 ensure_image() {
 	if ! image_exists; then
 		note "image $IMAGE no construida — building now"
+		cmd_build
+		return
+	fi
+	# Phase 2: contained mode ALSO requires the egress proxy sidecar image. Resolve
+	# the mode purely (env + sentinels) from the current project and require the
+	# sidecar image ONLY in contained mode. dood MUST NOT require or build it: a
+	# dood-only host that is offline, with the agent image present but no
+	# drydock-egress image, would otherwise be blocked when cmd_build's apt step
+	# fails without network — a dood regression (INV-9: dood unaffected).
+	local _ei_proj _ei_mode
+	_ei_proj="${PROJECT_NAME:-$(sanitize_project_name "$(basename "$PWD")")}"
+	_ei_mode="$(resolve_run_mode "$_ei_proj" | cut -d' ' -f1)"
+	if [ "$_ei_mode" = "contained" ] && ! "$DOCKER" image inspect "$EGRESS_IMAGE" >/dev/null 2>&1; then
+		note "egress sidecar image $EGRESS_IMAGE not built — building now"
 		cmd_build
 	fi
 }

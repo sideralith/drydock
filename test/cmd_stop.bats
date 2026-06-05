@@ -110,6 +110,19 @@ STUB
 	grep -q "drydock-myproj-ab12" "$DOCKER_CALL_LOG"
 }
 
+@test "cmd_stop: Phase 2 — also rm -f's the -egress sidecar (two-name teardown)" {
+	# The per-session egress sidecar must be torn down alongside the agent. The
+	# sidecar rm is guarded (2>/dev/null || true) so a stop in dood mode (no sidecar)
+	# does NOT fail; here we assert the -egress rm is issued for a contained session.
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12")"
+	export DOCKER="$stub"
+
+	run cmd_stop "ab12"
+	[ "$status" -eq 0 ]
+	grep -q "rm -f drydock-myproj-ab12-egress" "$DOCKER_CALL_LOG"
+}
+
 # ── Scenario (b): no arg + exactly 1 live session → direct stop ──────────────
 
 @test "cmd_stop: no arg + 1 live session → stops it directly without menu (REQ-7-M sub-scenario b)" {

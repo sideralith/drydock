@@ -150,6 +150,18 @@ STUB
 	! grep -q "compose down" "$DOCKER_CALL_LOG"
 }
 
+# ── T2.3: Phase 2 — teardown is a TWO-NAME rm -f (agent + -egress sidecar) ────
+
+@test "_run_claude_lifecycle: teardown rm -f's the agent AND its -egress sidecar (Phase 2)" {
+	# GIVEN a contained session whose per-session sidecar is drydock-myproj-ab12-egress
+	# WHEN _run_claude_lifecycle tears down (TRAP A, parent survives)
+	# THEN a single rm -f removes BOTH names (the -egress arg is a no-op in dood /
+	# when already gone, absorbed by the || true guard).
+	run _run_claude_lifecycle "drydock-myproj-ab12" compose -p "drydock-myproj-ab12" exec -it drydock claude
+	[ "$status" -eq 0 ]
+	grep -q "rm -f drydock-myproj-ab12 drydock-myproj-ab12-egress" "$DOCKER_CALL_LOG"
+}
+
 # ── T1.7: _launch_new delegates exec to _run_claude_lifecycle (D-8) ──────────
 
 @test "_launch_new: delegates to _run_claude_lifecycle — teardown rm -f appears after up -d (D-8)" {

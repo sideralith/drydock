@@ -3582,12 +3582,12 @@ STUB
 	[ ! -f "$HOME/.config/drydock/dood/myproj" ]
 }
 
-# ── dual-mode: _emit_mode_banner (PR2) ────────────────────────────────────────
+# ── dual-mode: _emit_mode_banner (PR2 + Phase 2 egress jail) ───────────────────
 # The creation-time banner. Honest wording is the contract: contained mode names
-# only what it actually removes (no Docker socket, no host network) and makes NO
-# egress-filtering claim (Phase 1 does not filter egress). resolve_run_mode reads
-# $HOME at runtime, so the sentinels under an isolated HOME drive the mode/reason.
-# (INV-9, REQ-4.)
+# what it removes (no Docker socket, no host network) AND, since Phase 2, names the
+# deny-by-default egress allowlist (without over-claiming — no "egress-proof").
+# resolve_run_mode reads $HOME at runtime, so the sentinels under an isolated HOME
+# drive the mode/reason. (INV-9, REQ-4, REQ-6.)
 
 @test "_emit_mode_banner: contained mode output contains 'no host network'" {
 	export HOME="$BATS_TEST_TMPDIR/ban-contain-$$"
@@ -3609,15 +3609,57 @@ STUB
 	[[ "$output" != *"isolated net"* ]]
 }
 
-@test "_emit_mode_banner: contained mode makes no egress-filtering claim ('filtered'/'blocked')" {
+@test "_emit_mode_banner: contained mode names the egress allowlist (Phase 2) + allowlist path hint" {
 	export HOME="$BATS_TEST_TMPDIR/ban-egress-$$"
+	mkdir -p "$HOME/.config/drydock"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	unset DRYDOCK_EGRESS_FILTER_FILE
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	# Phase 2: contained mode jails egress behind an allowlist — the banner says so.
+	[[ "$output" == *"egress"* ]]
+	[[ "$output" == *"allowlist"* ]]
+	# Actionable hint: where the user adds domains.
+	[[ "$output" == *"~/.config/drydock/egress-allowlist"* ]]
+}
+
+@test "_emit_mode_banner: contained mode does NOT over-claim ('egress-proof'/'exfiltration-proof')" {
+	export HOME="$BATS_TEST_TMPDIR/ban-noproof-$$"
 	mkdir -p "$HOME/.config/drydock"
 	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
 
 	run _emit_mode_banner myproj
 	[ "$status" -eq 0 ]
-	[[ "$output" != *"filtered"* ]]
-	[[ "$output" != *"blocked"* ]]
+	[[ "$output" != *"egress-proof"* ]]
+	[[ "$output" != *"exfiltration-proof"* ]]
+}
+
+@test "_emit_mode_banner: contained mode reports the allowlisted domain count from the filter file" {
+	export HOME="$BATS_TEST_TMPDIR/ban-count-$$"
+	mkdir -p "$HOME/.config/drydock"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	# A 3-line effective filter → the banner reports "3 allowlisted domain(s)".
+	local filter="$BATS_TEST_TMPDIR/ban-count-filter-$$"
+	printf '%s\n' 'api.anthropic.com' 'example.com' 'registry.npmjs.org' >"$filter"
+	export DRYDOCK_EGRESS_FILTER_FILE="$filter"
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"3 allowlisted domain"* ]]
+	unset DRYDOCK_EGRESS_FILTER_FILE
+}
+
+@test "_emit_mode_banner: dood mode emits NO egress-jail line (regression)" {
+	export HOME="$BATS_TEST_TMPDIR/ban-dood-noegress-$$"
+	mkdir -p "$HOME/.config/drydock/dood"
+	touch "$HOME/.config/drydock/dood/myproj"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run _emit_mode_banner myproj
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"egress jail"* ]]
+	[[ "$output" != *"allowlist"* ]]
 }
 
 @test "_emit_mode_banner: dood mode identifies the dood mode (case-insensitive)" {
@@ -3700,12 +3742,48 @@ STUB
 	[[ "$output" == *"docker-compose.contain.yml"* ]]
 	[[ "$output" == *"contained"* ]]
 	[[ "$output" == *"no host network"* ]]
-	# Honest framing: contained mode must NOT overclaim egress containment.
+	# Honest framing: contained mode must NOT overclaim ("egress-proof").
 	[[ "$output" != *"isolated net"* ]]
-	[[ "$output" != *"filtered"* ]]
-	[[ "$output" != *"blocked"* ]]
+	[[ "$output" != *"egress-proof"* ]]
+	[[ "$output" != *"exfiltration-proof"* ]]
+	# Phase 2: the contained-mode overlay line names the egress allowlist posture.
+	[[ "$output" == *"egress allowlist"* ]]
 	# The deciding reason must be surfaced (factory default for a fresh project).
 	[[ "$output" == *"factory default"* ]]
+
+	cd - >/dev/null
+	rm -rf "$tmpdir"
+}
+
+@test "cmd_doctor: EGRESS section present in contained mode (baseline domain count, R7/§7b)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	mkdir -p "$fakehome/.claude-container"
+	touch "$fakehome/.claude-container.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+	image_exists() { return 1; }
+
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	local tmpdir
+	tmpdir="$(mktemp -d "$BATS_TEST_TMPDIR/proj-XXXX")"
+	cd "$tmpdir"
+
+	run cmd_doctor
+	[ "$status" -eq 0 ]
+	# A dedicated EGRESS section reports the shipped baseline (the source of the
+	# allowlist) for contained mode. EGRESS_BASELINE ships in the repo templates/.
+	[[ "$output" == *"EGRESS"* ]]
+	[[ "$output" == *"baseline"* ]]
 
 	cd - >/dev/null
 	rm -rf "$tmpdir"
