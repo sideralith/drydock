@@ -821,9 +821,15 @@ export_compose_env() {
 	_egress_mode="$(resolve_run_mode "$PROJECT_NAME" | cut -d' ' -f1)"
 	if [ "$_egress_mode" = "contained" ]; then
 		_generate_egress_filter "$PROJECT_NAME" "$_disc"
+		# Sidecar container name: disc-parameterised, mirrors the agent container
+		# name (DRYDOCK_SESSION_NAME already exported above). Using the exported
+		# var means the two names can NEVER diverge if the session-name formula
+		# ever changes — no hand-reconstruction of the drydock-<proj>-<disc> prefix.
+		export DRYDOCK_SIDECAR_NAME="${DRYDOCK_SESSION_NAME}-egress"
 	else
 		# dood: ensure no stale contained-mode vars leak into this invocation.
 		unset DRYDOCK_EGRESS_FILTER_FILE
+		unset DRYDOCK_SIDECAR_NAME
 	fi
 }
 

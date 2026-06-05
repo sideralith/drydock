@@ -3318,6 +3318,35 @@ _egress_fake_home() {
 	[[ "$output" == *"unreadable"* ]]
 }
 
+@test "export_compose_env: contained — DRYDOCK_SIDECAR_NAME exported and ends with -egress (FIX2)" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	[ -n "${DRYDOCK_SIDECAR_NAME:-}" ]
+	[[ "$DRYDOCK_SIDECAR_NAME" == *"-egress" ]]
+}
+
+@test "export_compose_env: dood — DRYDOCK_SIDECAR_NAME not set (FIX2)" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_CONTAIN
+	export DRYDOCK_DOOD=1
+	# Seed a stale value from a hypothetical prior contained run.
+	# The dood branch MUST unset this — verifying the unset actually runs.
+	export DRYDOCK_SIDECAR_NAME=stale-sidecar-name
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	[ -z "${DRYDOCK_SIDECAR_NAME:-}" ]
+}
+
 @test "#89 RED: export_compose_env does NOT mutate canonical sibling URL during startup migration" {
 	local fake_home="$BATS_TEST_TMPDIR/89-noop-home"
 	mkdir -p "$fake_home/.claude-container"
