@@ -3292,6 +3292,32 @@ _egress_fake_home() {
 	[ -f "$DRYDOCK_EGRESS_FILTER_FILE" ]
 }
 
+@test "export_compose_env: contained — unreadable allowlist source fails loud (FIX1)" {
+	# This test only works as non-root; root bypasses file permissions.
+	if [ "$(id -u)" -eq 0 ]; then
+		skip "test requires non-root (root bypasses file permissions)"
+	fi
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	# Create a global user allowlist that exists but is unreadable.
+	mkdir -p "$fh/.config/drydock"
+	printf 'example-custom.com\n' >"$fh/.config/drydock/egress-allowlist"
+	chmod 000 "$fh/.config/drydock/egress-allowlist"
+
+	# err() calls exit; use run to capture the non-zero exit.
+	run export_compose_env "$TEST_PROJECT_DIR"
+
+	# Restore permissions so cleanup can proceed.
+	chmod 644 "$fh/.config/drydock/egress-allowlist"
+
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"unreadable"* ]]
+}
+
 @test "#89 RED: export_compose_env does NOT mutate canonical sibling URL during startup migration" {
 	local fake_home="$BATS_TEST_TMPDIR/89-noop-home"
 	mkdir -p "$fake_home/.claude-container"

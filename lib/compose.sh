@@ -571,6 +571,16 @@ _generate_egress_filter() {
 	local _perproj="$HOME/.config/drydock/egress-allowlist-${_proj}"
 	local _out="$HOME/.config/drydock/egress-filter-${_disc}"
 
+	# Fail loud on present-but-unreadable sources (before mktemp to avoid leaking
+	# temp files on abort). Absent files are tolerated — the || true pipeline below
+	# handles that. Only the exists-but-unreadable case is a hard error (INV §4).
+	local _src
+	for _src in "$_base" "$_global" "$_perproj"; do
+		if [ -e "$_src" ] && [ ! -r "$_src" ]; then
+			err "egress allowlist source exists but is unreadable: $_src"
+		fi
+	done
+
 	mkdir -p "$HOME/.config/drydock"
 	local _tmp
 	_tmp="$(mktemp "${_out}.XXXXXX")" || err "mktemp failed for egress filter"
