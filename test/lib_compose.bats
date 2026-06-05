@@ -3257,12 +3257,16 @@ _egress_fake_home() {
 	fh="$(_egress_fake_home)"
 	export HOME="$fh"
 	export DOCKER="$(_make_docker_ps_stub "")"
-	unset DRYDOCK_CONTAIN DRYDOCK_EGRESS_FILTER_FILE
+	unset DRYDOCK_CONTAIN
 	export DRYDOCK_DOOD=1
+	# Seed a stale value from a hypothetical prior contained run. The dood branch
+	# of export_compose_env MUST unset this — the assertion verifies the unset runs,
+	# not just that the var happens to be absent from a clean-env start.
+	export DRYDOCK_EGRESS_FILTER_FILE=/stale/leftover-from-prior-contained-run
 
 	export_compose_env "$TEST_PROJECT_DIR"
 
-	# In dood mode the var must NOT be set.
+	# The dood branch must clear the stale contained-mode var.
 	[ -z "${DRYDOCK_EGRESS_FILTER_FILE:-}" ]
 }
 
