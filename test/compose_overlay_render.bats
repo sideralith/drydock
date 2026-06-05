@@ -214,6 +214,38 @@ _service_block() {
 	[[ "$_block" == *"read_only: true"* ]]
 }
 
+@test "render: contain — sidecar rootfs read_only: true (A5, service-level not volume-level)" {
+	# A5: the sidecar runs with a read-only rootfs. The filter VOLUME also renders
+	# read_only: true (at 8-space indent under volumes:), so a block-wide substring
+	# match would pass even if the service-level flag were dropped. Scope to the
+	# service-level key (exactly 4-space indent) so this catches an A5 regression.
+	run docker compose \
+		-f "$DRYDOCK_HOME/docker-compose.yml" \
+		-f "$DRYDOCK_HOME/docker-compose.contain.yml" \
+		config --no-path-resolution
+	[ "$status" -eq 0 ]
+	local _block
+	_block="$(printf '%s\n' "$output" | _service_block drydock-egress)"
+	printf '%s\n' "$_block" | grep -qE '^    read_only: true$'
+}
+
+@test "render: contain — sidecar tmpfs /run + /tmp (A5, PidFile + runtime dir)" {
+	# A5: read_only rootfs requires writable tmpfs for tinyproxy's /run (Debian
+	# runtime dir) and /tmp (PidFile). /run is unambiguous (appears only here); the
+	# tmpfs /tmp entry is matched as a whole 6-space list line so the filter volume's
+	# /tmp/... source path cannot satisfy it vacuously.
+	run docker compose \
+		-f "$DRYDOCK_HOME/docker-compose.yml" \
+		-f "$DRYDOCK_HOME/docker-compose.contain.yml" \
+		config --no-path-resolution
+	[ "$status" -eq 0 ]
+	local _block
+	_block="$(printf '%s\n' "$output" | _service_block drydock-egress)"
+	printf '%s\n' "$_block" | grep -qE '^    tmpfs:$'
+	printf '%s\n' "$_block" | grep -qxE '      - /run'
+	printf '%s\n' "$_block" | grep -qxE '      - /tmp'
+}
+
 @test "render: contain — sidecar cap_drop present (R9.7, INV-8 hardened)" {
 	run docker compose \
 		-f "$DRYDOCK_HOME/docker-compose.yml" \
