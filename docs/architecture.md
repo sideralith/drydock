@@ -572,6 +572,55 @@ project in with `drydock dood <proj>`.
 Consequence (dood mode): socket access ≈ root-equivalent on the host (INV-6). This
 is the unchanged threat-model-A posture — see [security.md](security.md).
 
+## Contained mode — egress jail topology
+
+In **contained mode** (the factory default, INV-9) the agent has no Docker socket
+and no host network, and egress is jailed behind a drydock-managed deny-by-default
+domain allowlist built from two fixed-name bridge networks and a per-session proxy
+sidecar:
+
+```
+  drydock_egress   (bridge, fixed-name, standard NAT — reaches the internet)
+        │
+        ▼
+  drydock-<proj>-<disc>-egress   (PER-SESSION sidecar)
+    image: drydock-egress:latest (debian:12-slim + tinyproxy)
+    tinyproxy :8888 · FilterDefaultDeny Yes · ConnectPort 443
+    cap_drop: ALL · no-new-privileges · non-root · healthcheck
+    RO mount: effective allowlist → /etc/tinyproxy/filter
+        │   (dual-homed: also on the internal net)
+        ▼
+  drydock_internal (bridge, fixed-name, internal: true — NO gateway; external DNS SERVFAILs)
+        │
+        ▼
+  drydock-<proj>-<disc>   (the AGENT — sole attachment: drydock_internal)
+    HTTPS_PROXY/HTTP_PROXY=http://drydock-<proj>-<disc>-egress:8888
+    cap_drop: ALL + Phase-1 cap_add (UNCHANGED — INV-8 intact)
+    depends_on: drydock-<proj>-<disc>-egress: service_healthy
+```
+
+- **`drydock_internal`** (`internal: true`) has no gateway, so the agent cannot
+  route to the internet directly — external DNS SERVFAILs on it (a bonus seal).
+  The agent is sole-attached here.
+- **`drydock_egress`** is a standard NAT bridge; only the sidecar's
+  external-facing leg sits on it.
+- The **sidecar** (tinyproxy) is dual-homed across both networks and is the only
+  path out. It permits CONNECT to allowlisted hostnames on port 443 and refuses
+  everything else with a 403. Its filter is the effective allowlist — baseline
+  plus user additions — RO-mounted at session start.
+- Both networks are **fixed-name and shared** across sessions (created on first
+  `up`, never removed — the same no-leak property as the earlier single contained
+  bridge); the **sidecar is per-session** (its `container_name` carries the
+  session discriminator) so each session keeps its own per-project allowlist and a
+  native compose `service_healthy` gate. The agent does not start until the proxy
+  is healthy — contained mode is fail-closed.
+
+The effective allowlist is generated per session by `_generate_egress_filter()`
+in `lib/compose.sh` (baseline + `~/.config/drydock/egress-allowlist` +
+`egress-allowlist-<project>`) and bind-mounted RO into the sidecar; the shipped
+baseline lives in `templates/egress-baseline.conf`. See INV-9 and
+[security.md](security.md) for the named residual gaps.
+
 ## Container base + UID/GID matching
 
 Base image: `debian:12-slim`. Tooling installed: `docker-ce-cli`,

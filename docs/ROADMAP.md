@@ -48,7 +48,7 @@ file.
 | [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Not planned (closed; successor: external [drydock-zellij-plugin][i97], post-v0.3.0) |
 | [session-persistence-polish](#session-persistence-polish) | v0.3.1 | [milestone v0.3.1][m031] | Done |
 | [config-gh-mkdir](#config-gh-mkdir) | v0.3.1 | [#109][i109] | Done |
-| [dual-mode-containment](#dual-mode-containment) | v0.4.0 | [#149][i149] | In progress |
+| [dual-mode-containment](#dual-mode-containment) | v0.4.0 | [#149][i149] | Done |
 | [toolchain-mise](#toolchain-mise) | v0.5.0 | [#16][i16] | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.5.0 | [#17][i17] | Planned |
 | [forge-agnostic-base](#forge-agnostic-base) | v0.5.0 | [#110][i110] | Planned |
@@ -757,9 +757,11 @@ change.
 
 ### dual-mode-containment
 
-**Status: In progress (v0.4.0, issue [#149][i149]).** Phase 1 (dual architecture + commands +
-doctrine) is merged to `dev`; Phase 2 (egress jail) is the remaining v0.4.0 work — v0.4.0 ships
-when both phases land.
+**Status: Done (v0.4.0, issue [#149][i149]).** Both phases landed on `dev`: Phase 1 (dual
+architecture + commands + doctrine) and Phase 2 (the egress jail — a per-session allowlist proxy
+sidecar on an `internal: true` bridge, zero new Linux capabilities). v0.4.0 ships once the
+bare-Linux double-gate smoke (allowlisted host reachable through the proxy, non-allowlisted host
+blocked, IP-literal CONNECT denied) confirms enforcement.
 
 **Problem.** drydock does not prevent prompt injection (nothing can) *and it does not
 contain its consequences either.* The bind-mounted Docker socket (INV-6,
@@ -773,7 +775,8 @@ hooks, filesystem scope, INV-8 hardening); *external-ingestion* work is threat m
 and has no contained mode today.
 
 **Proposed solution.** Two modes, exactly one active per session. `contained` (default)
-— drydock-managed bridge network (no socket, no host network; egress open until Phase 2);
+— drydock-managed networking (no socket, no host network) with egress jailed behind a
+deny-by-default domain allowlist (Phase 2);
 `dood` (opt-in) — `network_mode:
 host` + socket, drydock exactly as it is today, for the stack flow. The gate is a
 per-project sentinel (`drydock dood <project>` → marks `~/.config/drydock/dood/<project>`;
@@ -786,16 +789,20 @@ Two phases, decoupling architecture from the egress jail:
 - **Phase 1 — dual architecture.** Split `network_mode: host` + the socket mount out of
   the base `docker-compose.yml` into `docker-compose.dood.yml`; add
   `docker-compose.contain.yml` with a drydock-managed bridge network — no socket, no host
-  networking, but EGRESS OPEN (no `internal: true`; the egress jail is Phase 2).
+  networking, with unfiltered egress as a deliberate Phase-1 intermediate (no `internal: true`
+  yet; the egress jail arrived in Phase 2).
   `compose_files()` includes exactly one. `dood` mode = current behavior, so the
   maintainer's stack flow is intact from day 1. **This phase alone closes the largest
   standing wound (INV-6, socket always present) almost for free, and is the prerequisite
   for everything else.**
-- **Phase 2 — egress jail in contained mode.** An egress sidecar in
-  `docker-compose.contain.yml` — transparent netfilter (dnsmasq allowlist + ipset +
-  iptables DROP-default) vs. a userspace allowlist proxy. ~80% of the value is
-  deny-by-default + a domain allowlist; heavyweight service-mesh machinery (eBPF, mTLS,
-  control-plane, sidecar proxies) is explicitly out of scope.
+- **Phase 2 — egress jail in contained mode.** Shipped: a per-session allowlist proxy
+  sidecar (tinyproxy) in `docker-compose.contain.yml`. The agent attaches solely to an
+  `internal: true` bridge (no gateway/NAT) and reaches the network only through the sidecar,
+  which permits CONNECT to allowlisted hostnames on 443 (deny-by-default). The userspace-proxy
+  approach was chosen over transparent netfilter (dnsmasq + ipset + iptables DROP-default)
+  because it needs zero new Linux capabilities (INV-8 intact) and does not depend on
+  `ipset`/`xt_set` kernel modules. Heavyweight service-mesh machinery (eBPF, mTLS,
+  control-plane) stays out of scope.
 
 **Why this scope.** Its own release theme — security containment, orthogonal to the
 "per-project environment customization" of v0.5.0. Placed first because Phase 1 is the
@@ -812,12 +819,11 @@ third-party dependency review, foreign-issue/PR triage) — not release cadence.
 reason `dood` mode is NOT half-contained: an egress jail with the socket still present
 is a Maginot line a single `docker run --network host -v /:/host …` jumps.
 
-**Open questions.** Default direction (contained-by-default — the recommendation — vs.
-dood-by-default) to confirm in the SDD. `ipset`/`xt_set` availability on the WSL2 kernel
-(load-bearing for the netfilter fork; fall back to a userspace proxy if absent) — VERIFY
-before Phase 2. Whether Phase 1 and Phase 2 ship as separate changes / chained PRs
-(likely yes). Socket-proxy hardening of `dood` mode is explicitly *not* pursued — a proxy
-can't distinguish a legitimate `compose up` bind-mount (`./frontend:/app`) from `-v /:/host`.
+**Resolved.** Contained-by-default was confirmed. The `ipset`/`xt_set` kernel-module question
+is moot — the userspace proxy needs no netfilter modules. Phase 1 and Phase 2 shipped as
+separate chained PRs to `dev`. Socket-proxy hardening of `dood` mode remains explicitly *not*
+pursued — a proxy can't distinguish a legitimate `compose up` bind-mount (`./frontend:/app`)
+from `-v /:/host`.
 
 **Provenance.** Consultation session on containment posture; design memo closed,
 implementation not started. Issue [#149][i149].

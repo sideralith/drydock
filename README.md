@@ -38,14 +38,15 @@ Debian 12 slim container that:
   project into dood mode (`drydock dood <proj>`) and the agent talks to your host
   Docker daemon, so it can bring your project's stack up, `docker exec` into a
   running service, and run its tests or migrations against the host containers,
-  exactly as from the host. Contained mode still reaches the internet — Phase 1
-  does not filter egress.
+  exactly as from the host. In contained mode the agent reaches the network only
+  through a drydock-managed deny-by-default domain allowlist (egress jail) —
+  extend it via `~/.config/drydock/egress-allowlist`.
 
 > **Threat model**: defense against agent **accidents**, not against an
 > adversarial agent. In opt-in dood mode the Docker socket is root-equivalent on
-> the host; contained mode (the default) removes the socket and host networking,
-> but does not filter egress. Read [docs/security.md](docs/security.md) before
-> relying on it.
+> the host; contained mode (the default) removes the socket and host networking
+> and jails egress behind a deny-by-default domain allowlist (named residual gaps
+> in [docs/security.md](docs/security.md)). Read it before relying on it.
 
 ### Claude Code's sandbox mode vs. drydock
 
@@ -57,7 +58,7 @@ Debian 12 slim container that:
 | **Scope** | Each Bash command and its subprocesses | The whole session and its environment |
 | **What it's for** | Contain a command's blast radius; cut permission prompts | A reproducible, credential-isolated dev environment |
 | **Filesystem** | Writes limited to the working directory; reads allowed everywhere by default | Host `~/.ssh`, `~/.gnupg`, `~/.aws`… are not mounted at all — invisible, not merely write-protected |
-| **Network** | Per-command domain allowlist | Contained by default (no host network, no socket); opt-in dood mode shares the host network — not per-command |
+| **Network** | Per-command domain allowlist | Contained by default (no host network, no socket; egress via a per-session deny-by-default domain allowlist); opt-in dood mode shares the host network — not per-command |
 | **Reproducible environment** | No — it restricts the host you already have | Yes — pinned Debian image + defined toolchain |
 | **State** | Uses the host's Claude state as-is — no separation | Separate container state — host and container sessions don't race |
 | **Mechanism** | OS sandbox — Seatbelt (macOS), bubblewrap (Linux) | Docker container |
@@ -216,9 +217,11 @@ by Claude Code on demand (when you add MCP servers, hooks, or permissions),
 and stays optional.
 
 By default drydock runs in **contained mode**: no Docker socket and no host
-networking. `git`, `gh`, and the agent's own internet access still work (Phase 1
-does not filter egress), but stack-dependent commands that need the host daemon or
-host network — `docker compose` against your stack, `docker exec` into a service,
+networking, with egress jailed behind a deny-by-default domain allowlist. The
+agent still reaches allowlisted hosts — the shipped baseline plus anything you add
+to `~/.config/drydock/egress-allowlist` — while a request to a non-allowlisted
+host returns 403. Stack-dependent commands that need the host daemon or host
+network — `docker compose` against your stack, `docker exec` into a service,
 `curl http://localhost:PORT/...`, `make shell-api` — do **not** work in contained
 mode. They require **dood mode** (opt-in), which bind-mounts the host Docker socket
 (root-equivalent on the host, INV-6) and shares the host network:
