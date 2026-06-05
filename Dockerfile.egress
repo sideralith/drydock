@@ -1,0 +1,32 @@
+# drydock-egress — minimal CONNECT proxy sidecar for contained mode (Phase 2).
+#
+# Enforces a deny-by-default domain allowlist for the contained-mode agent. Built
+# at `drydock build` time and tagged drydock-egress:latest. Pre-built because the
+# agent's internal:true network SERVFAILs external DNS, so apt cannot run at
+# session start (probe #3283 gotcha #1) — the sidecar must arrive fully provisioned.
+#
+# Base matches the agent (debian:12-slim) so the base layer is shared/cached and
+# there is one distro CVE surface to track. tinyproxy is a userspace HTTP CONNECT
+# proxy; FilterDefaultDeny + an ERE Filter file give deny-by-default allowlisting.
+FROM debian:12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tinyproxy \
+    && rm -rf /var/lib/apt/lists/*
+
+# Baked base config. The allowlist itself is NOT baked — it is RO-mounted per
+# session at /etc/tinyproxy/filter (see docker-compose.contain.yml). An empty
+# placeholder guarantees the path exists if the mount is somehow absent (the
+# compose :? guard makes that unreachable in production, but defense-in-depth:
+# an empty filter under FilterDefaultDeny denies everything → fail-closed).
+COPY templates/tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
+RUN touch /etc/tinyproxy/filter \
+    && chown -R tinyproxy:tinyproxy /etc/tinyproxy
+
+# tinyproxy's Debian package adds a non-root `tinyproxy` user; run as it (INV-8
+# consistency — the sidecar never runs as root).
+USER tinyproxy
+
+# Foreground (-d) so Docker owns the process lifecycle and stderr is captured.
+ENTRYPOINT ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]

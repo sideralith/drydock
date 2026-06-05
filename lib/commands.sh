@@ -236,6 +236,15 @@ cmd_build() {
 		-t "$IMAGE" \
 		"$DRYDOCK_HOME"
 	ok "Built $IMAGE"
+	# Phase 2: build the egress-jail proxy sidecar image unconditionally.
+	# drydock-egress:latest is a GLOBAL image — it must be present for any contained
+	# session on this host. Gating on the current project's mode was a category
+	# mismatch: a dood-pinned cwd at build time would leave no sidecar image for
+	# contained-default projects. Pre-build is required because the internal:true
+	# network SERVFAILs external DNS at runtime (design §3, R4.5, §6a).
+	note "Building $EGRESS_IMAGE (egress proxy sidecar)..."
+	"$DOCKER" build -f "$DRYDOCK_HOME/Dockerfile.egress" -t "$EGRESS_IMAGE" "$DRYDOCK_HOME"
+	ok "Built $EGRESS_IMAGE"
 }
 
 cmd_sync() {

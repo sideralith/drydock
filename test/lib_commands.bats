@@ -3747,3 +3747,63 @@ STUB
 	cd - >/dev/null
 	rm -rf "$tmpdir"
 }
+
+# ── Phase 2 egress jail — cmd_build unconditional egress image build (FIX3) ───
+# drydock-egress:latest is a GLOBAL image — it must be built regardless of the
+# current project's mode. Gating it on resolve_run_mode was a category mismatch:
+# a dood-pinned cwd would produce no sidecar image, then a contained-default
+# project would have none. Build unconditionally per design §6a.
+# Tests use the DOCKER seam; two distinct mode inputs prove mode-independence.
+
+@test "cmd_build: contained mode — builds drydock-egress image" {
+	local fakehome="$BATS_TEST_TMPDIR/build-contain-home-$$"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/build-contain-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	# Contained mode is the default (no dood sentinel/env).
+
+	cmd_build
+
+	# Both the main image build and the egress image build must appear.
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"drydock:latest"* ]]
+	[[ "$log" == *"Dockerfile.egress"* ]]
+}
+
+@test "cmd_build: dood mode — STILL builds drydock-egress image (not mode-gated, FIX3)" {
+	local fakehome="$BATS_TEST_TMPDIR/build-dood-home-$$"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/build-dood-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	export DRYDOCK_DOOD=1
+	unset DRYDOCK_CONTAIN
+
+	cmd_build
+
+	# Both the main image build AND the egress image build must appear — the
+	# image is global; dood mode does NOT gate it out.
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"drydock:latest"* ]]
+	[[ "$log" == *"Dockerfile.egress"* ]]
+}
