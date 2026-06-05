@@ -771,7 +771,8 @@ hooks, filesystem scope, INV-8 hardening); *external-ingestion* work is threat m
 and has no contained mode today.
 
 **Proposed solution.** Two modes, exactly one active per session. `contained` (default)
-— isolated bridge network, no socket, containment; `dood` (opt-in) — `network_mode:
+— drydock-managed bridge network (no socket, no host network; egress open until Phase 2);
+`dood` (opt-in) — `network_mode:
 host` + socket, drydock exactly as it is today, for the stack flow. The gate is a
 per-project sentinel (`drydock dood <project>` → marks `~/.config/drydock/dood/<project>`;
 `DRYDOCK_DOOD=1` per-invocation override), mirroring the `engram-shared` sentinel and
@@ -782,8 +783,9 @@ Two phases, decoupling architecture from the egress jail:
 
 - **Phase 1 — dual architecture.** Split `network_mode: host` + the socket mount out of
   the base `docker-compose.yml` into `docker-compose.dood.yml`; add
-  `docker-compose.contain.yml` with an isolated `internal` bridge network (no egress jail
-  yet). `compose_files()` includes exactly one. `dood` mode = current behavior, so the
+  `docker-compose.contain.yml` with a drydock-managed bridge network — no socket, no host
+  networking, but EGRESS OPEN (no `internal: true`; the egress jail is Phase 2).
+  `compose_files()` includes exactly one. `dood` mode = current behavior, so the
   maintainer's stack flow is intact from day 1. **This phase alone closes the largest
   standing wound (INV-6, socket always present) almost for free, and is the prerequisite
   for everything else.**
