@@ -99,6 +99,33 @@ host. The compose file mounts a per-session `~/.claude-container-<disc>.json`
 (seeded from the `~/.claude-container.json` prototype) at
 `~/.claude.json:rw`.
 
+## In contained mode, `docker`, `docker compose`, `curl localhost:PORT`, or `make shell-api` stopped working
+
+As of v0.4.0 drydock runs **contained by default**: no Docker socket and no host
+networking. That deliberately removes the two things stack tooling needs — the
+host Docker daemon and the host network namespace — so these stop working in
+contained mode:
+
+- `docker` / `docker compose` / `docker exec` against your host stack
+- `curl http://localhost:PORT/...` to a service published on the host
+- `make shell-api` and anything else that reaches the host daemon or network
+
+The agent's own internet access still works — Phase 1 does not filter egress.
+
+Switch the project to **dood mode**, which restores the host Docker socket and
+host networking (the socket is root-equivalent on the host — INV-6):
+
+```bash
+drydock dood <proj>        # pin this project to dood mode
+drydock default dood       # or make dood the default for all new/unpinned projects
+DRYDOCK_DOOD=1 drydock     # or override for a single invocation
+```
+
+`drydock doctor` shows the active mode and why it was chosen; the mode also prints
+at container creation. Revert with `drydock contain <proj>` (per project) or
+`drydock default contain` (global, back to the factory default). See INV-9 in
+CLAUDE.md and [docs/security.md](docs/security.md).
+
 ## `docker exec` from inside the container fails with permission denied
 
 The container user must be in a group matching the host's docker-socket GID.
