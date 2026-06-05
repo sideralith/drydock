@@ -236,6 +236,17 @@ cmd_build() {
 		-t "$IMAGE" \
 		"$DRYDOCK_HOME"
 	ok "Built $IMAGE"
+	# Phase 2: build the egress-jail proxy sidecar image in contained mode. The
+	# sidecar must be pre-built because the internal:true network SERVFAILs
+	# external DNS at runtime — apt/apk cannot run (design §3, R4.5).
+	# dood mode has no sidecar; skip the build there (SCENARIO R8-B).
+	local _build_mode
+	_build_mode="$(resolve_run_mode "${PROJECT_NAME:-_}" | cut -d' ' -f1)"
+	if [ "$_build_mode" = "contained" ]; then
+		note "Building $EGRESS_IMAGE (egress proxy sidecar)..."
+		"$DOCKER" build -f "$DRYDOCK_HOME/Dockerfile.egress" -t "$EGRESS_IMAGE" "$DRYDOCK_HOME"
+		ok "Built $EGRESS_IMAGE"
+	fi
 }
 
 cmd_sync() {

@@ -3747,3 +3747,59 @@ STUB
 	cd - >/dev/null
 	rm -rf "$tmpdir"
 }
+
+# ── Phase 2 egress jail — cmd_build mode-gated image build ───────────────────
+# Tests use the DOCKER seam (mock-docker logs every call to DOCKER_CALL_LOG) to
+# assert whether the egress sidecar image is built alongside the main image.
+
+@test "cmd_build: contained mode — builds drydock-egress image" {
+	local fakehome="$BATS_TEST_TMPDIR/build-contain-home-$$"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/build-contain-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	# Contained mode is the default (no dood sentinel/env).
+
+	cmd_build
+
+	# Both the main image build and the egress image build must appear.
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"drydock:latest"* ]]
+	[[ "$log" == *"Dockerfile.egress"* ]]
+}
+
+@test "cmd_build: dood mode — does NOT build drydock-egress image" {
+	local fakehome="$BATS_TEST_TMPDIR/build-dood-home-$$"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/build-dood-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+
+	export DRYDOCK_DOOD=1
+	unset DRYDOCK_CONTAIN
+
+	cmd_build
+
+	# Main image must be built; egress image must NOT be built in dood mode.
+	local log
+	log="$(cat "$DOCKER_CALL_LOG")"
+	[[ "$log" == *"drydock:latest"* ]]
+	[[ "$log" != *"Dockerfile.egress"* ]]
+}
