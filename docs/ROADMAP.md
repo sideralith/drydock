@@ -48,7 +48,7 @@ file.
 | [session-management-ui](#session-management-ui) | v0.3.0 | [#67][i67] | Not planned (closed; successor: external [drydock-zellij-plugin][i97], post-v0.3.0) |
 | [session-persistence-polish](#session-persistence-polish) | v0.3.1 | [milestone v0.3.1][m031] | Done |
 | [config-gh-mkdir](#config-gh-mkdir) | v0.3.1 | [#109][i109] | Done |
-| [dual-mode-containment](#dual-mode-containment) | v0.4.0 | [#149][i149] | Planned |
+| [dual-mode-containment](#dual-mode-containment) | v0.4.0 | [#149][i149] | Done |
 | [toolchain-mise](#toolchain-mise) | v0.5.0 | [#16][i16] | Planned |
 | [per-project-image-layer](#per-project-image-layer) | v0.5.0 | [#17][i17] | Planned |
 | [forge-agnostic-base](#forge-agnostic-base) | v0.5.0 | [#110][i110] | Planned |
@@ -757,7 +757,7 @@ change.
 
 ### dual-mode-containment
 
-**Status: Planned (v0.4.0, issue [#149][i149]).**
+**Status: Phase 1 Done (v0.4.0, issue [#149][i149]); Phase 2 (egress jail) is a separate future change.**
 
 **Problem.** drydock does not prevent prompt injection (nothing can) *and it does not
 contain its consequences either.* The bind-mounted Docker socket (INV-6,
