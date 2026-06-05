@@ -509,8 +509,9 @@ To tune the tmpfs size (granular — hardening otherwise active):
 DRYDOCK_TMPFS_SIZE=4g drydock
 ```
 
-These defenses defeat **accidents**, not adversaries. The Docker socket mount remains
-root-equivalent (see below) — INV-8 is additive defense in depth, not a replacement for INV-6.
+These defenses defeat **accidents**, not adversaries. In dood mode the Docker socket mount
+remains root-equivalent (see below) — INV-8 is additive defense in depth, not a replacement for
+INV-6. In contained mode (the factory default) the socket is absent (INV-9).
 
 ## What drydock does NOT protect against
 
@@ -520,8 +521,8 @@ root-equivalent (see below) — INV-8 is additive defense in depth, not a replac
   host. The socket is root-equivalent (INV-6). Dood mode is the unchanged
   drydock posture (threat model A). In contained mode (the factory default)
   the socket is NOT mounted — this attack class is blocked. See INV-9 in
-  CLAUDE.md for mode selection; to opt in set `DRYDOCK_DOOD=1` or create
-  `~/.config/drydock/dood/<proj>`.
+  CLAUDE.md for mode selection; to opt in run `drydock dood <proj>` (or set
+  `DRYDOCK_DOOD=1`, or create `~/.config/drydock/dood/<proj>`).
 - **Agent committing nonsense to the project tree** — `$PROJECT_DIR` is
   mounted RW. The agent can write anything in it. (That's the point — it
   needs to do its job.) Use git review discipline.
