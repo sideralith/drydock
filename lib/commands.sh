@@ -689,9 +689,12 @@ _run_claude_lifecycle() {
 	"$DOCKER" "${_docker_argv[@]}" || _rc=$?
 	trap - HUP
 
-	# Teardown: single-name rm -f. NEVER compose down (REQ-4, D-3).
-	# Guarded with || true so a failing rm does not suppress _rc (D-2).
-	"$DOCKER" rm -f "$_session_name" || true
+	# Teardown: two-name rm -f — the agent AND its Phase 2 per-session egress
+	# sidecar. NEVER compose down (REQ-4, D-3). The -egress name is a no-op in dood
+	# (no sidecar) and harmless if already gone; a single rm -f over both names
+	# removes whichever exist. Guarded with || true so a failing rm does not
+	# suppress _rc (D-2).
+	"$DOCKER" rm -f "$_session_name" "${_session_name}-egress" || true
 
 	return "$_rc"
 }
@@ -1260,7 +1263,7 @@ cmd_doctor() {
 	if [ "$_mode" = "dood" ]; then
 		_dr_item "⚠" "docker-compose.dood.yml" "dood" "Docker socket + host network — INV-6 root-equivalent · reason: $_reason"
 	else
-		_dr_item "✓" "docker-compose.contain.yml" "contained" "no Docker socket · no host network (egress open — Phase 1) · reason: $_reason"
+		_dr_item "✓" "docker-compose.contain.yml" "contained" "no Docker socket · no host network · egress allowlist (Phase 2) · reason: $_reason"
 	fi
 	if [ "${DRYDOCK_NO_HARDENING:-0}" != "1" ]; then
 		_dr_item "✓" "docker-compose.hardening.yml" "" "INV-8: cap_drop, no-new-privileges, tmpfs cap"
@@ -1316,6 +1319,41 @@ cmd_doctor() {
 		_dr_item "✓" "docker-compose.ccstatusline.yml" "" "~/.config/ccstatusline present"
 	fi
 	unset _DR_LABEL_WIDTH
+
+	# ── EGRESS (Phase 2 contained-mode domain allowlist) ────────────────────────
+	# Reports the SOURCES of the allowlist (shipped baseline + user files) and the
+	# sidecar image. Does NOT call export_compose_env (no project-dir arg here, same
+	# constraint as COMPOSE OVERLAYS) — the per-session effective filter only exists
+	# during a run, so doctor reports the inputs, not a live session file. Reuses the
+	# _mode / _proj_name resolved above. EGRESS_BASELINE / EGRESS_IMAGE come from
+	# lib/compose.sh (sourced before commands.sh).
+	_dr_section "EGRESS" "contained-mode domain allowlist (Phase 2)"
+	if [ "$_mode" = "contained" ]; then
+		local _eg_count
+		if [ -f "$EGRESS_BASELINE" ]; then
+			_eg_count="$(grep -cE '^[^#[:space:]]' "$EGRESS_BASELINE" 2>/dev/null)" || _eg_count=0
+			_dr_item "✓" "baseline" "$_eg_count domain(s)" "$EGRESS_BASELINE"
+		else
+			_dr_item "✗" "baseline" "missing" "contained mode would deny all egress"
+		fi
+		local _eg_global="$HOME/.config/drydock/egress-allowlist"
+		local _eg_proj="$HOME/.config/drydock/egress-allowlist-${_proj_name}"
+		if [ -f "$_eg_global" ]; then
+			_eg_count="$(grep -cE '^[^#[:space:]]' "$_eg_global" 2>/dev/null)" || _eg_count=0
+			_dr_item "·" "global allowlist" "$_eg_count added" "$_eg_global"
+		fi
+		if [ -f "$_eg_proj" ]; then
+			_eg_count="$(grep -cE '^[^#[:space:]]' "$_eg_proj" 2>/dev/null)" || _eg_count=0
+			_dr_item "·" "project allowlist" "$_eg_count added" "$_eg_proj"
+		fi
+		if "$DOCKER" image inspect "$EGRESS_IMAGE" >/dev/null 2>&1; then
+			_dr_item "✓" "sidecar image" "$EGRESS_IMAGE" "present"
+		else
+			_dr_item "✗" "sidecar image" "$EGRESS_IMAGE" "missing → drydock build"
+		fi
+	else
+		_dr_item "·" "egress" "dood mode" "no allowlist — host network (INV-6)"
+	fi
 
 	# ── ENV FLAGS ──────────────────────────────────────────────────────────────
 	# Shows DRYDOCK_* env vars only when they BEHAVIORALLY differ from the default.
@@ -1577,7 +1615,7 @@ _pin_project_mode() {
 		note "The Docker socket and host network are now active for this project."
 		note "INV-6: the Docker socket is root-equivalent on the host."
 	else
-		note "No Docker socket and no host network for this project (egress still open — Phase 1)."
+		note "No Docker socket and no host network for this project; egress is jailed behind a domain allowlist (drydock contain)."
 	fi
 }
 
@@ -1621,8 +1659,10 @@ cmd_default() {
 # Print the active network/socket mode + the resolution reason. Call ONLY where a
 # container is CREATED (never on pure attach — an existing container's posture was
 # baked in at creation and may differ from a sentinel changed since). Wording is
-# honest: contained states only the two things actually removed (no Docker socket,
-# no host network) and makes NO egress claim — Phase 1 does not filter egress.
+# honest: contained names what it removes (no Docker socket, no host network) AND,
+# since Phase 2, the deny-by-default egress allowlist — without over-claiming
+# ("egress-proof"). dood mode emits NO egress-jail line (it carries the full host
+# blast radius, INV-6).
 _emit_mode_banner() {
 	local _proj="$1"
 	local _line _mode _reason
@@ -1632,7 +1672,15 @@ _emit_mode_banner() {
 	if [ "$_mode" = "dood" ]; then
 		note "drydock: DOOD mode (Docker socket · host network) — reason: $_reason"
 	else
-		note "drydock: CONTAINED mode (no Docker socket · no host network) — reason: $_reason"
+		# Phase 2: contained mode jails egress behind a domain allowlist. Report the
+		# count from the per-session effective filter when it is available (it is
+		# generated by export_compose_env before this banner at every creation site).
+		local _domains=0
+		if [ -n "${DRYDOCK_EGRESS_FILTER_FILE:-}" ] && [ -f "$DRYDOCK_EGRESS_FILTER_FILE" ]; then
+			_domains="$(grep -c . "$DRYDOCK_EGRESS_FILTER_FILE" 2>/dev/null)" || _domains=0
+		fi
+		note "drydock: CONTAINED mode (no Docker socket · no host network · egress allowlist) — reason: $_reason"
+		note "drydock: egress jail — ${_domains} allowlisted domain(s); add more in ~/.config/drydock/egress-allowlist"
 	fi
 }
 
@@ -2549,6 +2597,11 @@ cmd_stop() {
 
 	note "Stopping $target_name"
 	"$DOCKER" rm -f "$target_name"
+	# Phase 2: also tear down the per-session egress sidecar. target_name was
+	# validated to exist above, so its rm governs cmd_stop's exit code; the sidecar
+	# rm is a separate, guarded call (a dood session — or an already-reaped sidecar —
+	# has no -egress container, which must NOT fail the stop).
+	"$DOCKER" rm -f "${target_name}-egress" 2>/dev/null || true
 }
 
 # ── cmd_links ─────────────────────────────────────────────────────────────────

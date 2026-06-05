@@ -2,32 +2,116 @@
 #
 # Included by lib/compose.sh:compose_files() when resolve_run_mode() returns
 # "contained" (the factory default: no DooD env override and no dood sentinel).
-# Attaches the service to a dedicated drydock-managed bridge network and adds
-# NO Docker socket. Removing the socket + host networking shrinks the blast
-# radius for external-ingestion work (research, third-party review, foreign-PR
-# triage) where the agent processes untrusted content.
+# Phase 2 (egress jail): the agent attaches ONLY to an internal-only bridge with
+# NO external route; a per-session proxy sidecar (tinyproxy) is dual-homed to a
+# second external bridge and enforces a deny-by-default domain allowlist. The
+# agent egresses ONLY via HTTPS_PROXY to the sidecar. NO Docker socket. dood mode
+# is COMPLETELY UNAFFECTED (docker-compose.dood.yml is untouched).
 #
-# PHASE 1 SCOPE — EGRESS IS OPEN. driver: bridge with NO `internal: true`. The
-# container still reaches the internet (Claude Code needs api.anthropic.com to
-# start, and a fresh install must run). This overlay does NOT filter egress; a
-# domain-allowlist egress jail is Phase 2 and is OUT OF SCOPE here. Doctrine must
-# NOT label this as real egress containment.
+# Enforcement = topology (internal:true → no gateway/NAT for the agent; external
+# DNS SERVFAILs — bonus seal) + userspace allowlist (the sidecar checks each
+# CONNECT hostname against the RO-mounted filter file). ZERO new Linux caps
+# anywhere — both services run cap_drop: ALL (INV-8 intact; agent cap_add is the
+# Phase 1 hardening set, unchanged; the sidecar needs no cap_add).
 #
-# Sole-attachment note: the explicit per-service `networks:` list REPLACES the
-# implicit default-bridge attachment (render-verified) — there is no silent
-# default-bridge leak. This holds INDEPENDENTLY of `internal: true`, so
-# removing that flag adds egress without reintroducing a second network.
+# Residual gaps (named in CLAUDE.md INV-9 + docs/security.md): L4 only (payload
+# not inspected); ECH / domain-fronting; IP-literal CONNECT denied by
+# FilterDefaultDeny; a compromised sidecar = open egress; a tool ignoring
+# HTTPS_PROXY loses egress (breakage, not bypass); concurrent sessions share the
+# one internal bridge and can reach a peer's sidecar (single-user trust bound).
+#
+# Network leak prevention: BOTH networks carry an explicit fixed `name:` and are
+# SHARED across all contained sessions (created on first `up`, never removed).
+# drydock's teardown is always `docker rm -f` on the CONTAINER names (never
+# `compose down`, never `docker network rm`), so without fixed names Compose
+# would namespace a unique <project>_drydock_internal per session and exhaust
+# Docker's ~31-network bridge pool. Fixed names ⇒ one shared pair, no leak.
 services:
   drydock:
+    # Sole attachment to the internal-only network: no gateway, no NAT, no direct
+    # external route. The explicit per-service networks: list REPLACES the implicit
+    # default-bridge attachment (no silent default-bridge leak).
     networks:
-      - drydock_net
+      - drydock_internal
+    depends_on:
+      # The agent MUST NOT start before the proxy is healthy: contained mode with
+      # a dead proxy = no egress = Claude cannot reach api.anthropic.com (R5.3
+      # silently violated). condition: service_healthy gates this natively because
+      # the sidecar lives in the SAME per-session compose project
+      # (-p drydock-<proj>-<disc>).
+      drydock-egress:
+        condition: service_healthy
+    environment:
+      # Route all agent HTTPS/HTTP egress through the per-session sidecar by NAME
+      # (container-name DNS resolves on the internal net — kernel probe #3283).
+      # http:// scheme to the proxy is correct: TLS is end-to-end agent↔destination
+      # via CONNECT; the agent↔proxy hop is plain HTTP.
+      - "HTTPS_PROXY=http://${DRYDOCK_SIDECAR_NAME:?DRYDOCK_SIDECAR_NAME not set — invoke via the drydock CLI}:8888"
+      - "HTTP_PROXY=http://${DRYDOCK_SIDECAR_NAME}:8888"
+      - "https_proxy=http://${DRYDOCK_SIDECAR_NAME}:8888"
+      - "http_proxy=http://${DRYDOCK_SIDECAR_NAME}:8888"
+      # Do NOT proxy to the proxy itself, to loopback, or to the metadata link-local.
+      - "NO_PROXY=${DRYDOCK_SIDECAR_NAME},127.0.0.1,localhost,169.254.169.254"
+      - "no_proxy=${DRYDOCK_SIDECAR_NAME},127.0.0.1,localhost,169.254.169.254"
+      # Telemetry OFF by default in contained mode → collapses the required
+      # allowlist to the essential set. Each var is user-overridable: exporting
+      # DRYDOCK_DISABLE_TELEMETRY=0 (etc.) in the shell flips the default. The
+      # NONESSENTIAL master switch also suppresses statsig/feature-flags and the
+      # autoupdater, shrinking the baseline further (design addendum A4).
+      - "DISABLE_TELEMETRY=${DRYDOCK_DISABLE_TELEMETRY:-1}"
+      - "DISABLE_ERROR_REPORTING=${DRYDOCK_DISABLE_ERROR_REPORTING:-1}"
+      - "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=${DRYDOCK_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
+
+  # ── Per-session egress proxy sidecar ────────────────────────────────────────
+  # container_name mirrors the agent's disc-parameterized name (base compose:29)
+  # so concurrent sessions get unique sidecars, teardown is deterministic
+  # (docker rm -f <name>-egress), and depends_on resolves within this project.
+  drydock-egress:
+    image: drydock-egress:latest
+    container_name: "${DRYDOCK_SIDECAR_NAME:?DRYDOCK_SIDECAR_NAME not set — invoke via the drydock CLI}"
+    # Dual-homed: external leg (NAT to the internet) + internal leg (agent-facing).
+    networks:
+      - drydock_egress
+      - drydock_internal
+    # Hardened like the agent — the sidecar is a new attack surface. ZERO cap_add:
+    # a userspace proxy needs no privileged ops (INV-8 intact).
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    # tinyproxy needs no writable rootfs. /run is required because the Debian
+    # package's runtime dir is created by systemd-tmpfiles (which does not run
+    # here); /tmp holds the PidFile (templates/tinyproxy.conf → /tmp/tinyproxy.pid).
+    # Both are tmpfs so read_only: true holds (design addendum A5).
+    read_only: true
+    tmpfs:
+      - "/run"
+      - "/tmp"
+    volumes:
+      # The per-session effective allowlist (baseline + user layers), generated and
+      # atomically written by export_compose_env, RO-mounted at the path the baked
+      # tinyproxy.conf references via `Filter /etc/tinyproxy/filter`.
+      - "${DRYDOCK_EGRESS_FILTER_FILE:?DRYDOCK_EGRESS_FILTER_FILE not set — invoke via the drydock CLI}:/etc/tinyproxy/filter:ro"
+    # Readiness gate consumed by the agent's depends_on. nc is not guaranteed in a
+    # minimal debian-slim, so probe the listening proxy port via a bash /dev/tcp
+    # connect. Fail-closed: until the proxy accepts on :8888 the agent will not start.
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8888' || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
+
 networks:
-  drydock_net:
-    name: drydock_net
+  drydock_internal:
+    name: drydock_internal
     driver: bridge
-    # NO `internal: true` in Phase 1 — egress is open by design (see header).
-    # name: is explicit so all contained sessions share ONE network instead of
-    # creating a new Compose-namespaced network per session. Without this,
-    # every `docker rm -f` teardown (REQ-4 — never `compose down`) would leak
-    # a unique drydock-<proj>-<disc>_drydock_net network, exhausting Docker's
-    # ~31-network bridge pool and breaking all host docker networking.
+    # internal: true — no gateway, no NAT. The agent has NO direct external route;
+    # external DNS SERVFAILs here (bonus seal). The proxy sidecar (dual-homed) is
+    # the only path out, and only for allowlisted CONNECT hostnames on 443.
+    internal: true
+  drydock_egress:
+    name: drydock_egress
+    driver: bridge
+    # Standard bridge with NAT — the sidecar's external-facing leg. Fixed name +
+    # shared so teardown (docker rm -f, never network rm) never leaks a network.
