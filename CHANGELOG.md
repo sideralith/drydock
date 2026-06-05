@@ -13,9 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer mounts the host Docker socket or shares the host network by default.
   A fresh install runs in **contained mode** (no Docker socket, no host network),
   shrinking the host blast radius for external-ingestion work. The previous
-  always-on behavior is now **dood mode**, opt-in per project. Phase 1 does NOT
-  filter egress — a contained container still reaches the internet; a
-  domain-allowlist egress jail is future work.
+  always-on behavior is now **dood mode**, opt-in per project. In contained mode,
+  egress is jailed behind a deny-by-default domain allowlist (see *Added* below);
+  dood mode is unchanged.
   - **What stops working in contained mode**: `docker` / `docker compose` /
     `docker exec` against the host stack, `curl http://localhost:PORT/...`, and
     `make shell-api` — anything that needs the host Docker daemon or host network.
@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Contained-mode egress jail** (#149). Contained mode now enforces a
+  deny-by-default domain allowlist via a per-session proxy sidecar (tinyproxy): the
+  agent attaches solely to an `internal: true` bridge and reaches the network only
+  through the sidecar, which permits CONNECT to allowlisted hostnames on port 443.
+  Zero new Linux capabilities (the sidecar runs `cap_drop: ALL`; INV-8 intact); dood
+  mode is unchanged. Extend the shipped baseline (add-only) via
+  `~/.config/drydock/egress-allowlist` (global) or `egress-allowlist-<project>`
+  (per-project); a request to a non-allowlisted host returns 403. `drydock doctor`
+  gains an EGRESS section that reports the active allowlist sources.
 - **`drydock default <dood|contain>` / `drydock dood <proj> [--remove]` /
   `drydock contain <proj> [--remove]`** (#149). Manage the network/socket mode: a
   global default sentinel plus mutually-exclusive per-project pins. Resolution is

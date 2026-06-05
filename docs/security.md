@@ -540,12 +540,47 @@ INV-6. In contained mode (the factory default) the socket is absent (INV-9).
 - **Network exfiltration** — in dood mode (opt-in) the container shares the
   host's network namespace (`network_mode: host`) and the agent can make
   arbitrary outbound connections. In contained mode (the factory default) the
-  container runs on a drydock-managed bridge network with NO Docker socket and
-  NO host networking — the socket-escape class and host-network reach are both
-  removed. PHASE 1 NOTE: contained mode does NOT filter egress; the agent can
-  still make outbound internet connections over the bridge's default NAT. An
-  egress allowlist is a separate future change. Contained mode is not a
-  replacement for egress filtering.
+  container runs on an `internal: true` bridge with NO Docker socket and NO host
+  networking — the socket-escape class and host-network reach are both removed —
+  and egress is jailed behind a drydock-managed deny-by-default domain allowlist.
+  The agent reaches the network only through a per-session allowlist proxy
+  sidecar that permits CONNECT to allowlisted hostnames on port 443; a CONNECT to
+  any other host returns 403. The shipped baseline (it carries `api.anthropic.com`
+  and the other hosts Claude Code needs under drydock's default token auth —
+  provisional, pending empirical capture before v0.4.0) is add-only — extend it with
+  `~/.config/drydock/egress-allowlist` (global) or `egress-allowlist-<project>`
+  (per-project); user files only ADD entries, they cannot weaken the baseline.
+  This is L4 hostname-based filtering, not payload inspection — see the residual
+  gaps below.
+
+### Contained-mode egress jail: residual gaps
+
+The contained-mode egress jail is deny-by-default L4 hostname-based egress
+control, not an airtight boundary. Named, not hidden:
+
+- **(a) L4 only** — the proxy filters on the CONNECT hostname; it does not
+  inspect TLS payloads. Exfiltration THROUGH an allowed domain (e.g. a paste or
+  gist service that happens to be allowlisted) remains possible.
+- **(b) ECH / domain-fronting** — the proxy enforces the client-supplied CONNECT
+  hostname, not the real TLS SNI. A request that fronts an allowed domain to
+  reach a different origin cannot be detected at L4.
+- **(c) IP-literal CONNECT** — a CONNECT to a raw IP address matches no host
+  pattern and is denied by deny-by-default. Named here as both a residual path
+  (no hostname to match) and the attack class the default-deny posture mitigates.
+- **(d) Compromised sidecar = open egress** — if the proxy sidecar itself is
+  compromised, egress is open. Mitigated, not eliminated, by a minimal hardened
+  image with `cap_drop: ALL`, `no-new-privileges`, and no writable mount.
+- **(e) Tools that ignore `HTTPS_PROXY`** — a tool that bypasses the proxy
+  environment variables gets a DNS SERVFAIL on the internal bridge: breakage, not
+  bypass. There is no NAT route off the internal network for it to use.
+- **(f) dood mode is unchanged** — operators who opt into dood mode carry the
+  full host blast radius (INV-6); the egress jail applies to contained mode only.
+- **(g) Shared internal bridge** — concurrent contained sessions share one
+  fixed-name internal bridge (Docker's `enable_icc` defaults on), so a payload in
+  session A can reach a concurrent session B's proxy sidecar and egress through
+  B's allowlist. Bounded to the union of live sessions' allowlists under
+  single-user trust; isolating each session would reintroduce the network-leak
+  hazard, so it is accepted and named rather than closed. Out of scope.
 
 ## If you need adversarial-resistant isolation
 

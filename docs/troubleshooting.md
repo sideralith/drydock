@@ -110,7 +110,9 @@ contained mode:
 - `curl http://localhost:PORT/...` to a service published on the host
 - `make shell-api` and anything else that reaches the host daemon or network
 
-The agent's own internet access still works — Phase 1 does not filter egress.
+The agent's own internet access is jailed behind a deny-by-default domain
+allowlist in contained mode — it reaches allowlisted hosts only (see the next
+section to add one).
 
 Switch the project to **dood mode**, which restores the host Docker socket and
 host networking (the socket is root-equivalent on the host — INV-6):
@@ -125,6 +127,43 @@ DRYDOCK_DOOD=1 drydock     # or override for a single invocation
 at container creation. Revert with `drydock contain <proj>` (per project) or
 `drydock default contain` (global, back to the factory default). See INV-9 in
 CLAUDE.md and [docs/security.md](docs/security.md).
+
+## In contained mode, a domain is not reachable (403 / connection refused)
+
+Contained mode (the factory default, INV-9) jails egress behind a drydock-managed
+deny-by-default domain allowlist: a per-session proxy sidecar only tunnels CONNECT
+to allowlisted hostnames on port 443. A request to any other host fails — the
+proxy returns **HTTP 403**, which most tools surface as a failed HTTPS connection.
+
+The shipped baseline covers what Claude Code needs to authenticate and run under
+drydock's default token auth (`api.anthropic.com` and friends); it is provisional
+and finalized before v0.4.0 ships. To reach an additional host, add it to one of
+the user allowlist files, then start a **new** session (the effective filter is
+generated at session start):
+
+```bash
+# global — applies to every project
+echo "example.com" >> ~/.config/drydock/egress-allowlist
+
+# or per-project — applies only to <project>
+echo "example.com" >> ~/.config/drydock/egress-allowlist-<project>
+```
+
+One host per line; `#` comment lines are allowed. User files only **add** to the
+baseline — they cannot remove or weaken it. `drydock doctor` has an **EGRESS**
+section that reports the active allowlist sources and the effective filter for the
+current project.
+
+If a tool still cannot reach the network but you did not get a 403, check that it
+honors `HTTPS_PROXY` — a tool that ignores the proxy environment variables gets a
+DNS SERVFAIL on the internal network (there is no NAT route off it), which is
+breakage, not a bypass. If you genuinely need unrestricted egress and host-stack
+access, opt the project into dood mode (`drydock dood <proj>`).
+
+> **Upgrade note.** drydock never removes its Docker networks, so a machine that
+> ran an earlier contained build keeps a now-unused `drydock_net` bridge after
+> upgrading. It is harmless; remove it if you like with `docker network rm
+> drydock_net`. The current topology uses `drydock_internal` and `drydock_egress`.
 
 ## `docker exec` from inside the container fails with permission denied
 

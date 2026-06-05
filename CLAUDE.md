@@ -316,10 +316,13 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   networking — the factory default, targeting threat model B for external-ingestion work).
   The base compose file MUST be network-neutral. Mode resolution MUST be most-specific-wins and
   fail-closed (any same-level conflict resolves to contained), and the active mode + reason MUST
-  be printed at container creation. PHASE 1 NOTE: contained mode does NOT filter egress — the
-  bridge has no `internal: true` and the agent still reaches the internet. A domain-allowlist
-  egress jail is a separate future change; doctrine MUST NOT describe Phase 1 contained mode as
-  real egress containment.
+  be printed at container creation. Contained mode MUST jail egress behind a drydock-managed
+  deny-by-default domain allowlist: the agent attaches solely to an `internal: true` bridge (no
+  gateway/NAT; external DNS SERVFAILs) and reaches the network ONLY through a per-session proxy
+  sidecar (tinyproxy) that permits CONNECT to allowlisted hostnames on 443. The shipped baseline
+  is add-only — users MAY extend it via `~/.config/drydock/egress-allowlist[-<project>]` but MUST
+  NOT be able to weaken it. ZERO new Linux capabilities are introduced anywhere: both the agent
+  and the sidecar run `cap_drop: ALL` (INV-8 intact).
 - **Why**: Until Phase 1, every session — including external-ingestion work (research,
   third-party dependency review, foreign-issue/PR triage) that processes untrusted content the
   agent did not author — carried the full host blast radius: host networking plus a
@@ -330,21 +333,44 @@ optional features → DooD foundation → meta-rule → runtime hardening defaul
   via the always-present socket and reads the entire host filesystem — with no posture choice
   available to the operator to prevent it. Contained mode removes that socket and host-network
   reach for the default case; dood mode keeps them for stack work that genuinely needs them.
+  WITHOUT the egress jail, a contained session reviewing an untrusted third-party dependency could
+  still `POST` exfiltrated data to any host on the internet — removing the socket and host network
+  shrank the blast radius but left arbitrary outbound reach. The allowlist closes that: a CONNECT
+  to any non-allowlisted host returns 403.
 - **Consequence of violating**: If the base hardcodes the socket/host-net again (or the gate
   emits both/neither overlay), external-ingestion sessions silently regain the full host blast
   radius with no operator signal — the exact wound this invariant closes — or `docker compose
   config` fails fatally (`network_mode` and `networks:` are mutually exclusive), breaking every
   `drydock run`.
-- **Honest framing**: This is a deliberate, documented move toward threat model B FOR THE
-  CONTAINED MODE — not a cosmetic relabelling of an unchanged posture. Both truths hold:
-  contained mode targets B (and Phase 1 reaches it only partially — no egress filter yet);
-  dood mode REMAINS threat model A, unchanged.
+- **Honest framing**: This completes contained mode's move toward threat model B: deny-by-default
+  L4 hostname-based egress control. dood mode REMAINS threat model A, unchanged. Residual gaps
+  (named, not hidden): (a) **L4 only** — payload is not inspected, so exfiltration THROUGH an
+  allowed domain remains possible; (b) **ECH / domain-fronting** — the proxy enforces the
+  client-supplied CONNECT hostname, not the TLS SNI, so domain-fronting cannot be detected;
+  (c) **IP-literal CONNECT** is denied by deny-by-default (no host pattern matches a raw IP) —
+  named as both a residual path and the mitigated attack class; (d) a **compromised sidecar**
+  means open egress (mitigated by a minimal, hardened, no-writable-mount sidecar, not eliminated);
+  (e) a **tool that ignores `HTTPS_PROXY`** simply loses egress on the internal net (breakage, not
+  bypass); (f) **dood mode is unchanged** and carries the full host blast radius (INV-6);
+  (g) **concurrent contained sessions share one internal bridge** (`enable_icc` defaults true), so
+  a session may reach a peer session's proxy sidecar and egress through that peer's allowlist —
+  bounded to the union of live sessions' allowlists under single-user trust; inter-session
+  isolation would reintroduce the network-leak hazard and is out of scope. This is not a guarantee:
+  gap (a) alone means a determined payload can still leak through an allowed domain. The control
+  raises the cost of casual and accidental exfiltration; it does not make egress impossible.
 - **Where this lives in code**: `docker-compose.dood.yml` and `docker-compose.contain.yml`
   (the two mode overlays); `resolve_run_mode()`, `compose_files()`, and the COMPOSE_DOOD /
   COMPOSE_CONTAIN constants in `lib/compose.sh`; `_emit_mode_banner()`, `cmd_dood` /
   `cmd_contain` / `cmd_default` / `_pin_project_mode` in `lib/commands.sh`; the dispatch
   entries in `bin/drydock`; the sentinels under `~/.config/drydock/{dood,contain}/<proj>` and
-  `~/.config/drydock/default-dood`.
+  `~/.config/drydock/default-dood`. Egress jail (contained mode): `docker-compose.contain.yml`
+  (sidecar service + `drydock_internal`/`drydock_egress` networks + `HTTPS_PROXY`/`NO_PROXY`/
+  telemetry env + `depends_on: service_healthy`); `Dockerfile.egress` and
+  `templates/tinyproxy.conf` (the sidecar image); `templates/egress-baseline.conf` (shipped
+  baseline); `_generate_egress_filter()` + the egress block in `export_compose_env()` + the
+  `gc_orphan_session_dirs` sidecar reap + the `EGRESS_BASELINE`/`EGRESS_IMAGE` constants in
+  `lib/compose.sh`; the two-name teardown in `_run_claude_lifecycle`/`cmd_stop` and the EGRESS
+  banner/doctor lines in `lib/commands.sh`.
 - **Deep dive**: [docs/security.md](docs/security.md)
 
 ## 3. Code / Tooling Conventions
@@ -405,7 +431,9 @@ Issue #149 Phase 1 reopens this boundary by documented real demand — the maint
 external-ingestion workflow (research, third-party dependency review, foreign-issue/PR triage).
 INV-9 records the outcome: a contained-by-default mode (no Docker socket, no host network)
 targeting threat model B for that work, alongside the unchanged opt-in dood mode (threat model
-A). Phase 1 does NOT filter egress; a domain-allowlist egress jail is a separate future change.
+A). Phase 2 (issue #149) completes that work: contained mode now enforces a deny-by-default domain
+allowlist via a per-session proxy sidecar — L4 hostname egress control toward threat model B — with
+zero new Linux capabilities (INV-8 intact). dood mode remains threat model A.
 
 See `→ docs/security.md`.
 
