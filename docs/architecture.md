@@ -57,7 +57,7 @@ $PROJECT_DIR/docs/ ───────────────→ $PROJECT_DIR
    host-only; left on disk after               scales to N siblings without
    unlink — see dual-hint message)             overlay enumeration changes)
 
-/var/run/docker.sock  ────────────→ /var/run/docker.sock
+/var/run/docker.sock  ────────────→ /var/run/docker.sock   (dood mode only — INV-9)
   (host daemon)                       Container CLI → host daemon
                                        → `docker exec myproject-api …`
 
@@ -169,8 +169,8 @@ the Debian Linux container. Two paths that would fix this for a future release:
    binary into the image at build time (adds ~10 MB, pins the version).
 2. **HTTP-API bridge** — run `engram` on the host with
    `ENGRAM_CLOUD_HOST=0.0.0.0` (port 7437) and configure the container's MCP
-   server to reach it via the host network (already shared via `network_mode:
-   host`). No binary inside the container needed.
+   server to reach it via the host network (shared only in dood mode, INV-9). No
+   binary inside the container needed.
 
 Neither is implemented in v0.1.0.
 
@@ -559,17 +559,18 @@ from each filename, checks liveness with `kill -0`, and removes any orphaned fil
 from past `exec`'d invocations. Concurrent invocations are safe — a live PID's
 file is left untouched.
 
-## Docker-out-of-Docker (DooD), not Docker-in-Docker
+## Docker-out-of-Docker (DooD) — opt-in, not Docker-in-Docker
 
-drydock bind-mounts `/var/run/docker.sock`. The `docker` CLI inside the
-container talks to the **host's** daemon — it does NOT run a nested daemon.
-So sibling containers in any project's `docker-compose` stack are visible:
-`docker exec myproject-api …`, `make shell-api`, project Makefile
-targets all work transparently.
+In **dood mode** (opt-in, INV-9) drydock bind-mounts `/var/run/docker.sock`. The
+`docker` CLI inside the container talks to the **host's** daemon — it does NOT run
+a nested daemon. So sibling containers in any project's `docker-compose` stack are
+visible: `docker exec myproject-api …`, `make shell-api`, project Makefile targets
+all work transparently. In **contained mode** (the factory default) the socket is
+absent and the host network is not shared — these stack commands do not work; opt a
+project in with `drydock dood <proj>`.
 
-Consequence: socket access ≈ root-equivalent on the host. This is why
-drydock's threat model is "defense against accidents, not adversaries" — see
-[security.md](security.md).
+Consequence (dood mode): socket access ≈ root-equivalent on the host (INV-6). This
+is the unchanged threat-model-A posture — see [security.md](security.md).
 
 ## Container base + UID/GID matching
 
