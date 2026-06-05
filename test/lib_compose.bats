@@ -3179,6 +3179,115 @@ _make_rw_sibling_with_url() {
 	[ "$mode" = "contained" ]
 }
 
+# ── Phase 2 egress jail — filter generation (R9.14–R9.18) ───────────────────
+# All five tests use synthetic HOME with prototype dirs, the _make_docker_ps_stub
+# seam, and DRYDOCK_DOOD / DRYDOCK_CONTAIN env overrides. The egress baseline is
+# the shipped templates/egress-baseline.conf (resolved from DRYDOCK_HOME).
+
+# Helper: fresh HOME with the minimum structure export_compose_env expects.
+_egress_fake_home() {
+	local h="$BATS_TEST_TMPDIR/egress-home-$$-${RANDOM}"
+	mkdir -p "$h/.claude-container"
+	touch "$h/.claude-container.json"
+	printf '%s' "$h"
+}
+
+@test "export_compose_env: contained — DRYDOCK_EGRESS_FILTER_FILE exported and file exists" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# The var must be exported and the file must exist on disk.
+	[ -n "${DRYDOCK_EGRESS_FILTER_FILE:-}" ]
+	[ -f "$DRYDOCK_EGRESS_FILTER_FILE" ]
+}
+
+@test "export_compose_env: contained — filter file contains api.anthropic.com" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# Filter file contains ERE host patterns; baseline uses ^api\.anthropic\.com$.
+	# Fixed-string search for the literal escaped-dot form that tinyproxy uses.
+	grep -qF 'api\.anthropic\.com' "$DRYDOCK_EGRESS_FILTER_FILE"
+}
+
+@test "export_compose_env: contained — filter file contains user global additions" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	# Place a global user allowlist.
+	mkdir -p "$fh/.config/drydock"
+	printf 'example-custom.com\n' >"$fh/.config/drydock/egress-allowlist"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	grep -qF 'example-custom.com' "$DRYDOCK_EGRESS_FILTER_FILE"
+}
+
+@test "export_compose_env: contained — user file cannot remove baseline entries" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	# User file omits api.anthropic.com entirely — baseline MUST still appear.
+	mkdir -p "$fh/.config/drydock"
+	printf 'other-domain.example\n' >"$fh/.config/drydock/egress-allowlist"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	grep -qF 'api\.anthropic\.com' "$DRYDOCK_EGRESS_FILTER_FILE"
+}
+
+@test "export_compose_env: dood — DRYDOCK_EGRESS_FILTER_FILE not set" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_CONTAIN DRYDOCK_EGRESS_FILTER_FILE
+	export DRYDOCK_DOOD=1
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# In dood mode the var must NOT be set.
+	[ -z "${DRYDOCK_EGRESS_FILTER_FILE:-}" ]
+}
+
+@test "export_compose_env: contained — empty baseline is safe (pipefail robustness)" {
+	# Verifies _generate_egress_filter exits 0 and the run continues when the
+	# effective filter (after stripping comments/blanks) is empty. This guards
+	# against the grep-empty-output pipefail trap (set -euo pipefail).
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	# Override EGRESS_BASELINE to an all-comment file.
+	local fake_baseline="$BATS_TEST_TMPDIR/egress-empty-baseline-$$"
+	printf '# comment only\n# another comment\n' >"$fake_baseline"
+	EGRESS_BASELINE="$fake_baseline"
+
+	# Must not abort under set -euo pipefail.
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# File must exist (even if empty).
+	[ -f "$DRYDOCK_EGRESS_FILTER_FILE" ]
+}
+
 @test "#89 RED: export_compose_env does NOT mutate canonical sibling URL during startup migration" {
 	local fake_home="$BATS_TEST_TMPDIR/89-noop-home"
 	mkdir -p "$fake_home/.claude-container"
