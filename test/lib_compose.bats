@@ -2,9 +2,10 @@
 # test/lib_compose.bats — unit tests for lib/compose.sh
 #
 # Sources lib/common.sh + lib/paths.sh + lib/compose.sh directly (not
-# bin/drydock). Tests compose_files(), export_compose_env(), and image_exists()
-# via the DOCKER seam. Does NOT test ensure_runtime_dirs / ensure_prereqs /
-# ensure_image — those reach into cmd_setup/cmd_build from lib/commands.sh.
+# bin/drydock). Tests compose_files(), export_compose_env(), image_exists(), and
+# _ensure_docker_responsive() via the DOCKER seam. Does NOT test
+# ensure_runtime_dirs / ensure_image — those reach into cmd_setup/cmd_build from
+# lib/commands.sh.
 
 load "helpers/load"
 
@@ -636,6 +637,44 @@ _setup_pr2_engram_and_linux() {
 	run image_exists
 	log_contents="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log_contents" == *"image inspect"* ]]
+}
+
+# ── _ensure_docker_responsive (daemon fail-fast) ──────────────────────────────
+
+@test "_ensure_docker_responsive: daemon replies (mock exit 0) — returns 0" {
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export MOCK_DOCKER_EXIT=0
+	run _ensure_docker_responsive
+	[ "$status" -eq 0 ]
+}
+
+@test "_ensure_docker_responsive: daemon errors (mock exit 1) — errs, names not-responding" {
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export MOCK_DOCKER_EXIT=1
+	run _ensure_docker_responsive
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"not responding"* ]]
+}
+
+@test "_ensure_docker_responsive: guidance is backend-agnostic (Docker Desktop AND Docker Engine)" {
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	export MOCK_DOCKER_EXIT=1
+	run _ensure_docker_responsive
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"Docker Desktop"* ]]
+	[[ "$output" == *"Docker Engine"* ]]
+}
+
+@test "_ensure_docker_responsive: a hanging daemon is bounded by the probe timeout" {
+	# A stub that never returns; the timeout must kill it and the function must err.
+	local stub="$BATS_TEST_TMPDIR/docker-hang"
+	printf '#!/bin/sh\nsleep 5\n' >"$stub"
+	chmod +x "$stub"
+	export DOCKER="$stub"
+	export DRYDOCK_DOCKER_PROBE_TIMEOUT=1
+	run _ensure_docker_responsive
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"not responding"* ]]
 }
 
 # ── DRYDOCK_SUBMOUNT_*_HOST_PATH passthrough (DooD gap) ──────────────────────
