@@ -54,11 +54,11 @@ Debian 12 slim container that:
 
 | | Claude Code sandbox mode | drydock |
 |---|---|---|
-| **What it is** | A feature *inside* Claude Code (off by default; enable with `/sandbox`) | The workspace Claude Code runs *inside* (you launch it with the `drydock` CLI) |
+| **What it is** | A feature *inside* Claude Code (off by default; enable via the `/sandbox` panel or `sandbox.enabled` in settings) | The workspace Claude Code runs *inside* (you launch it with the `drydock` CLI) |
 | **Scope** | Each Bash command and its subprocesses | The whole session and its environment |
-| **What it's for** | Contain a command's blast radius; cut permission prompts | A reproducible, credential-isolated dev environment |
-| **Filesystem** | Writes limited to the working directory; reads allowed everywhere by default | Host `~/.ssh`, `~/.gnupg`, `~/.aws`… are not mounted at all — invisible, not merely write-protected |
-| **Network** | Per-command domain allowlist | Contained by default (no host network, no socket; egress via a per-session deny-by-default domain allowlist); opt-in dood mode shares the host network — not per-command |
+| **What it's for** | Contain a command's blast radius; cut permission prompts (in auto-allow mode) | A reproducible, credential-isolated dev environment |
+| **Filesystem** | Writes limited to the working directory; reads allowed everywhere by default — including credential files like `~/.ssh/` and `~/.aws/credentials` unless you add `denyRead` entries | Host `~/.ssh`, `~/.gnupg`, `~/.aws`… are not mounted at all — invisible, not merely write-protected |
+| **Network** | Session-wide domain allowlist (shared across all Bash commands); new domains prompt on first use, or pre-allow via `allowedDomains` in settings | Contained by default (no host network, no socket; egress via a per-session deny-by-default domain allowlist — static, no prompts); opt-in dood mode shares the host network |
 | **Reproducible environment** | No — it restricts the host you already have | Yes — pinned Debian image + defined toolchain |
 | **State** | Uses the host's Claude state as-is — no separation | Separate container state — host and container sessions don't race |
 | **Mechanism** | OS sandbox — Seatbelt (macOS), bubblewrap (Linux) | Docker container |
@@ -71,6 +71,7 @@ Debian 12 slim container that:
 - **Credential isolation** — the host's SSH and GPG keys are never mounted into the container (INV-1).
 - **Tamper-proof guardrails** — an image-baked `permissions.deny` policy plus a read-only `PreToolUse` hook; the agent cannot edit its own guardrails (INV-3).
 - **Container hardening** — dropped Linux capabilities, `no-new-privileges`, and a size-bounded `/tmp` (INV-8).
+- **Egress jail (contained mode)** — the default mode reaches the network only through a drydock-managed deny-by-default domain allowlist: a per-session proxy sidecar on an `internal: true` bridge, with no Docker socket and no host networking (INV-9). This is L4 hostname-based filtering — see [docs/security.md](docs/security.md) for the named residual gaps.
 
 These raise the floor against agent *accidents* — not an adversarial sandbox. Full detail in [docs/security.md](docs/security.md).
 
