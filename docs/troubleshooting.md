@@ -3,6 +3,21 @@
 Common failures and fixes. Run `drydock doctor` first — it shows versions,
 paths, mount detection, and GIDs.
 
+## `drydock build` / `run` aborts with "the Docker daemon is not responding"
+
+Before building or starting a container, drydock probes the Docker daemon. If the
+socket file exists but the daemon does not reply (for example, Docker Desktop left
+degraded after host memory pressure), drydock now **fails fast** with this message
+instead of hanging indefinitely. Restart your Docker engine, then retry:
+
+- **Docker Desktop** (macOS / Windows / WSL2): restart it from the tray, or quit
+  and reopen. Wait for "Engine running".
+- **Docker Engine** (Linux / native WSL2): `sudo systemctl restart docker`
+  (or `sudo service docker start`).
+
+Verify with `docker ps` — it should return instantly — then retry. The probe
+timeout is 12s by default; tune it with `DRYDOCK_DOCKER_PROBE_TIMEOUT` (seconds).
+
 ## Claude prompts for login every session
 
 By design, each drydock container does not inherit the host's OAuth credentials
