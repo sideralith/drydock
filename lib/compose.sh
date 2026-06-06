@@ -1218,6 +1218,30 @@ ensure_prereqs() {
 	command -v docker >/dev/null || err "docker not on PATH"
 	[ -S /var/run/docker.sock ] || err "docker socket not found at /var/run/docker.sock"
 	[ -f "$COMPOSE_BASE" ] || err "compose base not found: $COMPOSE_BASE"
+	_ensure_docker_responsive
+}
+
+# _ensure_docker_responsive — fail fast when the Docker socket exists but the
+# daemon does not actually answer. A degraded daemon (e.g. after host memory
+# pressure) keeps the socket file present yet stops replying, so a later
+# `docker build`/`run` hangs indefinitely with no message — against drydock's
+# no-silent-failure ethos. Probe `docker version` under a bounded `timeout`; on
+# no reply, abort with backend-agnostic guidance (the daemon is unreachable, so
+# the backend cannot be detected here — name both common ones). The probe is
+# SKIPPED when `timeout` is unavailable (e.g. stock macOS without coreutils) so
+# the check itself can never hang. Tunable via DRYDOCK_DOCKER_PROBE_TIMEOUT
+# (seconds, default 12).
+_ensure_docker_responsive() {
+	command -v timeout >/dev/null 2>&1 || return 0
+	if timeout "${DRYDOCK_DOCKER_PROBE_TIMEOUT:-12}" "$DOCKER" version >/dev/null 2>&1; then
+		return 0
+	fi
+	err "the Docker daemon is not responding — the socket exists but the daemon did not
+reply within ${DRYDOCK_DOCKER_PROBE_TIMEOUT:-12}s. Start or restart your Docker engine,
+then retry. Depending on your setup:
+  - Docker Desktop (macOS / Windows / WSL2): restart it from the tray, or quit and reopen.
+  - Docker Engine (Linux / native WSL2):     sudo systemctl restart docker  (or: sudo service docker start)
+Verify with 'docker ps' before retrying."
 }
 
 ensure_runtime_dirs() {
