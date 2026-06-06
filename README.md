@@ -54,11 +54,11 @@ Debian 12 slim container that:
 
 | | Claude Code sandbox mode | drydock |
 |---|---|---|
-| **What it is** | A feature *inside* Claude Code (off by default; enable with `/sandbox`) | The workspace Claude Code runs *inside* (you launch it with the `drydock` CLI) |
+| **What it is** | A feature *inside* Claude Code (off by default; enable via the `/sandbox` panel or `sandbox.enabled` in settings) | The workspace Claude Code runs *inside* (you launch it with the `drydock` CLI) |
 | **Scope** | Each Bash command and its subprocesses | The whole session and its environment |
-| **What it's for** | Contain a command's blast radius; cut permission prompts | A reproducible, credential-isolated dev environment |
-| **Filesystem** | Writes limited to the working directory; reads allowed everywhere by default | Host `~/.ssh`, `~/.gnupg`, `~/.aws`… are not mounted at all — invisible, not merely write-protected |
-| **Network** | Per-command domain allowlist | Contained by default (no host network, no socket; egress via a per-session deny-by-default domain allowlist); opt-in dood mode shares the host network — not per-command |
+| **What it's for** | Contain a command's blast radius; cut permission prompts (in auto-allow mode) | A reproducible, credential-isolated dev environment |
+| **Filesystem** | Writes limited to the working directory; reads allowed everywhere by default — including credential files like `~/.ssh/` and `~/.aws/credentials` unless you add `denyRead` entries | Host `~/.ssh`, `~/.gnupg`, `~/.aws`… are not mounted at all — invisible, not merely write-protected |
+| **Network** | Session-wide domain allowlist (shared across all Bash commands); new domains prompt on first use, or pre-allow via `allowedDomains` in settings | Contained by default (no host network, no socket; egress via a per-session deny-by-default domain allowlist — static, no prompts); opt-in dood mode shares the host network |
 | **Reproducible environment** | No — it restricts the host you already have | Yes — pinned Debian image + defined toolchain |
 | **State** | Uses the host's Claude state as-is — no separation | Separate container state — host and container sessions don't race |
 | **Mechanism** | OS sandbox — Seatbelt (macOS), bubblewrap (Linux) | Docker container |
