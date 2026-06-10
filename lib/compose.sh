@@ -552,6 +552,29 @@ compose_files() {
 	fi
 }
 
+# _normalize_egress_patterns — stdin→stdout normalizer for allowlist lines.
+# tinyproxy's FilterType ere matches UNANCHORED substrings: a raw user line
+# `github.com` would also match github.com.evil.io and github1com.example,
+# silently widening the filter. Normalization (applied uniformly to baseline and
+# user sources, AFTER comment-stripping and BEFORE dedup, so `example.com` and
+# `^example\.com$` collapse to one line):
+#   - a bare hostname (alphanumerics, dots, hyphens only) → escape dots and
+#     anchor exactly: example.com → ^example\.com$
+#   - anything else → verbatim raw-ERE passthrough (expert escape hatch; the
+#     shipped baseline's already-anchored lines pass through unchanged).
+# Same transform as _to_ere_baseline_pattern in scripts/egress-capture.sh —
+# replicated here because lib/ must not source scripts/.
+_normalize_egress_patterns() {
+	awk '
+		/^[[:alnum:].-]+$/ {
+			gsub(/\./, "\\.")
+			print "^" $0 "$"
+			next
+		}
+		{ print }
+	'
+}
+
 # _generate_egress_filter <project_name> <disc>
 # Build the per-session effective egress allowlist for contained mode and export
 # DRYDOCK_EGRESS_FILTER_FILE (the path RO-mounted into the sidecar). Concatenation
@@ -559,8 +582,9 @@ compose_files() {
 #   1. templates/egress-baseline.conf   (shipped, add-only)
 #   2. ~/.config/drydock/egress-allowlist            (global user additions)
 #   3. ~/.config/drydock/egress-allowlist-<project>  (per-project additions)
-# Comments (#...) and blank lines are stripped; duplicate patterns are collapsed
-# (order-preserving dedup). Atomic write (mktemp + mv). Idempotent for identical
+# Comments (#...) and blank lines are stripped; lines are normalized via
+# _normalize_egress_patterns (bare hostnames → anchored ERE); duplicate patterns
+# are collapsed (order-preserving dedup). Atomic write (mktemp + mv). Idempotent for identical
 # inputs. No new parser — plain line concatenation, mirroring the links/.list and
 # managed-ssh-config generators already in this file.
 _generate_egress_filter() {
@@ -600,6 +624,7 @@ _generate_egress_filter() {
 		{ [ -f "$_perproj" ] && cat "$_perproj"; } || true
 	} |
 		sed 's/#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//' |
+		_normalize_egress_patterns |
 		awk 'NF && !seen[$0]++' \
 			>"$_tmp"
 
