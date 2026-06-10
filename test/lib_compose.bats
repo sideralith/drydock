@@ -3245,6 +3245,22 @@ _egress_fake_home() {
 	[ -f "$DRYDOCK_EGRESS_FILTER_FILE" ]
 }
 
+@test "export_compose_env: contained — filter file is world-readable (mode 644)" {
+	# The filter is RO bind-mounted into the sidecar where tinyproxy runs as a
+	# non-root uid with cap_drop ALL (no DAC_OVERRIDE). mktemp creates 0600 and
+	# mv preserves it — without an explicit chmod the sidecar cannot read the
+	# filter, healthcheck never passes, and every contained run aborts (C1).
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	[ "$(stat -c '%a' "$DRYDOCK_EGRESS_FILTER_FILE")" = "644" ]
+}
+
 @test "export_compose_env: contained — filter file contains api.anthropic.com" {
 	local fh
 	fh="$(_egress_fake_home)"

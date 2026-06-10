@@ -603,6 +603,12 @@ _generate_egress_filter() {
 		awk 'NF && !seen[$0]++' \
 			>"$_tmp"
 
+	# mktemp creates 0600 and mv preserves it, but the filter must be readable by
+	# the sidecar: tinyproxy runs as a non-root uid with cap_drop ALL (no
+	# DAC_OVERRIDE), so an owner-only file makes the proxy abort on startup and
+	# the healthcheck gate kills every contained run. The allowlist is non-secret
+	# data — world-readable is correct.
+	chmod 644 "$_tmp"
 	if ! mv -f "$_tmp" "$_out"; then
 		rm -f "$_tmp"
 		err "atomic mv failed for egress filter"
