@@ -35,6 +35,76 @@ setup() {
 	declare -f _cleanup >/dev/null
 }
 
+# ── network lifecycle (C2: smoke must not poison the prod fixed-name nets) ────
+#
+# The production compose stack owns drydock_internal / drydock_egress: networks
+# pre-created by `docker network create` lack the com.docker.compose.network
+# label and make every subsequent contained `docker compose up` fail fatally
+# ("incorrect label ... set to ''"). The smoke run must therefore remove exactly
+# the networks IT created — and never touch pre-existing ones.
+
+# _docker_stub_prelude <log> <network-inspect-rc>
+# Emits a `docker` shell-function stub (functions win over PATH lookup) that
+# logs every call and answers: image inspect → ok, network inspect → $2
+# (0 = network pre-exists, 1 = absent), leftover-container inspect → absent.
+_docker_stub_prelude() {
+	cat <<STUB
+docker() {
+	echo "docker \$*" >>'$1'
+	case "\$1 \${2:-}" in
+	"network inspect") return $2 ;;
+	"inspect \$SMOKE_CONTAINER") return 1 ;;
+	esac
+	return 0
+}
+STUB
+}
+
+@test "_check_preconditions: tracks the networks it creates" {
+	local log="$BATS_TEST_TMPDIR/docker-c2-track.log"
+	: >"$log"
+	run bash -c '
+		source "$1/scripts/egress-smoke.sh"
+		eval "$2"
+		_check_preconditions >/dev/null
+		printf "%s\n" "${SMOKE_CREATED_NETWORKS[@]}"
+	' -- "$DRYDOCK_HOME" "$(_docker_stub_prelude "$log" 1)"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"drydock_internal"* ]]
+	[[ "$output" == *"drydock_egress"* ]]
+	grep -q '^docker network create --internal drydock_internal$' "$log"
+	grep -q '^docker network create drydock_egress$' "$log"
+}
+
+@test "_cleanup: removes exactly the networks the smoke run created" {
+	local log="$BATS_TEST_TMPDIR/docker-c2-rm.log"
+	: >"$log"
+	run bash -c '
+		source "$1/scripts/egress-smoke.sh"
+		eval "$2"
+		SMOKE_CREATED_NETWORKS=(drydock_internal drydock_egress)
+		_cleanup >/dev/null
+	' -- "$DRYDOCK_HOME" "$(_docker_stub_prelude "$log" 1)"
+	[ "$status" -eq 0 ]
+	grep -q '^docker network rm drydock_internal$' "$log"
+	grep -q '^docker network rm drydock_egress$' "$log"
+}
+
+@test "_cleanup: pre-existing networks are NOT removed" {
+	local log="$BATS_TEST_TMPDIR/docker-c2-preexist.log"
+	: >"$log"
+	run bash -c '
+		source "$1/scripts/egress-smoke.sh"
+		eval "$2"
+		_check_preconditions >/dev/null
+		_cleanup >/dev/null
+	' -- "$DRYDOCK_HOME" "$(_docker_stub_prelude "$log" 0)"
+	[ "$status" -eq 0 ]
+	# Networks pre-existed (inspect rc=0): none created, none removed.
+	! grep -q 'network create' "$log"
+	! grep -q 'network rm' "$log"
+}
+
 # ── _write_filter (C1: sidecar must be able to read the filter) ───────────────
 
 @test "_write_filter: generated filter file is world-readable (mode 644)" {

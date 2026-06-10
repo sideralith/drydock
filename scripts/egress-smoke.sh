@@ -37,6 +37,14 @@ GATE2_HOST='example.com'
 # An IP literal — proxy should block all IP literals (no host pattern match).
 GATE3_IP='1.1.1.1'
 
+# Networks created BY THIS RUN (and only those) — removed again by _cleanup.
+# Pre-creating the production fixed-name networks with `docker network create`
+# leaves them WITHOUT the com.docker.compose.network label, which makes every
+# subsequent contained `docker compose up` fail fatally ("incorrect label ...
+# set to ''") until a manual `docker network rm`. Restoring the host to its
+# prior state is the only safe contract: pre-existing networks are never touched.
+SMOKE_CREATED_NETWORKS=()
+
 # ── Script-relative paths ─────────────────────────────────────────────────────
 
 _script_dir() {
@@ -61,7 +69,14 @@ die() {
 _cleanup() {
 	log "Cleaning up smoke sidecar..."
 	docker rm -f "$SMOKE_CONTAINER" >/dev/null 2>&1 || true
-	# Networks are shared, fixed-name — do NOT remove them.
+	# Remove exactly the networks THIS run created (see SMOKE_CREATED_NETWORKS):
+	# leaving them behind poisons subsequent contained runs (missing compose
+	# label); removing pre-existing ones would tear down live drydock topology.
+	local net
+	for net in "${SMOKE_CREATED_NETWORKS[@]}"; do
+		log "Removing network $net (created by this smoke run)..."
+		docker network rm "$net" >/dev/null 2>&1 || true
+	done
 }
 
 # ── Preconditions ─────────────────────────────────────────────────────────────
@@ -74,14 +89,17 @@ _check_preconditions() {
 		die "Image $SIDECAR_IMAGE not found.  Run 'drydock build' first."
 	fi
 
-	# Create networks if absent (do not fail if they already exist)
+	# Create networks if absent (do not fail if they already exist). Track every
+	# network WE create so _cleanup can remove exactly those — and only those.
 	if ! docker network inspect "$NETWORK_INTERNAL" >/dev/null 2>&1; then
 		log "Creating network $NETWORK_INTERNAL (internal: true)..."
 		docker network create --internal "$NETWORK_INTERNAL"
+		SMOKE_CREATED_NETWORKS+=("$NETWORK_INTERNAL")
 	fi
 	if ! docker network inspect "$NETWORK_EGRESS" >/dev/null 2>&1; then
 		log "Creating network $NETWORK_EGRESS..."
 		docker network create "$NETWORK_EGRESS"
+		SMOKE_CREATED_NETWORKS+=("$NETWORK_EGRESS")
 	fi
 
 	# Remove a leftover smoke container from a previous failed run
