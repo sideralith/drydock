@@ -4070,3 +4070,89 @@ STUB
 	[[ "$log" == *"drydock:latest"* ]]
 	[[ "$log" == *"Dockerfile.egress"* ]]
 }
+
+# ── Audit batch 2 F5: cmd_sync before first setup ─────────────────────────────
+# cmd_sync called only ensure_prereqs + ensure_image, then docker run with
+# -v "$CONTAINER_CLAUDE":/dst:rw. On native Linux a missing bind source is
+# auto-created ROOT-OWNED by the daemon; every later drydock command then dies
+# on EACCES until a manual sudo rm. cmd_setup's header comment already claims
+# ensure_runtime_dirs covers cmd_sync — it must actually run there, so a sync
+# on a fresh host bootstraps user-owned state (or fails loud) instead of
+# letting the daemon create root-owned dirs.
+
+@test "cmd_sync: fresh host — bootstraps runtime state before the docker staging run (audit batch 2 F5)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	# Fresh host: no prototype dir, no container JSON.
+	[ ! -d "$CONTAINER_CLAUDE" ]
+	[ ! -f "$CONTAINER_CLAUDE_JSON" ]
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	# The bind sources exist user-owned BEFORE docker could auto-create them.
+	[ -d "$CONTAINER_CLAUDE" ]
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	[ -O "$CONTAINER_CLAUDE" ]
+}
+
+# ── Audit batch 2 F6: direct `drydock sync` failure must not leak staging ────
+# The docker/rsync staging invocation was a plain command: under direct
+# dispatch set -e aborted BEFORE rm -rf "$_staging", leaking a complete
+# dereferenced ~/.claude copy under /tmp. The `local _rsync_rc=$?` capture
+# only worked in the errexit-suppressed auto-sync path — so this test runs
+# cmd_sync under `set -euo pipefail`, simulating direct dispatch.
+
+@test "cmd_sync: failed container rsync under set -e — staging removed, nonzero rc, no success (audit batch 2 F6)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	local stage_tmp="$BATS_TEST_TMPDIR/sync-fail-stage"
+	mkdir -p "$stage_tmp"
+
+	# Docker stub: the rsync container invocation fails.
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-sync-fail"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "run" ]; then exit 1; fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+
+	run bash -c "
+		set -euo pipefail
+		export HOME='$fakehome'
+		export TMPDIR='$stage_tmp'
+		export DOCKER='$stub_dir/docker'
+		export UNAME='$UNAME' OSRELEASE_FILE='$OSRELEASE_FILE' PATH='$PATH'
+		source '$DRYDOCK_HOME/lib/common.sh'
+		source '$DRYDOCK_HOME/lib/paths.sh'
+		source '$DRYDOCK_HOME/lib/compose.sh'
+		source '$DRYDOCK_HOME/lib/commands.sh'
+		ensure_prereqs() { :; }
+		ensure_image() { :; }
+		mkdir -p \"\$CONTAINER_CLAUDE\"
+		touch \"\$CONTAINER_CLAUDE_JSON\"
+		rm -f \"\$CONTAINER_CLAUDE/.drydock-last-sync\"
+		cmd_sync
+	"
+	[ "$status" -ne 0 ]
+	[[ "$output" != *"Sync done"* ]]
+	# The staging copy of ~/.claude is removed on the failure path too.
+	[ -z "$(find "$stage_tmp" -maxdepth 1 -name 'drydock-sync.*' -print -quit)" ]
+	# No freshness marker — the sync did not happen.
+	[ ! -f "$fakehome/.claude-container/.drydock-last-sync" ]
+}

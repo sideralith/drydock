@@ -140,6 +140,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also listed `api-docs` sessions. The post-filter now anchors the
   4-hex-character discriminator (keeping `-shell` companion rows, which list
   intentionally shows).
+- **`drydock sync` before first setup no longer wedges drydock with a
+  root-owned `~/.claude-container`.** The sync's container invocation
+  bind-mounts the prototype dir read-write; on a fresh host the missing bind
+  source was auto-created root-owned by the daemon, and every subsequent run
+  died on EACCES until a manual `sudo rm`. `cmd_sync` now runs
+  `ensure_runtime_dirs` first (as `cmd_run` / `cmd_shell` already did and
+  cmd_setup's header comment claimed), so a fresh-host sync bootstraps
+  user-owned state via the idempotent setup.
+- **A failed `drydock sync` no longer leaks the full `~/.claude` staging copy
+  in `/tmp`.** The container rsync invocation was a plain command, so under
+  direct dispatch `set -e` aborted before the staging cleanup — leaving a
+  complete dereferenced `~/.claude` copy (potentially hundreds of MB,
+  credentials included) under `/tmp/drydock-sync.XXXXXX`. The invocation is
+  now reach-exit-guarded so cleanup and exit-code propagation run on both
+  dispatch paths.
 
 ## [0.3.3] - 2026-06-03
 

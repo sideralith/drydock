@@ -274,6 +274,15 @@ cmd_build() {
 
 cmd_sync() {
 	ensure_prereqs
+	# Audit batch 2 F5: bootstrap runtime state BEFORE the docker run below.
+	# Its -v "$CONTAINER_CLAUDE":/dst:rw bind is auto-created ROOT-OWNED by
+	# the daemon when the source is missing (fresh host, sync before first
+	# setup), wedging every later command on EACCES until a manual sudo rm.
+	# ensure_runtime_dirs triggers the idempotent cmd_setup when the
+	# prototype is missing (cmd_setup never calls back into cmd_sync — no
+	# recursion), matching cmd_run / cmd_shell and cmd_setup's own header
+	# comment.
+	ensure_runtime_dirs
 	ensure_image
 	note "Sync $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)"
 	# MCP filter: when engram is not usable in the container, exclude
@@ -301,6 +310,13 @@ cmd_sync() {
 		rm -rf "$_staging"
 		err "failed to stage HOST_CLAUDE for sync (cp -aL exit $?)"
 	fi
+	# Audit batch 2 F6: reach-exit-guarded invocation (the
+	# _run_claude_lifecycle idiom). As a plain command, a failure here under
+	# direct dispatch aborted via set -e BEFORE the rm -rf below, leaking the
+	# full dereferenced ~/.claude staging copy (credentials included) in
+	# /tmp; the old `local _rsync_rc=$?` capture only worked on the
+	# errexit-suppressed auto-sync path.
+	local _rsync_rc=0
 	"$DOCKER" run --rm \
 		-v "$_staging":/src:ro \
 		-v "$CONTAINER_CLAUDE":/dst:rw \
@@ -329,8 +345,7 @@ cmd_sync() {
 		--exclude='themes/' \
 		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
-		/src/ /dst/
-	local _rsync_rc=$?
+		/src/ /dst/ || _rsync_rc=$?
 	rm -rf "$_staging"
 	[ "$_rsync_rc" -ne 0 ] && return "$_rsync_rc"
 	# Purge any stale OAuth token from the container.  rsync --exclude prevents
