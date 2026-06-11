@@ -276,6 +276,29 @@ GIT_SAFETY_FILE="$DRYDOCK_HOME/templates/managed-settings.d/10-git-safety.json"
     [ "$count" -ge 132 ]
 }
 
+# ── Audit F3: baked config must be world-readable regardless of build-context
+# modes. A builder with umask 077 produces 600 root-owned files; the non-root
+# container user then cannot read them and the ENTIRE managed-settings
+# guardrail layer (INV-3) silently fails to load. COPY --chmod=644 pins file
+# modes; the explicit RUN chmod 755 pins traversal on the directory itself
+# (BuildKit applies --chmod to copied directories too, and 644 on a dir would
+# break traversal — so dir perms are set separately, never via --chmod).
+
+@test "managed-settings: Dockerfile COPY of managed-settings.d carries --chmod=644 (umask-proof)" {
+    grep -qE '^COPY --chmod=644 templates/managed-settings\.d/ /etc/claude-code/managed-settings\.d/$' \
+        "$DRYDOCK_HOME/Dockerfile"
+}
+
+@test "managed-settings: Dockerfile pins 755 traversal on /etc/claude-code dirs after COPY" {
+    grep -qE '^RUN chmod 755 /etc/claude-code /etc/claude-code/managed-settings\.d$' \
+        "$DRYDOCK_HOME/Dockerfile"
+}
+
+@test "egress sidecar: Dockerfile.egress COPY of tinyproxy.conf carries --chmod=644 (umask-proof)" {
+    grep -qE '^COPY --chmod=644 templates/tinyproxy\.conf /etc/tinyproxy/tinyproxy\.conf$' \
+        "$DRYDOCK_HOME/Dockerfile.egress"
+}
+
 # ── T5: Dockerfile bakes managed-settings.d (integration, skipped in unit mode)
 @test "managed-settings: Dockerfile bakes managed-settings.d with USER_NAME substituted" {
     [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \

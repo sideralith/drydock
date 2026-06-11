@@ -20,7 +20,12 @@ RUN apt-get update \
 # placeholder guarantees the path exists if the mount is somehow absent (the
 # compose :? guard makes that unreachable in production, but defense-in-depth:
 # an empty filter under FilterDefaultDeny denies everything → fail-closed).
-COPY templates/tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
+# --chmod=644 pins the file mode independently of the build context: COPY
+# preserves source modes, so a builder with umask 077 would bake a 600
+# root-owned config (same class as the managed-settings.d bake in Dockerfile;
+# the chown -R below mitigates it here, but the mode is pinned at COPY time so
+# readability never depends on a later step).
+COPY --chmod=644 templates/tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
 RUN touch /etc/tinyproxy/filter \
     && chown -R tinyproxy:tinyproxy /etc/tinyproxy
 
