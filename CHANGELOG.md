@@ -155,6 +155,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credentials included) under `/tmp/drydock-sync.XXXXXX`. The invocation is
   now reach-exit-guarded so cleanup and exit-code propagation run on both
   dispatch paths.
+- **Git-safety guardrails close three accident-class bypasses.** (1) Every
+  deny rule anchored on a literal `git push` / `git commit` / `git branch`
+  prefix, so the `git -C <path>` global-flag form — the normal way agents
+  touch RW siblings — matched nothing. (2) `git commit -n` / `-nm "msg"` (the
+  short `--no-verify`) was completely unblocked. (3) Force-push via `+refspec`
+  (`git push origin +main`) was unblocked. Both layers are fixed: the
+  managed-settings deny list gains `git -C *` mirrors of the destructive
+  patterns plus `git commit -n*` and `git push * +*` entries, and the
+  PreToolUse hook gains G-rules that scan per pipe-part for force-push
+  (keeping the existing `--force-with-lease` stance), `--no-verify`/commit
+  `-n`, `+refspec`, and protected-branch deletion regardless of global-flag
+  position. `git push -n` (dry-run) and quoted data such as a commit message
+  containing `git push --force` are not blocked.
 
 ## [0.3.3] - 2026-06-03
 

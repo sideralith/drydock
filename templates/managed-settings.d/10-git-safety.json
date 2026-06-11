@@ -138,7 +138,25 @@
       "Bash(gh api *DELETE* *refs/heads/staging*)",
       "Bash(gh api *DELETE* *refs/heads/production*)",
       "Bash(gh api *DELETE* *refs/heads/prod*)",
-      "Bash(gh api *DELETE* *refs/heads/release*)"
+      "Bash(gh api *DELETE* *refs/heads/release*)",
+      "Bash(git commit -n*)",
+      "Bash(git push * +*)",
+      "Bash(git -C * push --force*)",
+      "Bash(git -C * push -f*)",
+      "Bash(git -C * push --no-verify*)",
+      "Bash(git -C * push origin :*)",
+      "Bash(git -C * push *--mirror*)",
+      "Bash(git -C * push * +*)",
+      "Bash(git -C * commit --no-verify*)",
+      "Bash(git -C * commit -n*)",
+      "Bash(git -C * filter-branch*)",
+      "Bash(git -C * update-ref -d*)",
+      "Bash(git -C * branch -D main)",
+      "Bash(git -C * branch -D master)",
+      "Bash(git -C * branch -D dev)",
+      "Bash(git -C * branch -d main)",
+      "Bash(git -C * branch -d master)",
+      "Bash(git -C * branch -d dev)"
     ]
   }
 }
