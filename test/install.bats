@@ -117,7 +117,7 @@ setup() {
 }
 
 # Case 2: happy_path_idempotent
-@test "idempotent: second run is a no-op" {
+@test "idempotent: second run succeeds and keeps the clone current" {
 	env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
 		DRYDOCK_BIN_DIR="$BIN_DIR" \
 		DRYDOCK_REPO_URL="$BARE_REPO" \
@@ -128,7 +128,66 @@ setup() {
 		DRYDOCK_REPO_URL="$BARE_REPO" \
 		bash "$INSTALL_SH"
 	assert_success
-	assert_output --partial "skipping clone"
+	assert_output --partial "Existing clone"
+}
+
+# ── Re-run update semantics (audit F3b) ──────────────────────────────────────
+# A re-run over an existing clone must not silently keep a stale version: it
+# fetches and fast-forwards the install branch. Anything that prevents a clean
+# fast-forward (diverged history, wrong branch) warns and continues.
+
+@test "re-run: existing clone is fast-forwarded to the latest origin commit" {
+	# First install clones the bare fixture.
+	env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		bash "$INSTALL_SH" >/dev/null 2>&1
+
+	# Land a new commit on the bare repo's main.
+	local _work2="$BATS_TEST_TMPDIR/seed-work2"
+	git clone "$BARE_REPO" "$_work2" >/dev/null 2>&1
+	printf 'v2\n' >"$_work2/VERSION"
+	git -C "$_work2" add VERSION >/dev/null 2>&1
+	git -C "$_work2" -c user.email=t@t.com -c user.name=T commit -m v2 >/dev/null 2>&1
+	git -C "$_work2" push >/dev/null 2>&1
+
+	# Re-run: the existing clone must end up at the bare repo's new HEAD.
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		bash "$INSTALL_SH"
+	assert_success
+	local _local _remote
+	_local="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+	_remote="$(git -C "$BARE_REPO" rev-parse main)"
+	assert_equal "$_local" "$_remote"
+}
+
+@test "re-run: diverged clone warns and keeps the local version (no abort, no clobber)" {
+	env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		bash "$INSTALL_SH" >/dev/null 2>&1
+
+	# Diverge: a local-only commit in the clone AND a new remote commit.
+	git -C "$INSTALL_DIR" -c user.email=t@t.com -c user.name=T \
+		commit --allow-empty -m local-divergence >/dev/null 2>&1
+	local _local_head
+	_local_head="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+	local _work3="$BATS_TEST_TMPDIR/seed-work3"
+	git clone "$BARE_REPO" "$_work3" >/dev/null 2>&1
+	git -C "$_work3" -c user.email=t@t.com -c user.name=T \
+		commit --allow-empty -m remote-divergence >/dev/null 2>&1
+	git -C "$_work3" push >/dev/null 2>&1
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		bash "$INSTALL_SH"
+	assert_success
+	assert_output --partial "could not fast-forward"
+	# Local HEAD untouched.
+	assert_equal "$(git -C "$INSTALL_DIR" rev-parse HEAD)" "$_local_head"
 }
 
 # Case 3: missing_prereq_jq
@@ -365,6 +424,34 @@ setup() {
 	refute [ -f "$_home/.config/drydock/engram-shared" ]
 }
 
+# ── Sentinel ordering (audit F3c) ────────────────────────────────────────────
+# The INV-5 opt-in sentinel must be written only AFTER the install steps
+# succeed. Writing it at question time leaves a live shared-mode opt-in behind
+# when the install aborts midway — with no drydock installed at all.
+
+@test "engram sentinel: NOT written when the install aborts after the question (INV-5)" {
+	local _home="$BATS_TEST_TMPDIR/home-sentinel-abort"
+	local _tty="$BATS_TEST_TMPDIR/tty-sentinel-abort"
+	printf 'y\n' >"$_tty" # user opts IN to shared mode
+
+	# Force a post-question failure: conflicting symlink aborts do_symlink.
+	mkdir -p "$BIN_DIR"
+	ln -s /etc/hostname "$BIN_DIR/drydock"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_failure
+	# The aborted install must NOT leave the INV-5 opt-in behind.
+	refute [ -f "$_home/.config/drydock/engram-shared" ]
+}
+
 # ── T-08: engram-mode prompt — non-interactive parity ────────────────────────
 # Explicit non-interactive guard: DRYDOCK_INTERACTIVE=0 → sentinel not created.
 # This is the parity contract test referenced in T-14.
@@ -569,8 +656,76 @@ _setup_build_stub() {
 	assert_success
 	# Fails RED: export line not appended yet
 	assert_output --partial 'export PATH'
-	run grep -Fxc "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$_home/.bashrc"
+	# BIN_DIR is a custom path here — the appended line must carry it verbatim
+	# (audit F3a: the line was hardcoded to ~/.local/bin regardless of BIN_DIR).
+	run grep -Fxc "export PATH=\"$BIN_DIR:\$PATH\"" "$_home/.bashrc"
 	assert_output 1
+}
+
+@test "path-rc: custom DRYDOCK_BIN_DIR — appended line embeds the custom path, not ~/.local/bin" {
+	local _home="$BATS_TEST_TMPDIR/home-path-custom"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc"
+	local _tty="$BATS_TEST_TMPDIR/tty-path-custom"
+	printf 'n\nn\ny\n' >"$_tty" # engram:n, build:n, path:y
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL=/bin/bash \
+		bash "$INSTALL_SH"
+	assert_success
+	run grep -Fxc "export PATH=\"$BIN_DIR:\$PATH\"" "$_home/.bashrc"
+	assert_output 1
+	# The stale hardcoded form must NOT be appended.
+	run grep -F '$HOME/.local/bin' "$_home/.bashrc"
+	[ "$status" -ne 0 ]
+}
+
+@test "path-rc: default DRYDOCK_BIN_DIR — appended line keeps the portable \$HOME form" {
+	local _home="$BATS_TEST_TMPDIR/home-path-default"
+	mkdir -p "$_home"
+	touch "$_home/.bashrc"
+	local _tty="$BATS_TEST_TMPDIR/tty-path-default"
+	printf 'n\nn\ny\n' >"$_tty" # engram:n, build:n, path:y
+
+	# No DRYDOCK_BIN_DIR override → defaults to $HOME/.local/bin (HOME-isolated).
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=1 \
+		_DRYDOCK_TTY="$_tty" \
+		UNAME=uname \
+		OSRELEASE_FILE="$OSRELEASE_DIR/native/osrelease" \
+		HOME="$_home" \
+		SHELL=/bin/bash \
+		bash "$INSTALL_SH"
+	assert_success
+	# Literal $HOME, NOT the expanded test home path — portable across machines.
+	run grep -Fxc 'export PATH="$HOME/.local/bin:$PATH"' "$_home/.bashrc"
+	assert_output 1
+	run grep -F "$_home/.local/bin:" "$_home/.bashrc"
+	[ "$status" -ne 0 ]
+}
+
+@test "path-rc: non-interactive hint advertises DRYDOCK_BIN_DIR, not hardcoded ~/.local/bin" {
+	local _home="$BATS_TEST_TMPDIR/home-path-ni-hint"
+	mkdir -p "$_home"
+
+	run env DRYDOCK_INSTALL_DIR="$INSTALL_DIR" \
+		DRYDOCK_BIN_DIR="$BIN_DIR" \
+		DRYDOCK_REPO_URL="$BARE_REPO" \
+		DRYDOCK_INTERACTIVE=0 \
+		HOME="$_home" \
+		bash "$INSTALL_SH"
+	assert_success
+	assert_output --partial "not in PATH"
+	assert_output --partial "export PATH=\"$BIN_DIR:\$PATH\""
+	refute_output --partial '$HOME/.local/bin'
 }
 
 @test "path-rc: idempotent — re-run does not double-append" {
@@ -609,8 +764,8 @@ _setup_build_stub() {
 		SHELL=/bin/bash \
 		bash "$INSTALL_SH" >/dev/null 2>&1 || true
 
-	# Assert exactly one copy
-	run grep -Fc "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$_home/.bashrc"
+	# Assert exactly one copy (custom BIN_DIR → custom line; audit F3a)
+	run grep -Fc "export PATH=\"$BIN_DIR:\$PATH\"" "$_home/.bashrc"
 	assert_output 1
 }
 

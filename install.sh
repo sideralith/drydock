@@ -191,6 +191,25 @@ fi
 
 # ── Clone or skip ─────────────────────────────────────────────────────────────
 
+# _update_existing_clone — bring an existing clone up to date with a
+# fast-forward-only pull on the install branch. Anything that prevents a clean
+# fast-forward (different branch checked out, detached HEAD, diverged history,
+# dirty tree, offline) downgrades to warn-and-continue: a re-run must never
+# destroy local state or abort over a stale clone.
+_update_existing_clone() {
+	local _cur_branch
+	_cur_branch="$(git -C "$DRYDOCK_INSTALL_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+	if [ "$_cur_branch" != "$DRYDOCK_BRANCH" ]; then
+		step_warn "Existing clone at $DRYDOCK_INSTALL_DIR is on '${_cur_branch:-detached HEAD}' (expected '$DRYDOCK_BRANCH') — keeping it as-is"
+		return 0
+	fi
+	if git -C "$DRYDOCK_INSTALL_DIR" pull --ff-only --quiet origin "$DRYDOCK_BRANCH" >/dev/null 2>&1; then
+		step_ok "Existing clone at $DRYDOCK_INSTALL_DIR — fast-forwarded to origin/${DRYDOCK_BRANCH}"
+	else
+		step_warn "Existing clone at $DRYDOCK_INSTALL_DIR could not fast-forward to origin/${DRYDOCK_BRANCH} (diverged, dirty, or offline) — keeping current version"
+	fi
+}
+
 do_clone() {
 	if [ "$LOCAL_MODE" = "1" ]; then
 		info "Installing from local clone at $DRYDOCK_INSTALL_DIR"
@@ -198,7 +217,7 @@ do_clone() {
 		return
 	fi
 	if [ -d "$DRYDOCK_INSTALL_DIR/.git" ]; then
-		step_ok "Found existing clone at $DRYDOCK_INSTALL_DIR — skipping clone"
+		_update_existing_clone
 		return
 	fi
 	info "Cloning sideralith/drydock@${DRYDOCK_BRANCH} → $DRYDOCK_INSTALL_DIR"
@@ -296,6 +315,10 @@ _host_shared_safe() {
 # Engram not on PATH: silently skip — no point asking about a tool the user
 # doesn't have (INV-4: engram is optional). The probed binary name is the
 # DRYDOCK_ENGRAM_BIN seam (defaults to `engram`).
+# QUESTION ONLY: the answer is recorded in _ENGRAM_SHARED_OPTIN and the
+# sentinel is written by write_engram_sentinel AFTER the install steps succeed
+# — an aborted install must not leave a live INV-5 opt-in behind.
+_ENGRAM_SHARED_OPTIN=0
 ask_engram_mode() {
 	[ "$DRYDOCK_INTERACTIVE" = "1" ] || return 0
 	command -v "$DRYDOCK_ENGRAM_BIN" >/dev/null 2>&1 || return 0
@@ -303,9 +326,16 @@ ask_engram_mode() {
 
 	ask "Share engram DB with host session (native Linux only)? (INV-5)" n
 	if [ "$_ASK_RESULT" = "y" ]; then
-		mkdir -p "$HOME/.config/drydock"
-		touch "$HOME/.config/drydock/engram-shared"
+		_ENGRAM_SHARED_OPTIN=1
 	fi
+}
+
+# write_engram_sentinel — persist the INV-5 shared-mode opt-in. Called only
+# after do_clone + do_symlink succeed (see ask_engram_mode).
+write_engram_sentinel() {
+	[ "$_ENGRAM_SHARED_OPTIN" = "1" ] || return 0
+	mkdir -p "$HOME/.config/drydock"
+	touch "$HOME/.config/drydock/engram-shared"
 }
 
 # ask_build_image — offer to build the Docker image after symlinking.
@@ -333,6 +363,21 @@ _rc_candidates() {
 	done
 }
 
+# _path_export_line — the PATH export line offered/appended for shell rc
+# files, built from DRYDOCK_BIN_DIR (audit F3a: it was hardcoded to
+# ~/.local/bin while the prompt advertised "$DRYDOCK_BIN_DIR"). The default
+# bin dir keeps the portable literal-$HOME form (correct on any machine the
+# rc file travels to); a custom bin dir is an absolute path chosen by the
+# user and is embedded verbatim.
+_path_export_line() {
+	# shellcheck disable=SC2016  # $HOME/$PATH must stay literal in the rc line
+	if [ "$DRYDOCK_BIN_DIR" = "$HOME/.local/bin" ]; then
+		printf 'export PATH="$HOME/.local/bin:$PATH"'
+	else
+		printf 'export PATH="%s:$PATH"' "$DRYDOCK_BIN_DIR"
+	fi
+}
+
 # _rc_for_shell — resolve rc file from $SHELL; returns "" if ambiguous.
 _rc_for_shell() {
 	case "${SHELL:-}" in
@@ -349,7 +394,8 @@ _rc_for_shell() {
 # Interactive + accept: grep-guarded append (idempotent).
 # rc-file selection: only when SHELL empty/ambiguous AND >1 rc candidate exists.
 ask_add_path_to_rc() {
-	local _export_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
+	local _export_line
+	_export_line="$(_path_export_line)"
 
 	# Non-interactive: preserve exact current check_path warn+hint behavior
 	if [ "$DRYDOCK_INTERACTIVE" != "1" ]; then
@@ -357,8 +403,8 @@ ask_add_path_to_rc() {
 		*":${DRYDOCK_BIN_DIR}:"*) ;;
 		*)
 			step_warn "$DRYDOCK_BIN_DIR is not in PATH"
-			hint "Add to ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
-			hint "Add to ~/.zshrc:   export PATH=\"\$HOME/.local/bin:\$PATH\""
+			hint "Add to ~/.bashrc:  $_export_line"
+			hint "Add to ~/.zshrc:   $_export_line"
 			;;
 		esac
 		return 0
@@ -427,6 +473,7 @@ _ask_fd_open
 ask_engram_mode
 do_clone
 do_symlink
+write_engram_sentinel
 step_ok "Ready"
 ask_build_image
 ask_add_path_to_rc
