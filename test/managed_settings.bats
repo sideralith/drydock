@@ -1158,3 +1158,24 @@ PROD_OPS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/50-prod-ops.json"
     done
     [ "$failures" -eq 0 ]
 }
+
+# The -C mirror set above covers local branch deletion; REMOTE deletion
+# (git -C * push --delete) needs its own mirrors of the B4 pair. The short
+# -d push form is hook-only (G5): a *-d* glob substring-matches --dry-run.
+@test "10-git-safety: git -C push --delete mirrors present for all 8 protected branches (audit batch 2)" {
+    local branches=(main master dev develop staging production prod release)
+    local failures=0
+    for branch in "${branches[@]}"; do
+        # Exact form (no trailing args)
+        local exact="Bash(git -C * push *--delete* ${branch})"
+        # Trailing-args form (space+* word boundary)
+        local trailing="Bash(git -C * push *--delete* ${branch} *)"
+        jq -e --arg p "$exact" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$GIT_SAFETY_FILE" >/dev/null || { echo "MISSING: $exact"; failures=$((failures+1)); }
+        jq -e --arg p "$trailing" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$GIT_SAFETY_FILE" >/dev/null || { echo "MISSING: $trailing"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}

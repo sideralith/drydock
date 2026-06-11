@@ -493,7 +493,7 @@ if [[ "$_scrubbed_cmd" =~ (^|[^a-zA-Z])(curl|wget)([^a-zA-Z]|$) ]] &&
 	exit 2
 fi
 
-# ── Rules G1-G4: git destructive forms the deny layer cannot anchor ──────────
+# ── Rules G1-G5: git destructive forms the deny layer cannot anchor ──────────
 # (audit batch 2) Every 10-git-safety.json rule anchors on a literal
 # 'git push' / 'git commit' / 'git branch' PREFIX, so global-flag forms —
 # git -C <path> push --force, git -c k=v commit -n — matched nothing there,
@@ -522,6 +522,12 @@ fi
 #   G3 — force-push via +refspec: push + a +<ref> token.
 #   G4 — protected-branch deletion: branch + -D/-d/--delete + a protected
 #        branch name token (same 8-branch set as the deny layer).
+#   G5 — REMOTE protected-branch deletion: push + --delete/-d (token-bounded)
+#        + a protected branch name token (same 8-branch set). For push, -d IS
+#        --delete (unlike push -n, which is --dry-run). The short -d form is
+#        hook-only: a deny-layer *-d* glob would substring-match --dry-run
+#        (same glob limitation as *-r* in C1-residue), so the JSON carries
+#        only the *--delete* long-form pairs and their git -C mirrors.
 _g_protected='(main|master|dev|develop|staging|production|prod|release)'
 for _seg in "${_segments[@]}"; do
 	IFS='|' read -ra _g_parts <<<"$_seg"
@@ -541,6 +547,12 @@ for _seg in "${_segments[@]}"; do
 			if [[ "$_g_part" =~ [[:space:]]--no-verify([[:space:]]|$) ]]; then
 				echo "drydock guardrail: git push --no-verify is blocked (G2)." >&2
 				echo "Hooks and CI exist for a reason — fix the failure instead of bypassing it." >&2
+				exit 2
+			fi
+			if [[ "$_g_part" =~ [[:space:]](--delete|-d)([[:space:]]|$) ]] &&
+				[[ "$_g_part" =~ (^|[[:space:]])${_g_protected}([[:space:]]|$) ]]; then
+				echo "drydock guardrail: deleting a remote protected branch is blocked (G5)." >&2
+				echo "Protected branches (main/master/dev/...) must not be deleted from a sandboxed session." >&2
 				exit 2
 			fi
 		fi

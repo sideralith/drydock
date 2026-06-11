@@ -1384,6 +1384,42 @@ _guardrail_wrapper_cmd() {
     [ "$status" -eq 0 ]
 }
 
+# ── G5: remote protected-branch deletion (push --delete / -d) ─────────────────
+@test "block_destructive: G5 blocks 'git push origin --delete main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin --delete main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 blocks 'git -C /x push origin --delete main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x push origin --delete main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 blocks 'git push -d origin dev' (short form)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push -d origin dev"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 blocks 'git push origin -d main' (short form after remote)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin -d main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 allows 'git push origin --delete feature-x' (unprotected branch)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin --delete feature-x"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G5 allows 'git push origin main' (no deletion flag)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G5 allows 'git push --dry-run origin main' (--dry-run is not -d)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push --dry-run origin main"}}'
+    [ "$status" -eq 0 ]
+}
+
 @test "block_destructive: G-rules allow 'git log | grep -- --force' (pipe-part isolation)" {
     run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git log --oneline | grep -- --force"}}'
     [ "$status" -eq 0 ]
