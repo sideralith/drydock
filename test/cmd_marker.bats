@@ -33,6 +33,11 @@ setup() {
 	ensure_runtime_dirs() { :; }
 	ensure_synced() { :; }
 	export PROJECT_NAME="myproj"
+	# Audit batch 2: entry points derive the project from the cwd and no
+	# longer trust an inherited PROJECT_NAME — run from a matching dir
+	# (same pattern as cmd_attach.bats / cmd_stop.bats).
+	mkdir -p "$BATS_TEST_TMPDIR/myproj"
+	cd "$BATS_TEST_TMPDIR/myproj"
 }
 
 # ── T4.1: _write_session_marker writes uuid to the correct path ──────────────
