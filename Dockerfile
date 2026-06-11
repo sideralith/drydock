@@ -77,7 +77,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 
 # ── Pin github.com's host key (for the optional SSH deploy-key overlay) ──────
 # Written to the system known_hosts so ssh verifies github.com against it and
-# never creates/touches ~/.ssh/known_hosts. Refreshed on every `drydock build`.
+# never creates/touches ~/.ssh/known_hosts. NOT refreshed on every build: this
+# layer is CACHED until an earlier layer changes — in practice until the base
+# image digest moves (cmd_build passes --pull) or the cache is bypassed with
+# `drydock build --no-cache`. If GitHub ever rotates its host keys, run
+# `drydock build --no-cache` to re-bake them.
 RUN ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /etc/ssh/ssh_known_hosts
 
 # ── User + groups matching host ──────────────────────────────────────────────
