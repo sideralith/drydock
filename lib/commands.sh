@@ -561,8 +561,12 @@ cmd_run() {
 	fi
 
 	# ── Non-nested path ───────────────────────────────────────────────────────
+	# Derive unconditionally from project_dir: drydock has not set PROJECT_NAME
+	# yet on this path (export_compose_env runs later), so any pre-existing
+	# value is the caller's environment — a common CI/tooling export — and
+	# must not reach the session regexes (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(sanitize_project_name "$(basename "$project_dir")")}"
+	proj="$(sanitize_project_name "$(basename "$project_dir")")"
 
 	# Query live run sessions for this project (no -shell companions).
 	local live_sessions live_count
@@ -2162,25 +2166,30 @@ cmd_unlink() {
 # ── Session management helpers ────────────────────────────────────────────────
 # Shared by cmd_new, cmd_attach, cmd_stop, cmd_run (T-4), and cmd_doctor.
 
-# _live_sessions — list live run-session container names for PROJECT_NAME.
+# _live_sessions — list live run-session container names for a project.
 # Emits one name per line (no -shell companions — run sessions only).
 # Post-filters defensively: some Docker daemons don't fully honor anchored ERE.
-# Usage: _live_sessions [project_name]  (default: $PROJECT_NAME or cwd-derived)
+# Default is cwd-derived, NEVER an inherited $PROJECT_NAME: with no argument
+# the helper runs at command entry points where drydock has not set that
+# variable, so a pre-existing value is untrusted caller environment
+# (audit batch 2). Post-export callers pass the project explicitly.
+# Usage: _live_sessions [project_name]  (default: cwd-derived)
 _live_sessions() {
-	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
+	local proj="${1:-$(_current_project_name)}"
 	"$DOCKER" ps \
 		--filter "name=^drydock-${proj}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
 		grep -E "^drydock-${proj}-[0-9a-f]{4}$" || true
 }
 
-# _all_sessions — list ALL run-session container names for PROJECT_NAME (running + exited).
+# _all_sessions — list ALL run-session container names for a project (running + exited).
 # Mirrors _live_sessions but passes --all to docker ps so Exited containers are included.
 # Used by cmd_stop's explicit-name validation so users can clean up Exited containers by name.
 # The no-arg disambiguation menu still uses _live_sessions (running only).
-# Usage: _all_sessions [project_name]  (default: $PROJECT_NAME or cwd-derived)
+# Same default rule as _live_sessions: cwd-derived, never inherited env.
+# Usage: _all_sessions [project_name]  (default: cwd-derived)
 _all_sessions() {
-	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
+	local proj="${1:-$(_current_project_name)}"
 	"$DOCKER" ps --all \
 		--filter "name=^drydock-${proj}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
@@ -2192,7 +2201,8 @@ _all_sessions() {
 # Outputs the canonical name on stdout. Exits 0 always (validation is the caller's job).
 _resolve_session_name() {
 	local input="$1"
-	local proj="${2:-${PROJECT_NAME:-$(_current_project_name)}}"
+	# Same default rule as _live_sessions: cwd-derived, never inherited env.
+	local proj="${2:-$(_current_project_name)}"
 	# Already a full drydock-<proj>-<disc> name?
 	if [[ "$input" == drydock-*-* ]]; then
 		printf '%s' "$input"
@@ -2449,8 +2459,10 @@ cmd_attach() {
 		passthrough=("$@")
 	fi
 
+	# Entry point: derive from the cwd unconditionally — a pre-existing
+	# PROJECT_NAME here is untrusted caller environment (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(_current_project_name)}"
+	proj="$(_current_project_name)"
 
 	local target_name
 	if [ -n "$name_arg" ]; then
@@ -2549,15 +2561,20 @@ cmd_attach() {
 # Output: NAME   STATUS   AGE — parseable, one row per container.
 # Exited containers are shown with a [Exited] marker (OQ-T5, REQ-N6).
 cmd_list() {
+	# Entry point: derive from the cwd unconditionally — a pre-existing
+	# PROJECT_NAME here is untrusted caller environment (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(_current_project_name)}"
+	proj="$(_current_project_name)"
 
 	local rows
 	rows="$("$DOCKER" ps --all \
 		--filter "name=^drydock-${proj}-" \
 		--format '{{.Names}}|{{.Status}}|{{.CreatedAt}}' 2>/dev/null || true)"
-	# Defensive post-filter: ensure only this project's containers are shown.
-	rows="$(printf '%s\n' "$rows" | grep -E "^drydock-${proj}-" || true)"
+	# Disc-anchored post-filter (audit batch 2): the bare prefix leaked
+	# same-prefix sibling projects (project 'api' listed 'api-docs' rows).
+	# Anchors the NAME field up to the '|' column separator; -shell
+	# companions are intentionally kept — list shows both.
+	rows="$(printf '%s\n' "$rows" | grep -E "^drydock-${proj}-[0-9a-f]{4}(-shell)?\|" || true)"
 
 	if [ -z "$rows" ]; then
 		return 0
@@ -2587,8 +2604,10 @@ cmd_stop() {
 		shift
 	fi
 
+	# Entry point: derive from the cwd unconditionally — a pre-existing
+	# PROJECT_NAME here is untrusted caller environment (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(_current_project_name)}"
+	proj="$(_current_project_name)"
 
 	local target_name
 	if [ -n "$name_arg" ]; then

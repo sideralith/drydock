@@ -139,3 +139,45 @@ STUB
 	# The docker ps invocation must include --all.
 	grep -q -- "--all" "$call_log"
 }
+
+# ── Audit batch 2: inherited PROJECT_NAME poisoning + cross-project leak ──────
+# PROJECT_NAME is a common CI/tooling export. At the cmd_list entry point
+# drydock has not set it (export_compose_env never ran), so any pre-existing
+# value comes from the caller's environment and flows UNSANITIZED into the
+# docker --filter and grep regexes — PROJECT_NAME='.*' listed every project's
+# sessions. Entry points must derive the project from the cwd unconditionally.
+
+@test "cmd_list: inherited PROJECT_NAME='.*' does not widen the listing (audit batch 2)" {
+	export PROJECT_NAME='.*'
+	local stub
+	stub="$(make_docker_ps_stub "drydock-myproj-ab12|Up 5 minutes|2026-06-10 10:00:00
+drydock-otherproj-cd34|Up 2 minutes|2026-06-10 10:03:00")"
+	export DOCKER="$stub"
+
+	run cmd_list
+	[ "$status" -eq 0 ]
+	# cwd is .../myproj — only that project's sessions may appear.
+	[[ "$output" == *"drydock-myproj-ab12"* ]]
+	[[ "$output" != *"drydock-otherproj-cd34"* ]]
+}
+
+@test "cmd_list: same-prefix sibling project rows are excluded, -shell rows kept (audit batch 2)" {
+	# Project 'api' must not list project 'api-docs' sessions: the bare
+	# ^drydock-api- prefix filter matched both. The disc-anchored post-filter
+	# keeps run sessions AND their -shell companions (intended in list).
+	local tmpdir="$BATS_TEST_TMPDIR/api"
+	mkdir -p "$tmpdir"
+	cd "$tmpdir"
+	export PROJECT_NAME="api"
+	local stub
+	stub="$(make_docker_ps_stub "drydock-api-ab12|Up 5 minutes|2026-06-10 10:00:00
+drydock-api-ab12-shell|Up 5 minutes|2026-06-10 10:00:01
+drydock-api-docs-cd34|Up 2 minutes|2026-06-10 10:03:00")"
+	export DOCKER="$stub"
+
+	run cmd_list
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"drydock-api-ab12"* ]]
+	[[ "$output" == *"drydock-api-ab12-shell"* ]]
+	[[ "$output" != *"drydock-api-docs-cd34"* ]]
+}

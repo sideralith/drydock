@@ -449,6 +449,36 @@ STUB
 	[ "$status" -eq 2 ]
 }
 
+@test "cmd_run: inherited PROJECT_NAME='.*' does not match foreign sessions (audit batch 2)" {
+	_setup_cmd_run_sc
+	# Poison the environment AFTER the harness set its own value: at cmd_run's
+	# session-count site drydock has not set PROJECT_NAME, so a caller export
+	# of '.*' made the live-session regex match EVERY project's sessions.
+	export PROJECT_NAME='.*'
+
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-sc-poison-$$"
+	mkdir -p "$stub_dir"
+	# The daemon only knows a FOREIGN project's session.
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-otherproj-cd34\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_run "$CMD_SC_PROJECT_DIR"
+	# The real project has ZERO sessions → the no-TTY guard fires, NOT the
+	# "existing sessions" listing for the foreign project.
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"requires a TTY"* ]]
+	[[ "$output" != *"Existing sessions"* ]]
+}
+
 @test "cmd_run: ≥1 sessions + TTY + gum pick 'Cancel' → exits 130" {
 	_setup_cmd_run_sc
 

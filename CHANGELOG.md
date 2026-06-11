@@ -125,6 +125,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — so a cancel gesture SELECTED the highlighted option; in the `drydock run`
   menu the first option is "Attach", so cancelling attached. A failed read now
   cancels with exit 130, matching the gum/fzf tiers' contract.
+- **A `PROJECT_NAME` inherited from the caller's environment no longer poisons
+  session targeting.** Several entry points (`run`, `attach`, `list`, `stop`,
+  the session helpers, and the image gate) fell back to a pre-existing
+  `PROJECT_NAME` — a common CI/tooling export — before drydock had set it, and
+  the value flowed unsanitized into docker name filters and grep regexes:
+  `PROJECT_NAME='.*'` made `drydock stop` target every project's sessions.
+  Entry points now derive the project from the working directory
+  unconditionally; only the internal flow after `export_compose_env` keeps
+  using the exported variable.
+- **`drydock list` no longer shows same-prefix sibling projects.** The listing
+  filtered on the bare `drydock-<project>-` prefix — the only session
+  enumerator without a discriminator-anchored post-filter — so project `api`
+  also listed `api-docs` sessions. The post-filter now anchors the
+  4-hex-character discriminator (keeping `-shell` companion rows, which list
+  intentionally shows).
 
 ## [0.3.3] - 2026-06-03
 
