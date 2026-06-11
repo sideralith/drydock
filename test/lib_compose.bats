@@ -1327,6 +1327,79 @@ STUB
 	[ ! -d "$fake_home/.claude-container-cccc" ]
 }
 
+# ── gc daemon-failure guard (audit F1) ────────────────────────────────────────
+# When `docker ps -a` itself FAILS (daemon unreachable), empty output is
+# indistinguishable from "no containers": every live session dir would look
+# orphaned and gc would rm -rf the bind-mounted ~/.claude of running sessions.
+# gc must detect the failure and SKIP the entire pass.
+
+@test "gc_orphan_session_dirs: docker ps failure — gc SKIPPED, orphan-looking dir survives" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-daemon-down-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-abcd"
+	touch "$fake_home/.claude-container-abcd.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: exits non-zero with no output — daemon unreachable.
+	local stub="$BATS_TEST_TMPDIR/docker-fail-stub-$$"
+	printf '#!/usr/bin/env bash\nexit 1\n' >"$stub"
+	chmod +x "$stub"
+	export DOCKER="$stub"
+	run gc_orphan_session_dirs
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"skipping"* ]]
+	# Dir + json must SURVIVE — empty-because-failed must not be read as orphan.
+	[ -d "$fake_home/.claude-container-abcd" ]
+	[ -f "$fake_home/.claude-container-abcd.json" ]
+}
+
+@test "gc_orphan_session_dirs: docker ps success with EMPTY output — orphan still reaped" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-empty-ok-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-abce"
+	touch "$fake_home/.claude-container-abce.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: exits 0, prints nothing — genuinely no containers.
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ ! -d "$fake_home/.claude-container-abce" ]
+	[ ! -f "$fake_home/.claude-container-abce.json" ]
+}
+
+# ── gc "Returns 0 always" contract (audit F2) ─────────────────────────────────
+# One unremovable entry (e.g. a root-owned file) must not abort gc — and
+# therefore every `drydock run` — under set -e. gc warns and continues.
+
+@test "gc_orphan_session_dirs: unremovable orphan dir — gc warns, returns 0, continues to next dir" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-unremovable-$$"
+	mkdir -p "$fake_home"
+	# Orphan dir aaaa holds a file inside a write-protected subdir → rm -rf fails.
+	mkdir -p "$fake_home/.claude-container-aaaa/locked"
+	touch "$fake_home/.claude-container-aaaa/locked/keep"
+	chmod 555 "$fake_home/.claude-container-aaaa/locked"
+	touch "$fake_home/.claude-container-aaaa.json"
+	# Orphan dir bbbb is plainly removable — proves the loop continues past aaaa.
+	mkdir -p "$fake_home/.claude-container-bbbb"
+	touch "$fake_home/.claude-container-bbbb.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	run gc_orphan_session_dirs
+	# Restore perms FIRST so BATS_TEST_TMPDIR cleanup works even on assert failure.
+	chmod -R u+w "$fake_home/.claude-container-aaaa" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"could not remove"* ]]
+	# The removable orphan after the stuck one must still have been reaped.
+	[ ! -d "$fake_home/.claude-container-bbbb" ]
+	[ ! -f "$fake_home/.claude-container-bbbb.json" ]
+}
+
 @test "seed_session_config_dir: SENTINEL — creates .launching marker in new session dir" {
 	local fake_home="$BATS_TEST_TMPDIR/seed-home-sentinel-$$"
 	mkdir -p "$fake_home"
@@ -2064,7 +2137,7 @@ _setup_wiring_home() {
 
 # ── T12-RED: compose_files wiring ─────────────────────────────────────────────
 
-@test "compose_files: LINKS_OVERLAY present and non-empty → included after submount, before hardening" {
+@test "compose_files: LINKS_OVERLAY present and non-empty → included after base AND after hardening (audit F4 order)" {
 	local fake_home="$BATS_TEST_TMPDIR/cf-home-links"
 	mkdir -p "$fake_home"
 	export HOME="$fake_home"
@@ -2083,13 +2156,89 @@ _setup_wiring_home() {
 	# Must include LINKS_OVERLAY
 	[[ "$output" == *"$LINKS_OVERLAY"* ]]
 
-	# LINKS_OVERLAY must appear after base and before COMPOSE_HARDENING
+	# Audit F4: MANDATORY overlays (mode, hardening) are emitted FIRST, before
+	# fallible feature generators — a mid-stream generator failure can then only
+	# truncate features, never the security posture. LINKS_OVERLAY therefore
+	# appears after base AND after the hardening overlay.
 	local base_pos links_pos hardening_pos
 	base_pos=$(printf '%s\n' "$output" | grep -n "docker-compose.yml" | head -1 | cut -d: -f1)
 	links_pos=$(printf '%s\n' "$output" | grep -n "links-test.yml" | head -1 | cut -d: -f1)
 	hardening_pos=$(printf '%s\n' "$output" | grep -n "hardening" | head -1 | cut -d: -f1)
-	[ "$base_pos" -lt "$links_pos" ]
-	[ "$links_pos" -lt "$hardening_pos" ]
+	[ "$base_pos" -lt "$hardening_pos" ]
+	[ "$hardening_pos" -lt "$links_pos" ]
+}
+
+# ── Audit F4: mandatory-first emission + fail-loud consumption ────────────────
+# Process-substitution consumers (`while read < <(compose_files ...)`) discard
+# the producer's exit status: a generator dying mid-stream left a TRUNCATED -f
+# list — on dev that could mean a "contained" session with no mode overlay and
+# no hardening. Two layers: (1) mandatory overlays are emitted before any
+# fallible generator; (2) compose_files_into replaces the consumer idiom and
+# aborts hard when assembly fails.
+
+@test "compose_files: mode overlay precedes fallible generators (audit F4 order)" {
+	local fake_home="$BATS_TEST_TMPDIR/cf-home-order-$$"
+	mkdir -p "$fake_home/.config/drydock/links"
+	export HOME="$fake_home"
+	printf '/host/repo-a|/workspace-siblings/repo-a/|\n' >"$fake_home/.config/drydock/links/myproject.list"
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/sub-order-$$.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-order-$$.yml"
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	run compose_files "$TEST_PROJECT_DIR"
+	[ "$status" -eq 0 ]
+	local mode_pos links_pos
+	mode_pos=$(printf '%s\n' "$output" | grep -n "docker-compose.contain.yml" | head -1 | cut -d: -f1)
+	links_pos=$(printf '%s\n' "$output" | grep -n "links-order" | head -1 | cut -d: -f1)
+	[ -n "$mode_pos" ]
+	[ -n "$links_pos" ]
+	[ "$mode_pos" -lt "$links_pos" ]
+}
+
+@test "compose_files: generator failure → non-zero exit, mandatory overlays already emitted" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
+	# Sub-mounts detected (fixture) but the overlay path is unwritable → the
+	# generator's redirect fails mid-assembly.
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
+	local ro_dir="$BATS_TEST_TMPDIR/ro-overlay-dir-$$"
+	mkdir -p "$ro_dir"
+	chmod 555 "$ro_dir"
+	export SUBMOUNT_OVERLAY="$ro_dir/submount.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-genfail-$$.yml"
+
+	run compose_files "/home/you/projects/myproject"
+	chmod u+w "$ro_dir"
+	[ "$status" -ne 0 ]
+	# The mandatory hardening overlay was emitted BEFORE the failing generator.
+	[[ "$output" == *"docker-compose.hardening.yml"* ]]
+}
+
+@test "compose_files_into: populates the named array in caller scope" {
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-no-submounts.txt"
+	export SUBMOUNT_OVERLAY="$BATS_TEST_TMPDIR/sub-cfi-$$.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-cfi-$$.yml"
+	local compose_args=()
+	compose_files_into compose_args "$TEST_PROJECT_DIR"
+	[ "${#compose_args[@]}" -ge 2 ]
+	[ "${compose_args[0]}" = "-f" ]
+	[[ "${compose_args[1]}" == *"docker-compose.yml" ]]
+}
+
+@test "compose_files_into: producer failure → hard abort with message, no truncated launch" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
+	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
+	local ro_dir="$BATS_TEST_TMPDIR/ro-cfi-dir-$$"
+	mkdir -p "$ro_dir"
+	chmod 555 "$ro_dir"
+	export SUBMOUNT_OVERLAY="$ro_dir/submount.yml"
+	export LINKS_OVERLAY="$BATS_TEST_TMPDIR/links-cfi-fail-$$.yml"
+
+	local compose_args=()
+	run compose_files_into compose_args "/home/you/projects/myproject"
+	chmod u+w "$ro_dir"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"compose file assembly failed"* ]]
 }
 
 @test "compose_files: absent links list → LINKS_OVERLAY NOT included" {

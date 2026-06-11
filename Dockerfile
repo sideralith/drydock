@@ -123,7 +123,14 @@ RUN echo 'drydock' > /etc/drydock-release
 # cannot write under /etc/). __HOME__ is resolved to /home/${USER_NAME} here
 # so the deny rule paths and hook dedup string are correct for the in-container
 # user. The sed pass is harmless no-op for files that contain no __HOME__.
-COPY templates/managed-settings.d/ /etc/claude-code/managed-settings.d/
+# --chmod=644 pins file modes independently of the build context: COPY
+# preserves source modes, so a builder with umask 077 would otherwise bake
+# 600 root-owned JSONs the non-root agent cannot read — silently disabling
+# the entire managed-settings guardrail layer (INV-3). Directory traversal is
+# pinned by the explicit chmod 755 below (NOT via --chmod, which BuildKit also
+# applies to copied directories — 644 on a dir would break traversal).
+COPY --chmod=644 templates/managed-settings.d/ /etc/claude-code/managed-settings.d/
+RUN chmod 755 /etc/claude-code /etc/claude-code/managed-settings.d
 RUN sed -i "s|__HOME__|/home/${USER_NAME}|g" /etc/claude-code/managed-settings.d/*.json
 
 # ── Pre-create user-owned XDG dirs the daemon would otherwise root-own ──────
