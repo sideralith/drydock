@@ -785,7 +785,10 @@ MI
 	# User content preserved
 	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
 	# Old line gone
-	! grep -qF 'DRYDOCK_SUBMOUNT_OLD_HOST_PATH' "$proj/.env"
+	# run + status check: a bare mid-test `! cmd` is exempt from bats errexit
+	# and can never fail.
+	run grep -F 'DRYDOCK_SUBMOUNT_OLD_HOST_PATH' "$proj/.env"
+	[ "$status" -ne 0 ]
 	# New line present
 	grep -qF 'DRYDOCK_SUBMOUNT_NEWDIR_HOST_PATH=/mnt/c/Users/X/NewVault' "$proj/.env"
 }
@@ -809,8 +812,12 @@ MI
 	# User content preserved
 	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
 	# Marker block fully removed
-	! grep -qE '^# >>> drydock managed' "$proj/.env"
-	! grep -qF 'DRYDOCK_SUBMOUNT_OLD_HOST_PATH' "$proj/.env"
+	# run + status check: a bare mid-test `! cmd` is exempt from bats errexit
+	# and can never fail.
+	run grep -E '^# >>> drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+	run grep -F 'DRYDOCK_SUBMOUNT_OLD_HOST_PATH' "$proj/.env"
+	[ "$status" -ne 0 ]
 }
 
 @test "sync_submount_env_file: idempotent — second call leaves same content" {
@@ -845,8 +852,12 @@ MI
 	export MOUNTINFO_FILE="$tmp_mi"
 	export DRYDOCK_SKIP_ENV_WRITE=1
 	sync_submount_env_file "$proj"
-	! grep -qF '# >>> drydock managed' "$proj/.env"
-	! grep -qF 'DRYDOCK_SUBMOUNT_' "$proj/.env"
+	# run + status check: a bare mid-test `! cmd` is exempt from bats errexit
+	# and can never fail.
+	run grep -F '# >>> drydock managed' "$proj/.env"
+	[ "$status" -ne 0 ]
+	run grep -F 'DRYDOCK_SUBMOUNT_' "$proj/.env"
+	[ "$status" -ne 0 ]
 	# Original content preserved
 	grep -qF 'APP_KEY=base64:secret' "$proj/.env"
 	unset DRYDOCK_SKIP_ENV_WRITE

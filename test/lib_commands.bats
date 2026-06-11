@@ -501,7 +501,10 @@ setup() {
 	# pattern drydock-sync.XXXXXX.
 	grep -qE -- "-v ${TMPDIR}/drydock-sync\.[A-Za-z0-9]+:/src:ro" "$DOCKER_CALL_LOG"
 	# /src must NOT mount HOST_CLAUDE directly — that's the broken path.
-	! grep -qE -- "-v ${HOST_CLAUDE}:/src:ro" "$DOCKER_CALL_LOG"
+	# run + status check: a bare mid-test `! cmd` is exempt from bats errexit
+	# and can never fail.
+	run grep -E -- "-v ${HOST_CLAUDE}:/src:ro" "$DOCKER_CALL_LOG"
+	[ "$status" -ne 0 ]
 	# Staging dir must be cleaned up after cmd_sync returns (no leak).
 	[ -z "$(find "$TMPDIR" -maxdepth 1 -name 'drydock-sync.*' -print -quit)" ]
 }

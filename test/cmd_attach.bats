@@ -375,9 +375,13 @@ TSTUB
 	[ "$status" -eq 0 ]
 	# Guidance must be printed
 	[[ "$output" == *"zellij attach main"* ]]
-	# Must NOT invoke compose exec (no reap, no rm)
-	! grep -qE "compose.*exec" "$DOCKER_CALL_LOG"
-	! grep -q "rm -f" "$DOCKER_CALL_LOG"
+	# Must NOT invoke compose exec (no reap, no rm).
+	# run + status check: a bare mid-test `! cmd` is exempt from bats errexit
+	# and can never fail.
+	run grep -E "compose.*exec" "$DOCKER_CALL_LOG"
+	[ "$status" -ne 0 ]
+	run grep "rm -f" "$DOCKER_CALL_LOG"
+	[ "$status" -ne 0 ]
 }
 
 @test "cmd_attach: oneoff=True + TTY (single session) → prints guidance + exit 0 (S-2A)" {
