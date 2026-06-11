@@ -44,7 +44,7 @@ container too. The container hardening overlay (INV-8) mounts `/tmp` as a
 `noexec` tmpfs; bats writes stub executables under `$TMPDIR`, so a bare
 `bats test/` fails ~20 tests with `Permission denied`. The wrapper detects a
 `noexec` tmpdir and redirects bats to an exec-allowed path under `$HOME`
-(`~/.cache/drydock/bats-tmp`) — the `/tmp` hardening is left untouched. It also
+(`~/.bats-tmp`) — the `/tmp` hardening is left untouched. It also
 falls back to `npx --yes bats` when no `bats` binary is on `PATH` (the base
 image ships none). Always use `scripts/test.sh` inside the container; plain
 `bats test/` is the host-only invocation (equivalent on a normal host, but
