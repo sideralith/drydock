@@ -562,8 +562,11 @@ compose_files() {
 #     anchor exactly: example.com → ^example\.com$
 #   - anything else → verbatim raw-ERE passthrough (expert escape hatch; the
 #     shipped baseline's already-anchored lines pass through unchanged).
-# Same transform as _to_ere_baseline_pattern in scripts/egress-capture.sh —
-# replicated here because lib/ must not source scripts/.
+# Unlike _to_ere_baseline_pattern in scripts/egress-capture.sh — which anchors
+# UNCONDITIONALLY because its input is always a pure hostname — this helper
+# anchors CONDITIONALLY (bare hostnames only; everything else passes through
+# verbatim). The two transforms agree on capture's input domain (pure
+# hostnames); replicated here because lib/ must not source scripts/.
 _normalize_egress_patterns() {
 	awk '
 		/^[[:alnum:].-]+$/ {

@@ -164,12 +164,13 @@ echo "example.com" >> ~/.config/drydock/egress-allowlist
 echo "example.com" >> ~/.config/drydock/egress-allowlist-<project>
 ```
 
-One host per line; `#` comment lines are allowed. A bare hostname (letters,
-digits, dots, hyphens) is matched **exactly**: drydock anchors it as an ERE with
-escaped dots (`example.com` → `^example\.com$`), so it does not also match
-`example.com.evil.io` or `example1com.net`. A line containing any other ERE
-metacharacter is taken as a **raw ERE verbatim** (expert escape hatch — e.g.
-`^.*\.example\.com$` to allow all subdomains). User files only **add** to the
+One host per line; `#` comment lines are allowed. A line consisting **only** of
+letters, digits, dots, and hyphens is matched **exactly**: drydock anchors it as
+an ERE with escaped dots (`example.com` → `^example\.com$`), so it does not also
+match `example.com.evil.io` or `example1com.net`. A line containing **any**
+other character — not just ERE metacharacters; an underscore (`_`), for example,
+also disables anchoring — is passed through as a **raw unanchored ERE verbatim**
+(expert escape hatch — e.g. `^.*\.example\.com$` to allow all subdomains). User files only **add** to the
 baseline — they cannot remove or weaken it. `drydock doctor` has an **EGRESS**
 section that reports the active allowlist sources and the effective filter for the
 current project.
