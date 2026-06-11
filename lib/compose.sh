@@ -923,7 +923,16 @@ gc_orphan_session_dirs() {
 	# Collect docker ps -a output once (avoid N docker calls for N dirs).
 	# --format '{{.Names}}' emits one container name per line so ^ and $ anchors
 	# are exact and column-padding cannot produce false matches.
-	_ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)" || true
+	# Failure guard (audit F1): when the daemon is unreachable, `docker ps -a`
+	# fails and its output is EMPTY — indistinguishable from "no containers".
+	# Treating that as truth would make every LIVE session dir look orphaned
+	# and rm -rf the bind-mounted ~/.claude of running sessions. Skip the whole
+	# pass instead; the next invocation with a healthy daemon collects the real
+	# orphans. Genuinely-empty SUCCESS output still reaps as before.
+	if ! _ps_out="$("$DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)"; then
+		warn "gc: docker ps failed — skipping session-dir GC this run"
+		return 0
+	fi
 
 	# Use a for-loop with a glob; protect against no-match (nullglob absent).
 	for _dir in "$HOME"/.claude-container-?*/; do
@@ -969,11 +978,14 @@ gc_orphan_session_dirs() {
 			"$DOCKER" rm -f "$_orphan_sidecar" >/dev/null 2>&1 || true
 		fi
 		# Orphan — rescue durable conversation history, then prune the dir
-		# and its sibling .json (issue #68).
+		# and its sibling .json (issue #68). Guarded (audit F2): one unremovable
+		# entry (e.g. a root-owned file) must not abort gc — and, under set -e,
+		# every `drydock run` — for every project. Warn and keep sweeping;
+		# "Returns 0 always" is this function's contract.
 		harvest_session_projects "$_dir"
 		_json="${_dir%/}.json"
-		rm -rf "$_dir"
-		rm -f "$_json"
+		rm -rf "$_dir" || warn "gc: could not remove $_dir"
+		rm -f "$_json" || true
 	done
 	return 0
 }

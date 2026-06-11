@@ -1327,6 +1327,78 @@ STUB
 	[ ! -d "$fake_home/.claude-container-cccc" ]
 }
 
+# ── gc daemon-failure guard (audit F1) ────────────────────────────────────────
+# When `docker ps -a` itself FAILS (daemon unreachable), empty output is
+# indistinguishable from "no containers": every live session dir would look
+# orphaned and gc would rm -rf the bind-mounted ~/.claude of running sessions.
+# gc must detect the failure and SKIP the entire pass.
+
+@test "gc_orphan_session_dirs: docker ps failure — gc SKIPPED, orphan-looking dir survives" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-daemon-down-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-abcd"
+	touch "$fake_home/.claude-container-abcd.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: exits non-zero with no output — daemon unreachable.
+	local stub="$BATS_TEST_TMPDIR/docker-fail-stub-$$"
+	printf '#!/usr/bin/env bash\nexit 1\n' >"$stub"
+	chmod +x "$stub"
+	export DOCKER="$stub"
+	run gc_orphan_session_dirs
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"skipping"* ]]
+	# Dir + json must SURVIVE — empty-because-failed must not be read as orphan.
+	[ -d "$fake_home/.claude-container-abcd" ]
+	[ -f "$fake_home/.claude-container-abcd.json" ]
+}
+
+@test "gc_orphan_session_dirs: docker ps success with EMPTY output — orphan still reaped" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-empty-ok-$$"
+	mkdir -p "$fake_home"
+	mkdir -p "$fake_home/.claude-container-abce"
+	touch "$fake_home/.claude-container-abce.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	# Docker stub: exits 0, prints nothing — genuinely no containers.
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	gc_orphan_session_dirs
+	[ ! -d "$fake_home/.claude-container-abce" ]
+	[ ! -f "$fake_home/.claude-container-abce.json" ]
+}
+
+# ── gc "Returns 0 always" contract (audit F2) ─────────────────────────────────
+# One unremovable entry (e.g. a root-owned file) must not abort gc — and
+# therefore every `drydock run` — under set -e. gc warns and continues.
+
+@test "gc_orphan_session_dirs: unremovable orphan dir — gc warns, returns 0, continues to next dir" {
+	local fake_home="$BATS_TEST_TMPDIR/gc-home-unremovable-$$"
+	mkdir -p "$fake_home"
+	# Orphan dir aaaa holds a file inside a write-protected subdir → rm -rf fails.
+	mkdir -p "$fake_home/.claude-container-aaaa/locked"
+	touch "$fake_home/.claude-container-aaaa/locked/keep"
+	chmod 555 "$fake_home/.claude-container-aaaa/locked"
+	touch "$fake_home/.claude-container-aaaa.json"
+	# Orphan dir bbbb is plainly removable — proves the loop continues past aaaa.
+	mkdir -p "$fake_home/.claude-container-bbbb"
+	touch "$fake_home/.claude-container-bbbb.json"
+	HOME="$fake_home"
+	export PROJECT_NAME="myproject"
+	local stub
+	stub="$(_make_docker_ps_stub "")"
+	export DOCKER="$stub"
+	run gc_orphan_session_dirs
+	# Restore perms FIRST so BATS_TEST_TMPDIR cleanup works even on assert failure.
+	chmod -R u+w "$fake_home/.claude-container-aaaa" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"could not remove"* ]]
+	# The removable orphan after the stuck one must still have been reaped.
+	[ ! -d "$fake_home/.claude-container-bbbb" ]
+	[ ! -f "$fake_home/.claude-container-bbbb.json" ]
+}
+
 @test "seed_session_config_dir: SENTINEL — creates .launching marker in new session dir" {
 	local fake_home="$BATS_TEST_TMPDIR/seed-home-sentinel-$$"
 	mkdir -p "$fake_home"
