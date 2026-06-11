@@ -33,9 +33,14 @@
 # ── Integration gate ────────────────────────────────────────────────────────
 # Skip the entire file if DRYDOCK_INTEGRATION is not set to "1".
 # This prevents unit-mode test runs from failing when no Docker is available.
-if [ "${DRYDOCK_INTEGRATION:-0}" != "1" ]; then
-	bats_skip_file "Skipping integration tests (DRYDOCK_INTEGRATION != 1)"
-fi
+# `skip` inside setup_file() is the bats-core (>= 1.5) mechanism for skipping
+# a whole file: every @test reports as skipped and per-test setup() — which
+# would touch the real Docker daemon — never runs.
+setup_file() {
+	if [ "${DRYDOCK_INTEGRATION:-0}" != "1" ]; then
+		skip "Skipping integration tests (DRYDOCK_INTEGRATION != 1)"
+	fi
+}
 
 load "../helpers/load"
 

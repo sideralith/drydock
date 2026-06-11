@@ -29,12 +29,13 @@ npm install -g bats
 ### Run the suite
 
 ```bash
-scripts/test.sh        # recommended — wraps `bats test/`
+scripts/test.sh        # recommended — wraps `bats -r test/`
 ```
 
-`scripts/test.sh` is a thin wrapper around `bats test/`. On a normal host it is
-transparent. Pass through specific files or flags as usual:
-`scripts/test.sh test/lib_paths.bats`.
+`scripts/test.sh` is a thin wrapper around `bats -r test/` (recursive, so
+`test/integration/*.bats` is collected too — those files skip themselves
+unless their opt-in flag is set). On a normal host it is transparent. Pass
+through specific files or flags as usual: `scripts/test.sh test/lib_paths.bats`.
 
 #### Running the suite inside a drydock container
 
@@ -77,12 +78,25 @@ DRYDOCK_INTEGRATION_HOSTNET=1 test/integration/test_projects_submount.sh
 The shared `DRYDOCK_INTEGRATION_*` prefix marks these as runtime-tier flags;
 the `_HOSTNET` suffix is the explicit reason SR-9 stays out of CI.
 
+#### The REQ-N10 session-lifecycle gate
+
+`test/integration/session_lifecycle_compose_exec.bats` is the empirical gate
+for REQ-N10 ("Detect + Delegate" session model): it runs the real production
+lifecycle — `export_compose_env` + `compose_files` + `docker compose up -d` /
+`exec` / `down` — against a built `drydock:latest` image and asserts L-A..L-D
+(persistent `sleep` PID 1, SIGHUP survival, same-container re-attach, clean
+teardown). It is part of the default suite but skips itself (via `skip` in
+`setup_file()`) unless `DRYDOCK_INTEGRATION=1` is set. To run it:
+`drydock build && DRYDOCK_INTEGRATION=1 scripts/test.sh
+test/integration/session_lifecycle_compose_exec.bats` — it starts and removes
+real containers, so run it only on a machine where that is acceptable.
+
 ### No submodule step needed
 
 The bats helper libraries (`bats-support` and `bats-assert`) are vendored
 under `test/test_helper/`. After a plain `git clone`, just run
 `scripts/test.sh` — no `git submodule update --init` required.
-(On a normal host `scripts/test.sh` delegates to `bats test/`; inside a
+(On a normal host `scripts/test.sh` delegates to `bats -r test/`; inside a
 drydock container it additionally redirects bats' tmpdir away from the
 `noexec` `/tmp`.)
 

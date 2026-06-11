@@ -14,8 +14,8 @@
 #   DRYDOCK_INTEGRATION_HOSTNET=1 test/integration/test_projects_submount.sh
 #
 # Guard: skips (with a clear message and exit 0) unless DRYDOCK_INTEGRATION_HOSTNET=1 is set.
-# scripts/test.sh does NOT include this file — it only runs test/*.bats — so the
-# normal bats suite stays green without a Docker daemon.
+# scripts/test.sh does NOT include this file — bats only collects *.bats files
+# (even with -r) — so the normal bats suite stays green without a Docker daemon.
 #
 # ── Hermetic design (issue #73) ───────────────────────────────────────────────
 # This test stages ALL scratch state under $DRYDOCK_HOME/.inttest-tmp/ — never
