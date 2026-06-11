@@ -43,6 +43,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attach).
 - **`drydock doctor` reports the active network/socket mode** (#149) in its
   COMPOSE OVERLAYS section.
+- **Fail fast when the Docker daemon is unresponsive** (#159). `drydock` now
+  probes `docker version` under a bounded timeout (12s by default, tunable via
+  `DRYDOCK_DOCKER_PROBE_TIMEOUT`) and aborts with guidance instead of hanging
+  indefinitely when the daemon does not answer. The probe is skipped when
+  `timeout(1)` is not available.
+
+### Fixed
+
+- **Contained mode failed every run: the generated egress filter was unreadable
+  by the sidecar** (#149). The effective allowlist was written mode 0600
+  (mktemp), but tinyproxy runs as a non-root uid with `cap_drop: ALL` — it could
+  not read its RO-mounted filter, never became healthy, and the agent's
+  `depends_on: service_healthy` aborted the session. The filter (non-secret
+  data) is now written world-readable (644); same fix in the G2 smoke harness.
+- **The G2 egress smoke poisoned subsequent contained runs** (#149).
+  `scripts/egress-smoke.sh` pre-created the fixed-name `drydock_internal` /
+  `drydock_egress` networks without compose labels and never removed them, so
+  every later contained `docker compose up` failed with an incorrect-label
+  error until a manual `docker network rm`. The smoke now removes exactly the
+  networks it created (success or failure); pre-existing networks are never
+  touched.
+- **Bare-hostname user allowlist entries silently widened the egress filter**
+  (#149). tinyproxy's ERE filter matches unanchored substrings, so the
+  documented `example.com` form also matched `example.com.evil.io`. Bare
+  hostnames are now anchored exactly (`^example\.com$`); lines containing other
+  ERE metacharacters are taken as raw ERE verbatim (expert escape hatch).
 
 ### Fixed
 

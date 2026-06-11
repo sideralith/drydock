@@ -3394,6 +3394,22 @@ _egress_fake_home() {
 	[ -f "$DRYDOCK_EGRESS_FILTER_FILE" ]
 }
 
+@test "export_compose_env: contained — filter file is world-readable (mode 644)" {
+	# The filter is RO bind-mounted into the sidecar where tinyproxy runs as a
+	# non-root uid with cap_drop ALL (no DAC_OVERRIDE). mktemp creates 0600 and
+	# mv preserves it — without an explicit chmod the sidecar cannot read the
+	# filter, healthcheck never passes, and every contained run aborts (C1).
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	[ "$(stat -c '%a' "$DRYDOCK_EGRESS_FILTER_FILE")" = "644" ]
+}
+
 @test "export_compose_env: contained — filter file contains api.anthropic.com" {
 	local fh
 	fh="$(_egress_fake_home)"
@@ -3421,7 +3437,97 @@ _egress_fake_home() {
 
 	export_compose_env "$TEST_PROJECT_DIR"
 
-	grep -qF 'example-custom.com' "$DRYDOCK_EGRESS_FILTER_FILE"
+	# Bare hostnames are normalized to anchored ERE (C3) — assert that form.
+	grep -qF 'example-custom\.com' "$DRYDOCK_EGRESS_FILTER_FILE"
+}
+
+# ── C3: bare-hostname normalization (unanchored ERE silently widens filter) ──
+# tinyproxy matches FilterType ere as an UNANCHORED substring: a raw user line
+# `github.com` matches github.com.evil.io and github1com.example. Bare
+# hostnames must be normalized to exact anchored patterns; lines containing
+# other ERE metacharacters pass through verbatim (expert escape hatch).
+
+@test "egress filter: bare user hostname is escaped and anchored exactly" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	mkdir -p "$fh/.config/drydock"
+	printf 'example-custom.com\n' >"$fh/.config/drydock/egress-allowlist"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# Exact normalized line: dots escaped, ^...$ anchors.
+	grep -qFx '^example-custom\.com$' "$DRYDOCK_EGRESS_FILTER_FILE"
+	# The raw unanchored form must NOT survive.
+	! grep -qFx 'example-custom.com' "$DRYDOCK_EGRESS_FILTER_FILE"
+}
+
+@test "egress filter: user line with ERE metacharacters passes through verbatim" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	mkdir -p "$fh/.config/drydock"
+	printf '^.*\\.corp\\.example$\n' >"$fh/.config/drydock/egress-allowlist"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	grep -qFx '^.*\.corp\.example$' "$DRYDOCK_EGRESS_FILTER_FILE"
+}
+
+@test "egress filter: baseline anchored lines are not double-transformed" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	# The shipped baseline pattern must appear EXACTLY as authored.
+	grep -qFx '^api\.anthropic\.com$' "$DRYDOCK_EGRESS_FILTER_FILE"
+}
+
+@test "egress filter: bare and anchored duplicates dedup to one line" {
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	# Bare form of a domain the baseline already carries anchored: after
+	# normalization both are ^api\.anthropic\.com$ and must collapse to one.
+	mkdir -p "$fh/.config/drydock"
+	printf 'api.anthropic.com\n' >"$fh/.config/drydock/egress-allowlist"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	[ "$(grep -cFx '^api\.anthropic\.com$' "$DRYDOCK_EGRESS_FILTER_FILE")" -eq 1 ]
+}
+
+@test "egress filter: per-project allowlist file is included" {
+	# Coverage gap: no test proved egress-allowlist-<project> feeds the filter —
+	# a regression dropping that source would have passed the suite.
+	local fh
+	fh="$(_egress_fake_home)"
+	export HOME="$fh"
+	export DOCKER="$(_make_docker_ps_stub "")"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+
+	local proj_name
+	proj_name="$(sanitize_project_name "$(basename "$TEST_PROJECT_DIR")")"
+	mkdir -p "$fh/.config/drydock"
+	printf 'per-project-domain.example\n' \
+		>"$fh/.config/drydock/egress-allowlist-${proj_name}"
+
+	export_compose_env "$TEST_PROJECT_DIR"
+
+	grep -qFx '^per-project-domain\.example$' "$DRYDOCK_EGRESS_FILTER_FILE"
 }
 
 @test "export_compose_env: contained — user file cannot remove baseline entries" {
