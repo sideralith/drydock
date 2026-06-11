@@ -323,6 +323,32 @@ STUB
 	[[ "$output" == *"UniqueHeader42"* ]]
 }
 
+# ── Bash puro: EOF / interrupted read must CANCEL, never select ──────────────
+# read -rsn1 fails on EOF (closed stdin) and on a Ctrl-C-interrupted read.
+# Swallowing that failure left key="" — indistinguishable from ENTER — so a
+# cancel gesture SELECTED the highlighted option (in cmd_run's menu the first
+# option is "Attach"). EOF must return 130 with nothing on stdout, matching
+# the gum/fzf tiers' cancel contract.
+
+@test "_select_choice: bash puro tier → EOF on stdin returns 130 (cancel, not ENTER)" {
+	export DRYDOCK_DISABLE_GUM=1
+	export DRYDOCK_DISABLE_FZF=1
+
+	run bash -c "
+		source '$DRYDOCK_HOME/lib/common.sh'
+		source '$DRYDOCK_HOME/lib/paths.sh'
+		source '$DRYDOCK_HOME/lib/compose.sh'
+		source '$DRYDOCK_HOME/lib/commands.sh'
+		export DRYDOCK_DISABLE_GUM=1
+		export DRYDOCK_DISABLE_FZF=1
+		_select_choice 'test header' 'Attach: drydock-x-ab12' 'Cancel' </dev/null 2>/dev/null
+	"
+	[ "$status" -eq 130 ]
+	# Nothing selected: stdout stays empty (UI renders on stderr only,
+	# discarded inside the subshell so \$output captures stdout alone).
+	[ -z "$output" ]
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Cancel path: non-zero from any tier → _select_choice returns 130
 # ══════════════════════════════════════════════════════════════════════════════

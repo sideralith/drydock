@@ -2322,7 +2322,15 @@ _select_choice_pure() {
 	while true; do
 		_sc_pure_render
 		# Read one byte; if it's ESC, read two more for arrow sequences.
-		IFS= read -rsn1 key 2>/dev/null || true
+		# A FAILED read (EOF on closed stdin, or Ctrl-C interrupting the
+		# read — the INT trap restores the terminal and returns here) must
+		# CANCEL, never select: swallowing the failure left key="", which is
+		# indistinguishable from ENTER and selected the highlighted option.
+		# 130 matches the gum/fzf tiers' cancel contract.
+		if ! IFS= read -rsn1 key 2>/dev/null; then
+			result=130
+			break
+		fi
 		if [ "$key" = $'\e' ]; then
 			IFS= read -rsn2 -t 0.1 seq 2>/dev/null || seq=""
 			case "$seq" in

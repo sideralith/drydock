@@ -119,6 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   even `drydock version`. The reaper now skips files not owned by the current
   user and guards both removal paths so an unremovable file is skipped instead
   of fatal.
+- **The pure-Bash session selector no longer treats EOF or Ctrl-C as ENTER.**
+  In the tier-3 selector a failed `read` (closed stdin, or Ctrl-C interrupting
+  the read) was swallowed, leaving an empty key — indistinguishable from ENTER
+  — so a cancel gesture SELECTED the highlighted option; in the `drydock run`
+  menu the first option is "Attach", so cancelling attached. A failed read now
+  cancels with exit 130, matching the gum/fzf tiers' contract.
 
 ## [0.3.3] - 2026-06-03
 
