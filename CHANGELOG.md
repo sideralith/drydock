@@ -111,6 +111,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until a manual `sudo rm`. `ensure_runtime_dirs` now pre-creates them
   user-owned (file touch / `mkdir -p`), alongside the same guard for the
   shared conversation-store dir on the upgrade path.
+- **The startup orphan-overlay reaper no longer aborts every command on a
+  multi-user /tmp.** The reap glob also matches other users' overlay files:
+  `kill -0` on a foreign live PID fails with EPERM (misread as dead), and the
+  follow-up `rm` on a sticky-/tmp file you do not own fails as the last
+  command of the reap list — `set -e` then killed drydock at dispatch, before
+  even `drydock version`. The reaper now skips files not owned by the current
+  user and guards both removal paths so an unremovable file is skipped instead
+  of fatal.
 
 ## [0.3.3] - 2026-06-03
 
