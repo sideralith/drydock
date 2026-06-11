@@ -1103,3 +1103,79 @@ PROD_OPS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/50-prod-ops.json"
     done
     [ "$failures" -eq 0 ]
 }
+
+# ── Audit batch 2: git -C mirrors, commit -n, +refspec deny rules ─────────────
+# The deny layer anchors on literal 'git push' / 'git commit' / 'git branch'
+# prefixes, so the global-flag form (git -C <path> ...) matched nothing.
+# Mirror entries cover the -C form of the existing destructive patterns; the
+# hook (G-rules in drydock-block-destructive.sh) is the robust catch-all for
+# arbitrary global-flag positions.
+
+@test "10-git-safety: git -C mirrors of destructive push/commit patterns present (audit batch 2)" {
+    local patterns=(
+        "Bash(git -C * push --force*)"
+        "Bash(git -C * push -f*)"
+        "Bash(git -C * push --no-verify*)"
+        "Bash(git -C * push origin :*)"
+        "Bash(git -C * push *--mirror*)"
+        "Bash(git -C * commit --no-verify*)"
+        "Bash(git -C * commit -n*)"
+        "Bash(git -C * filter-branch*)"
+        "Bash(git -C * update-ref -d*)"
+    )
+    local failures=0
+    for p in "${patterns[@]}"; do
+        jq -e --arg p "$p" '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$GIT_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+@test "10-git-safety: commit short --no-verify and +refspec force-push deny present (audit batch 2)" {
+    local patterns=(
+        "Bash(git commit -n*)"
+        "Bash(git push * +*)"
+        "Bash(git -C * push * +*)"
+    )
+    local failures=0
+    for p in "${patterns[@]}"; do
+        jq -e --arg p "$p" '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$GIT_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}
+
+@test "10-git-safety: git -C protected-branch deletion mirrors present (audit batch 2)" {
+    local branches=(main master dev)
+    local flags=("-D" "-d")
+    local failures=0
+    for flag in "${flags[@]}"; do
+        for branch in "${branches[@]}"; do
+            local p="Bash(git -C * branch ${flag} ${branch})"
+            jq -e --arg p "$p" '.permissions.deny | map(select(. == $p)) | length >= 1' \
+                "$GIT_SAFETY_FILE" >/dev/null || { echo "MISSING: $p"; failures=$((failures+1)); }
+        done
+    done
+    [ "$failures" -eq 0 ]
+}
+
+# The -C mirror set above covers local branch deletion; REMOTE deletion
+# (git -C * push --delete) needs its own mirrors of the B4 pair. The short
+# -d push form is hook-only (G5): a *-d* glob substring-matches --dry-run.
+@test "10-git-safety: git -C push --delete mirrors present for all 8 protected branches (audit batch 2)" {
+    local branches=(main master dev develop staging production prod release)
+    local failures=0
+    for branch in "${branches[@]}"; do
+        # Exact form (no trailing args)
+        local exact="Bash(git -C * push *--delete* ${branch})"
+        # Trailing-args form (space+* word boundary)
+        local trailing="Bash(git -C * push *--delete* ${branch} *)"
+        jq -e --arg p "$exact" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$GIT_SAFETY_FILE" >/dev/null || { echo "MISSING: $exact"; failures=$((failures+1)); }
+        jq -e --arg p "$trailing" \
+            '.permissions.deny | map(select(. == $p)) | length >= 1' \
+            "$GIT_SAFETY_FILE" >/dev/null || { echo "MISSING: $trailing"; failures=$((failures+1)); }
+    done
+    [ "$failures" -eq 0 ]
+}

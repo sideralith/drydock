@@ -268,3 +268,39 @@ drydock-myproj-ef56")"
 	run cmd_stop "deadbeef"
 	[ "$status" -ne 0 ]
 }
+
+# ── Audit batch 2: inherited PROJECT_NAME poisoning ───────────────────────────
+# At the cmd_stop entry point drydock has not set PROJECT_NAME, so any
+# pre-existing value is the caller's environment export and flowed unsanitized
+# into the session regexes: PROJECT_NAME='.*' made `drydock stop` target every
+# project's sessions. Entry points and the session helpers must derive the
+# project from the cwd unconditionally.
+
+@test "cmd_stop: inherited PROJECT_NAME='.*' cannot target other projects' sessions (audit batch 2)" {
+	export PROJECT_NAME='.*'
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12
+drydock-otherproj-cd34")"
+	export DOCKER="$stub"
+
+	run cmd_stop
+	# cwd is .../myproj — exactly ONE session for the real project: direct stop.
+	[ "$status" -eq 0 ]
+	grep -q "rm -f drydock-myproj-ab12" "$DOCKER_CALL_LOG"
+	# The foreign project's session is never targeted.
+	run grep "rm -f drydock-otherproj-cd34" "$DOCKER_CALL_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "_live_sessions: ignores inherited PROJECT_NAME, derives from cwd (audit batch 2)" {
+	export PROJECT_NAME='.*'
+	local stub
+	stub="$(make_docker_stub_with_sessions "drydock-myproj-ab12
+drydock-otherproj-cd34")"
+	export DOCKER="$stub"
+
+	run _live_sessions
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"drydock-myproj-ab12"* ]]
+	[[ "$output" != *"drydock-otherproj-cd34"* ]]
+}

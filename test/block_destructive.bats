@@ -1273,3 +1273,159 @@ _guardrail_wrapper_cmd() {
     [ -z "$output" ]
     [[ "$stderr" == *"fail-closed"* ]]
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Audit batch 2 — G-rules: git destructive forms the deny layer cannot anchor
+# ══════════════════════════════════════════════════════════════════════════════
+# Every 10-git-safety.json rule anchors on a literal 'git push' / 'git commit'
+# / 'git branch' prefix, so the global-flag form (git -C <path> ... — the
+# NORMAL way agents touch RW siblings) matched nothing; commit's short
+# --no-verify (-n / -nm) and the +refspec force-push were unblocked entirely.
+# The hook is the robust layer: it scans per pipe-part regardless of -C
+# position. Policy note: the deny glob 'git push --force*' already blocks
+# --force-with-lease — the hook keeps that stance.
+
+# ── G1: force-push regardless of global-flag position ────────────────────────
+@test "block_destructive: G1 blocks 'git -C /x push --force'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x push --force"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G1 blocks 'git -C /x push -f origin main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x push -f origin main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G1 blocks 'git push --force-with-lease origin main' (deny-layer stance kept)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease origin main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G1 allows 'git push origin main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G1 allows commit message containing 'git push --force' as quoted data" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"document why git push --force is blocked\""}}'
+    [ "$status" -eq 0 ]
+}
+
+# ── G2: hook bypass (--no-verify, commit short -n) ───────────────────────────
+@test "block_destructive: G2 blocks 'git -C /x commit --no-verify'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x commit --no-verify"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G2 blocks 'git commit -n'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git commit -n"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G2 blocks 'git commit -nm wip'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git commit -nm wip"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G2 blocks 'git -C /x commit -nm wip'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x commit -nm wip"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G2 blocks 'git commit -anm wip' (bundled short flags)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git commit -anm wip"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G2 blocks 'git -C /x push --no-verify'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x push --no-verify"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G2 allows 'git push -n origin main' (push -n is --dry-run)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push -n origin main"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G2 allows 'git commit -m wip' (-m is not -n)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git commit -m wip"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G2 allows 'git commit --amend -m wip'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git commit --amend -m wip"}}'
+    [ "$status" -eq 0 ]
+}
+
+# ── G3: force-push via +refspec ───────────────────────────────────────────────
+@test "block_destructive: G3 blocks 'git push origin +main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin +main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G3 blocks 'git -C /x push origin +main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x push origin +main"}}'
+    [ "$status" -eq 2 ]
+}
+
+# ── G4: protected-branch deletion regardless of -C position ──────────────────
+@test "block_destructive: G4 blocks 'git -C /x branch -D main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x branch -D main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G4 blocks 'git -C /x branch --delete dev'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x branch --delete dev"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G4 allows 'git branch -D feature/dev-x' (token-bounded protected names)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git branch -D feature/dev-x"}}'
+    [ "$status" -eq 0 ]
+}
+
+# ── G5: remote protected-branch deletion (push --delete / -d) ─────────────────
+@test "block_destructive: G5 blocks 'git push origin --delete main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin --delete main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 blocks 'git -C /x push origin --delete main'" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git -C /x push origin --delete main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 blocks 'git push -d origin dev' (short form)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push -d origin dev"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 blocks 'git push origin -d main' (short form after remote)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin -d main"}}'
+    [ "$status" -eq 2 ]
+}
+
+@test "block_destructive: G5 allows 'git push origin --delete feature-x' (unprotected branch)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin --delete feature-x"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G5 allows 'git push origin main' (no deletion flag)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G5 allows 'git push --dry-run origin main' (--dry-run is not -d)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git push --dry-run origin main"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G-rules allow 'git log | grep -- --force' (pipe-part isolation)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git log --oneline | grep -- --force"}}'
+    [ "$status" -eq 0 ]
+}
+
+@test "block_destructive: G2 allows 'git commit --amend --no-edit' (long flag, not -n)" {
+    run bash "$HOOK" <<< '{"tool_name":"Bash","tool_input":{"command":"git commit --amend --no-edit"}}'
+    [ "$status" -eq 0 ]
+}

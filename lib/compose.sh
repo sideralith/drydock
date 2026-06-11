@@ -1387,8 +1387,11 @@ ensure_image() {
 	# dood-only host that is offline, with the agent image present but no
 	# drydock-egress image, would otherwise be blocked when cmd_build's apt step
 	# fails without network — a dood regression (INV-9: dood unaffected).
+	# Derive from $PWD unconditionally: ensure_image runs BEFORE
+	# export_compose_env on every command path, so a pre-existing
+	# PROJECT_NAME is untrusted caller environment (audit batch 2).
 	local _ei_proj _ei_mode
-	_ei_proj="${PROJECT_NAME:-$(sanitize_project_name "$(basename "$PWD")")}"
+	_ei_proj="$(sanitize_project_name "$(basename "$PWD")")"
 	_ei_mode="$(resolve_run_mode "$_ei_proj" | cut -d' ' -f1)"
 	if [ "$_ei_mode" = "contained" ] && ! "$DOCKER" image inspect "$EGRESS_IMAGE" >/dev/null 2>&1; then
 		note "egress sidecar image $EGRESS_IMAGE not built — building now"

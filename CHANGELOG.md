@@ -111,6 +111,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until a manual `sudo rm`. `ensure_runtime_dirs` now pre-creates them
   user-owned (file touch / `mkdir -p`), alongside the same guard for the
   shared conversation-store dir on the upgrade path.
+- **The startup orphan-overlay reaper no longer aborts every command on a
+  multi-user /tmp.** The reap glob also matches other users' overlay files:
+  `kill -0` on a foreign live PID fails with EPERM (misread as dead), and the
+  follow-up `rm` on a sticky-/tmp file you do not own fails as the last
+  command of the reap list — `set -e` then killed drydock at dispatch, before
+  even `drydock version`. The reaper now skips files not owned by the current
+  user and guards both removal paths so an unremovable file is skipped instead
+  of fatal.
+- **The pure-Bash session selector no longer treats EOF or Ctrl-C as ENTER.**
+  In the tier-3 selector a failed `read` (closed stdin, or Ctrl-C interrupting
+  the read) was swallowed, leaving an empty key — indistinguishable from ENTER
+  — so a cancel gesture SELECTED the highlighted option; in the `drydock run`
+  menu the first option is "Attach", so cancelling attached. A failed read now
+  cancels with exit 130, matching the gum/fzf tiers' contract.
+- **A `PROJECT_NAME` inherited from the caller's environment no longer poisons
+  session targeting.** Several entry points (`run`, `attach`, `list`, `stop`,
+  the session helpers, and the image gate) fell back to a pre-existing
+  `PROJECT_NAME` — a common CI/tooling export — before drydock had set it, and
+  the value flowed unsanitized into docker name filters and grep regexes:
+  `PROJECT_NAME='.*'` made `drydock stop` target every project's sessions.
+  Entry points now derive the project from the working directory
+  unconditionally; only the internal flow after `export_compose_env` keeps
+  using the exported variable.
+- **`drydock list` no longer shows same-prefix sibling projects.** The listing
+  filtered on the bare `drydock-<project>-` prefix — the only session
+  enumerator without a discriminator-anchored post-filter — so project `api`
+  also listed `api-docs` sessions. The post-filter now anchors the
+  4-hex-character discriminator (keeping `-shell` companion rows, which list
+  intentionally shows).
+- **`drydock sync` before first setup no longer wedges drydock with a
+  root-owned `~/.claude-container`.** The sync's container invocation
+  bind-mounts the prototype dir read-write; on a fresh host the missing bind
+  source was auto-created root-owned by the daemon, and every subsequent run
+  died on EACCES until a manual `sudo rm`. `cmd_sync` now runs
+  `ensure_runtime_dirs` first (as `cmd_run` / `cmd_shell` already did and
+  cmd_setup's header comment claimed), so a fresh-host sync bootstraps
+  user-owned state via the idempotent setup.
+- **A failed `drydock sync` no longer leaks the full `~/.claude` staging copy
+  in `/tmp`.** The container rsync invocation was a plain command, so under
+  direct dispatch `set -e` aborted before the staging cleanup — leaving a
+  complete dereferenced `~/.claude` copy (potentially hundreds of MB,
+  credentials included) under `/tmp/drydock-sync.XXXXXX`. The invocation is
+  now reach-exit-guarded so cleanup and exit-code propagation run on both
+  dispatch paths.
+- **Git-safety guardrails close four accident-class bypasses.** (1) Every
+  deny rule anchored on a literal `git push` / `git commit` / `git branch`
+  prefix, so the `git -C <path>` global-flag form — the normal way agents
+  touch RW siblings — matched nothing. (2) `git commit -n` / `-nm "msg"` (the
+  short `--no-verify`) was completely unblocked. (3) Force-push via `+refspec`
+  (`git push origin +main`) was unblocked. (4) Remote protected-branch
+  deletion bypassed both layers via the `-C` form
+  (`git -C /x push origin --delete main`) and the short form
+  (`git push -d origin main`). Both layers are fixed: the managed-settings
+  deny list gains `git -C *` mirrors of the destructive patterns — including
+  the `push *--delete*` pairs for all 8 protected branches — plus
+  `git commit -n*` and `git push * +*` entries, and the PreToolUse hook gains
+  G-rules that scan per pipe-part for force-push (keeping the existing
+  `--force-with-lease` stance), `--no-verify`/commit `-n`, `+refspec`, and
+  local AND remote protected-branch deletion (`push --delete`/`-d`)
+  regardless of global-flag position. `git push -n` (dry-run),
+  `git push --dry-run`, and quoted data such as a commit message containing
+  `git push --force` are not blocked; known residual: a quoted refspec
+  (`git push origin "+main"`) falls through via quoted-data masking.
 
 ## [0.3.3] - 2026-06-03
 

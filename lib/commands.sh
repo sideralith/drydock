@@ -274,6 +274,15 @@ cmd_build() {
 
 cmd_sync() {
 	ensure_prereqs
+	# Audit batch 2 F5: bootstrap runtime state BEFORE the docker run below.
+	# Its -v "$CONTAINER_CLAUDE":/dst:rw bind is auto-created ROOT-OWNED by
+	# the daemon when the source is missing (fresh host, sync before first
+	# setup), wedging every later command on EACCES until a manual sudo rm.
+	# ensure_runtime_dirs triggers the idempotent cmd_setup when the
+	# prototype is missing (cmd_setup never calls back into cmd_sync — no
+	# recursion), matching cmd_run / cmd_shell and cmd_setup's own header
+	# comment.
+	ensure_runtime_dirs
 	ensure_image
 	note "Sync $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)"
 	# MCP filter: when engram is not usable in the container, exclude
@@ -301,6 +310,13 @@ cmd_sync() {
 		rm -rf "$_staging"
 		err "failed to stage HOST_CLAUDE for sync (cp -aL exit $?)"
 	fi
+	# Audit batch 2 F6: reach-exit-guarded invocation (the
+	# _run_claude_lifecycle idiom). As a plain command, a failure here under
+	# direct dispatch aborted via set -e BEFORE the rm -rf below, leaking the
+	# full dereferenced ~/.claude staging copy (credentials included) in
+	# /tmp; the old `local _rsync_rc=$?` capture only worked on the
+	# errexit-suppressed auto-sync path.
+	local _rsync_rc=0
 	"$DOCKER" run --rm \
 		-v "$_staging":/src:ro \
 		-v "$CONTAINER_CLAUDE":/dst:rw \
@@ -329,8 +345,7 @@ cmd_sync() {
 		--exclude='themes/' \
 		--exclude='.drydock-last-sync' \
 		${_engram_exclude:+"$_engram_exclude"} \
-		/src/ /dst/
-	local _rsync_rc=$?
+		/src/ /dst/ || _rsync_rc=$?
 	rm -rf "$_staging"
 	[ "$_rsync_rc" -ne 0 ] && return "$_rsync_rc"
 	# Purge any stale OAuth token from the container.  rsync --exclude prevents
@@ -561,8 +576,12 @@ cmd_run() {
 	fi
 
 	# ── Non-nested path ───────────────────────────────────────────────────────
+	# Derive unconditionally from project_dir: drydock has not set PROJECT_NAME
+	# yet on this path (export_compose_env runs later), so any pre-existing
+	# value is the caller's environment — a common CI/tooling export — and
+	# must not reach the session regexes (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(sanitize_project_name "$(basename "$project_dir")")}"
+	proj="$(sanitize_project_name "$(basename "$project_dir")")"
 
 	# Query live run sessions for this project (no -shell companions).
 	local live_sessions live_count
@@ -2162,25 +2181,30 @@ cmd_unlink() {
 # ── Session management helpers ────────────────────────────────────────────────
 # Shared by cmd_new, cmd_attach, cmd_stop, cmd_run (T-4), and cmd_doctor.
 
-# _live_sessions — list live run-session container names for PROJECT_NAME.
+# _live_sessions — list live run-session container names for a project.
 # Emits one name per line (no -shell companions — run sessions only).
 # Post-filters defensively: some Docker daemons don't fully honor anchored ERE.
-# Usage: _live_sessions [project_name]  (default: $PROJECT_NAME or cwd-derived)
+# Default is cwd-derived, NEVER an inherited $PROJECT_NAME: with no argument
+# the helper runs at command entry points where drydock has not set that
+# variable, so a pre-existing value is untrusted caller environment
+# (audit batch 2). Post-export callers pass the project explicitly.
+# Usage: _live_sessions [project_name]  (default: cwd-derived)
 _live_sessions() {
-	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
+	local proj="${1:-$(_current_project_name)}"
 	"$DOCKER" ps \
 		--filter "name=^drydock-${proj}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
 		grep -E "^drydock-${proj}-[0-9a-f]{4}$" || true
 }
 
-# _all_sessions — list ALL run-session container names for PROJECT_NAME (running + exited).
+# _all_sessions — list ALL run-session container names for a project (running + exited).
 # Mirrors _live_sessions but passes --all to docker ps so Exited containers are included.
 # Used by cmd_stop's explicit-name validation so users can clean up Exited containers by name.
 # The no-arg disambiguation menu still uses _live_sessions (running only).
-# Usage: _all_sessions [project_name]  (default: $PROJECT_NAME or cwd-derived)
+# Same default rule as _live_sessions: cwd-derived, never inherited env.
+# Usage: _all_sessions [project_name]  (default: cwd-derived)
 _all_sessions() {
-	local proj="${1:-${PROJECT_NAME:-$(_current_project_name)}}"
+	local proj="${1:-$(_current_project_name)}"
 	"$DOCKER" ps --all \
 		--filter "name=^drydock-${proj}-[0-9a-f]{4}$" \
 		--format '{{.Names}}' 2>/dev/null |
@@ -2192,7 +2216,8 @@ _all_sessions() {
 # Outputs the canonical name on stdout. Exits 0 always (validation is the caller's job).
 _resolve_session_name() {
 	local input="$1"
-	local proj="${2:-${PROJECT_NAME:-$(_current_project_name)}}"
+	# Same default rule as _live_sessions: cwd-derived, never inherited env.
+	local proj="${2:-$(_current_project_name)}"
 	# Already a full drydock-<proj>-<disc> name?
 	if [[ "$input" == drydock-*-* ]]; then
 		printf '%s' "$input"
@@ -2322,7 +2347,15 @@ _select_choice_pure() {
 	while true; do
 		_sc_pure_render
 		# Read one byte; if it's ESC, read two more for arrow sequences.
-		IFS= read -rsn1 key 2>/dev/null || true
+		# A FAILED read (EOF on closed stdin, or Ctrl-C interrupting the
+		# read — the INT trap restores the terminal and returns here) must
+		# CANCEL, never select: swallowing the failure left key="", which is
+		# indistinguishable from ENTER and selected the highlighted option.
+		# 130 matches the gum/fzf tiers' cancel contract.
+		if ! IFS= read -rsn1 key 2>/dev/null; then
+			result=130
+			break
+		fi
 		if [ "$key" = $'\e' ]; then
 			IFS= read -rsn2 -t 0.1 seq 2>/dev/null || seq=""
 			case "$seq" in
@@ -2441,8 +2474,10 @@ cmd_attach() {
 		passthrough=("$@")
 	fi
 
+	# Entry point: derive from the cwd unconditionally — a pre-existing
+	# PROJECT_NAME here is untrusted caller environment (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(_current_project_name)}"
+	proj="$(_current_project_name)"
 
 	local target_name
 	if [ -n "$name_arg" ]; then
@@ -2541,15 +2576,20 @@ cmd_attach() {
 # Output: NAME   STATUS   AGE — parseable, one row per container.
 # Exited containers are shown with a [Exited] marker (OQ-T5, REQ-N6).
 cmd_list() {
+	# Entry point: derive from the cwd unconditionally — a pre-existing
+	# PROJECT_NAME here is untrusted caller environment (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(_current_project_name)}"
+	proj="$(_current_project_name)"
 
 	local rows
 	rows="$("$DOCKER" ps --all \
 		--filter "name=^drydock-${proj}-" \
 		--format '{{.Names}}|{{.Status}}|{{.CreatedAt}}' 2>/dev/null || true)"
-	# Defensive post-filter: ensure only this project's containers are shown.
-	rows="$(printf '%s\n' "$rows" | grep -E "^drydock-${proj}-" || true)"
+	# Disc-anchored post-filter (audit batch 2): the bare prefix leaked
+	# same-prefix sibling projects (project 'api' listed 'api-docs' rows).
+	# Anchors the NAME field up to the '|' column separator; -shell
+	# companions are intentionally kept — list shows both.
+	rows="$(printf '%s\n' "$rows" | grep -E "^drydock-${proj}-[0-9a-f]{4}(-shell)?\|" || true)"
 
 	if [ -z "$rows" ]; then
 		return 0
@@ -2579,8 +2619,10 @@ cmd_stop() {
 		shift
 	fi
 
+	# Entry point: derive from the cwd unconditionally — a pre-existing
+	# PROJECT_NAME here is untrusted caller environment (audit batch 2).
 	local proj
-	proj="${PROJECT_NAME:-$(_current_project_name)}"
+	proj="$(_current_project_name)"
 
 	local target_name
 	if [ -n "$name_arg" ]; then

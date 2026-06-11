@@ -323,6 +323,32 @@ STUB
 	[[ "$output" == *"UniqueHeader42"* ]]
 }
 
+# ── Bash puro: EOF / interrupted read must CANCEL, never select ──────────────
+# read -rsn1 fails on EOF (closed stdin) and on a Ctrl-C-interrupted read.
+# Swallowing that failure left key="" — indistinguishable from ENTER — so a
+# cancel gesture SELECTED the highlighted option (in cmd_run's menu the first
+# option is "Attach"). EOF must return 130 with nothing on stdout, matching
+# the gum/fzf tiers' cancel contract.
+
+@test "_select_choice: bash puro tier → EOF on stdin returns 130 (cancel, not ENTER)" {
+	export DRYDOCK_DISABLE_GUM=1
+	export DRYDOCK_DISABLE_FZF=1
+
+	run bash -c "
+		source '$DRYDOCK_HOME/lib/common.sh'
+		source '$DRYDOCK_HOME/lib/paths.sh'
+		source '$DRYDOCK_HOME/lib/compose.sh'
+		source '$DRYDOCK_HOME/lib/commands.sh'
+		export DRYDOCK_DISABLE_GUM=1
+		export DRYDOCK_DISABLE_FZF=1
+		_select_choice 'test header' 'Attach: drydock-x-ab12' 'Cancel' </dev/null 2>/dev/null
+	"
+	[ "$status" -eq 130 ]
+	# Nothing selected: stdout stays empty (UI renders on stderr only,
+	# discarded inside the subshell so \$output captures stdout alone).
+	[ -z "$output" ]
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Cancel path: non-zero from any tier → _select_choice returns 130
 # ══════════════════════════════════════════════════════════════════════════════
@@ -421,6 +447,36 @@ STUB
 
 	run cmd_run "$CMD_SC_PROJECT_DIR"
 	[ "$status" -eq 2 ]
+}
+
+@test "cmd_run: inherited PROJECT_NAME='.*' does not match foreign sessions (audit batch 2)" {
+	_setup_cmd_run_sc
+	# Poison the environment AFTER the harness set its own value: at cmd_run's
+	# session-count site drydock has not set PROJECT_NAME, so a caller export
+	# of '.*' made the live-session regex match EVERY project's sessions.
+	export PROJECT_NAME='.*'
+
+	local stub_dir="$BATS_TEST_TMPDIR/docker-stub-sc-poison-$$"
+	mkdir -p "$stub_dir"
+	# The daemon only knows a FOREIGN project's session.
+	cat >"$stub_dir/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${DOCKER_CALL_LOG}"
+if [ "\${1:-}" = "ps" ]; then
+	printf 'drydock-otherproj-cd34\n'
+fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+	exec() { printf '%s\n' "$*" >>"$DOCKER_CALL_LOG"; return 0; }
+
+	run cmd_run "$CMD_SC_PROJECT_DIR"
+	# The real project has ZERO sessions → the no-TTY guard fires, NOT the
+	# "existing sessions" listing for the foreign project.
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"requires a TTY"* ]]
+	[[ "$output" != *"Existing sessions"* ]]
 }
 
 @test "cmd_run: ≥1 sessions + TTY + gum pick 'Cancel' → exits 130" {

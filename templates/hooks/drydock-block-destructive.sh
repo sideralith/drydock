@@ -493,4 +493,85 @@ if [[ "$_scrubbed_cmd" =~ (^|[^a-zA-Z])(curl|wget)([^a-zA-Z]|$) ]] &&
 	exit 2
 fi
 
+# ── Rules G1-G5: git destructive forms the deny layer cannot anchor ──────────
+# (audit batch 2) Every 10-git-safety.json rule anchors on a literal
+# 'git push' / 'git commit' / 'git branch' PREFIX, so global-flag forms —
+# git -C <path> push --force, git -c k=v commit -n — matched nothing there,
+# and -C is the NORMAL way agents touch RW siblings. These rules re-apply the
+# deny layer's intent regardless of intervening global flags.
+#
+# Checked per pipe-part (the A2 precedent): a destructive token in a command
+# piped FROM git (git log | grep -- --force) must not combine with the git
+# token of another pipe-part. Quoted DATA never reaches these rules: git is
+# not in _strip_quotes' flatten-trigger set, so its quoted arguments are
+# masked — `git commit -m "git push --force"` is inspected as
+# `git commit -m  `. Residual (named): a QUOTED real flag/refspec
+# (git push origin "+main") is masked away and not blocked here — accident-
+# class typos do not quote refspecs (threat model A, INV-7).
+#
+#   G1 — force-push: push + --force / --force-with-lease / --force-if-includes
+#        / -f. The deny glob 'git push --force*' already blocks
+#        --force-with-lease; the hook keeps that stance (no policy change).
+#   G2 — hook bypass: --no-verify on commit/push; commit's SHORT form -n.
+#        The short-form token must START with -n or with non-value-taking
+#        short flags before the n (-an, -nm "msg") — value-taking flags
+#        (-m/-C/-c/-F/-t/-S/-u) are excluded from the prefix class so an
+#        attached VALUE containing 'n' (git commit -mnote) cannot match.
+#        push -n is --dry-run, NOT --no-verify — only the long form blocks
+#        for push.
+#   G3 — force-push via +refspec: push + a +<ref> token.
+#   G4 — protected-branch deletion: branch + -D/-d/--delete + a protected
+#        branch name token (same 8-branch set as the deny layer).
+#   G5 — REMOTE protected-branch deletion: push + --delete/-d (token-bounded)
+#        + a protected branch name token (same 8-branch set). For push, -d IS
+#        --delete (unlike push -n, which is --dry-run). The short -d form is
+#        hook-only: a deny-layer *-d* glob would substring-match --dry-run
+#        (same glob limitation as *-r* in C1-residue), so the JSON carries
+#        only the *--delete* long-form pairs and their git -C mirrors.
+_g_protected='(main|master|dev|develop|staging|production|prod|release)'
+for _seg in "${_segments[@]}"; do
+	IFS='|' read -ra _g_parts <<<"$_seg"
+	for _g_part in "${_g_parts[@]}"; do
+		[[ "$_g_part" =~ (^|[[:space:]])git[[:space:]] ]] || continue
+		if [[ "$_g_part" =~ [[:space:]]push([[:space:]]|$) ]]; then
+			if [[ "$_g_part" =~ [[:space:]](--force(-with-lease|-if-includes)?(=[^[:space:]]*)?|-f)([[:space:]]|$) ]]; then
+				echo "drydock guardrail: git force-push is blocked (G1)." >&2
+				echo "Force-pushing rewrites shared history; push to a new branch instead." >&2
+				exit 2
+			fi
+			if [[ "$_g_part" =~ [[:space:]]\+[^[:space:]] ]]; then
+				echo "drydock guardrail: git push with a +refspec (force-push) is blocked (G3)." >&2
+				echo "A leading + on a refspec forces the update; push without it or use a new branch." >&2
+				exit 2
+			fi
+			if [[ "$_g_part" =~ [[:space:]]--no-verify([[:space:]]|$) ]]; then
+				echo "drydock guardrail: git push --no-verify is blocked (G2)." >&2
+				echo "Hooks and CI exist for a reason — fix the failure instead of bypassing it." >&2
+				exit 2
+			fi
+			if [[ "$_g_part" =~ [[:space:]](--delete|-d)([[:space:]]|$) ]] &&
+				[[ "$_g_part" =~ (^|[[:space:]])${_g_protected}([[:space:]]|$) ]]; then
+				echo "drydock guardrail: deleting a remote protected branch is blocked (G5)." >&2
+				echo "Protected branches (main/master/dev/...) must not be deleted from a sandboxed session." >&2
+				exit 2
+			fi
+		fi
+		if [[ "$_g_part" =~ [[:space:]]commit([[:space:]]|$) ]]; then
+			if [[ "$_g_part" =~ [[:space:]]--no-verify([[:space:]]|$) ]] ||
+				[[ "$_g_part" =~ [[:space:]]-[apsveqio]*n[a-zA-Z]*([[:space:]]|$) ]]; then
+				echo "drydock guardrail: git commit bypassing hooks (--no-verify / -n) is blocked (G2)." >&2
+				echo "Hooks and CI exist for a reason — fix the failure instead of bypassing it." >&2
+				exit 2
+			fi
+		fi
+		if [[ "$_g_part" =~ [[:space:]]branch([[:space:]]|$) ]] &&
+			[[ "$_g_part" =~ [[:space:]](-D|-d|--delete)([[:space:]]|$) ]] &&
+			[[ "$_g_part" =~ (^|[[:space:]])${_g_protected}([[:space:]]|$) ]]; then
+			echo "drydock guardrail: deleting a protected branch is blocked (G4)." >&2
+			echo "Protected branches (main/master/dev/...) must not be deleted from a sandboxed session." >&2
+			exit 2
+		fi
+	done
+done
+
 exit 0

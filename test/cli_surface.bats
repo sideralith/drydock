@@ -142,6 +142,48 @@ drydock() {
   [ ! -f "$orphan" ]
 }
 
+# ── Orphan reap on a multi-user /tmp ──────────────────────────────────────────
+# On a shared /tmp the glob matches OTHER users' overlay files. rm on a
+# sticky-/tmp file we do not own fails — and as the last command of the reap
+# loop's || list that failure killed the whole dispatch under set -e, before
+# even `drydock version`. Non-ownership cannot be simulated without root
+# (chown), so the unremovable-file contract is exercised via a read-only
+# TMPDIR: rm fails with EACCES exactly as it would on a foreign sticky-bit
+# file. The reap must skip the file and the command must still succeed.
+
+@test "orphan reap: unremovable stale overlay (dead pid) does not abort dispatch" {
+  [ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
+  local ro_tmp="$BATS_TEST_TMPDIR/ro-tmp"
+  mkdir -p "$ro_tmp"
+  local orphan="$ro_tmp/drydock-submounts-2147483647.yml"
+  printf 'services: {}\n' > "$orphan"
+  chmod 555 "$ro_tmp"
+
+  run env TMPDIR="$ro_tmp" "$DRYDOCK_HOME/bin/drydock" version
+  chmod 755 "$ro_tmp"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"drydock"* ]]
+  # The unremovable file is skipped, not half-handled.
+  [ -f "$orphan" ]
+}
+
+@test "orphan reap: unremovable stale overlay (non-numeric pid) does not abort dispatch" {
+  [ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
+  # Exercises the OTHER rm path: the malformed-name case arm.
+  local ro_tmp="$BATS_TEST_TMPDIR/ro-tmp-nonnum"
+  mkdir -p "$ro_tmp"
+  local orphan="$ro_tmp/drydock-links-not-a-pid.yml"
+  printf 'services: {}\n' > "$orphan"
+  chmod 555 "$ro_tmp"
+
+  run env TMPDIR="$ro_tmp" "$DRYDOCK_HOME/bin/drydock" version
+  chmod 755 "$ro_tmp"
+
+  [ "$status" -eq 0 ]
+  [ -f "$orphan" ]
+}
+
 # ── T-5 RED: dispatcher subcommands new/attach/list/stop ─────────────────────
 # REQ-N4, REQ-6-M, REQ-N6, REQ-N7: verify the four new subcommands are dispatched
 # (not falling into the "unknown command" error path).

@@ -3789,3 +3789,44 @@ STUB
 	[ ! -f "$marker" ]
 	unset DRYDOCK_DOOD
 }
+
+# ── ensure_image: inherited PROJECT_NAME must not steer mode resolution ───────
+# Audit batch 2: ensure_image runs BEFORE export_compose_env on every command
+# path, so a pre-existing PROJECT_NAME can only come from the caller's
+# environment. Trusting it let a foreign name (e.g. a dood-pinned project
+# exported by CI tooling) suppress the contained-mode egress-sidecar
+# requirement for the REAL cwd project.
+
+@test "ensure_image: ignores inherited PROJECT_NAME for mode resolution (audit batch 2)" {
+	export HOME="$BATS_TEST_TMPDIR/ei-poison-home"
+	mkdir -p "$HOME/.config/drydock/dood"
+	touch "$HOME/.config/drydock/dood/foreignproj"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+	export PROJECT_NAME="foreignproj"
+
+	# The cwd project has no pin → contained → egress image is required.
+	local proj_dir="$BATS_TEST_TMPDIR/ei-realproj"
+	mkdir -p "$proj_dir"
+	cd "$proj_dir"
+
+	image_exists() { return 0; }
+	local build_log="$BATS_TEST_TMPDIR/ei-build.log"
+	: >"$build_log"
+	# shellcheck disable=SC2317
+	cmd_build() { echo "build" >>"$build_log"; }
+	# Docker stub: the egress sidecar image is absent (inspect fails).
+	local stub_dir="$BATS_TEST_TMPDIR/ei-docker-stub"
+	mkdir -p "$stub_dir"
+	cat >"$stub_dir/docker" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then exit 1; fi
+exit 0
+STUB
+	chmod +x "$stub_dir/docker"
+	export DOCKER="$stub_dir/docker"
+
+	ensure_image
+	# Mode must resolve from the cwd project (contained), so the missing
+	# sidecar image triggers a build — the foreign dood pin is irrelevant.
+	[ -s "$build_log" ]
+}

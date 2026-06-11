@@ -57,15 +57,22 @@ main() {
 	for _glob in "drydock-submounts-*.yml" "drydock-links-*.yml"; do
 		for _stale in "${TMPDIR:-/tmp}"/$_glob; do
 			[ -e "$_stale" ] || continue
+			# Multi-user /tmp: the glob also matches OTHER users' overlays.
+			# Skip anything we do not own — kill -0 on a foreign LIVE pid
+			# fails with EPERM (misread as dead), and rm on a foreign
+			# sticky-/tmp file fails anyway. Reap only our own orphans.
+			[ -O "$_stale" ] || continue
 			_pid="${_stale##*-}"
 			_pid="${_pid%.yml}"
 			case "$_pid" in
 			'' | *[!0-9]*)
-				rm -f "$_stale"
+				# Guard rm: an unremovable file (read-only TMPDIR, perms
+				# race) must not kill dispatch under set -e.
+				rm -f "$_stale" 2>/dev/null || true
 				continue
 				;;
 			esac
-			kill -0 "$_pid" 2>/dev/null || rm -f "$_stale"
+			kill -0 "$_pid" 2>/dev/null || rm -f "$_stale" 2>/dev/null || true
 		done
 	done
 	unset _stale _pid _glob
