@@ -105,6 +105,31 @@ _dr_help_row() {
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
+# _refresh_container_claude_json — filter HOST_CLAUDE_JSON into
+# CONTAINER_CLAUDE_JSON with the engram MCP entries stripped (the not-usable
+# branch of cmd_setup / cmd_sync). Atomic (audit F5): jq writes a same-dir
+# temp file; the target is replaced only on success. The old
+# `jq ... >"$CONTAINER_CLAUDE_JSON"` idiom truncated the target BEFORE jq
+# parsed the source — a host ~/.claude.json caught mid-rewrite left a 0-byte
+# container config. The rc check is explicit (if !) rather than relying on
+# set -e: the auto-sync path calls `cmd_sync || warn`, which suppresses
+# errexit inside the whole function, so a jq failure would otherwise fall
+# through to the marker touch and a lying "Sync done".
+_refresh_container_claude_json() {
+	local _tmp
+	_tmp="$(mktemp "${CONTAINER_CLAUDE_JSON}.XXXXXX")" || {
+		warn "mktemp failed next to $CONTAINER_CLAUDE_JSON — container config NOT refreshed"
+		return 1
+	}
+	if ! jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
+		"$HOST_CLAUDE_JSON" >"$_tmp"; then
+		rm -f "$_tmp"
+		warn "host ~/.claude.json is not valid JSON — container config NOT refreshed"
+		return 1
+	fi
+	mv "$_tmp" "$CONTAINER_CLAUDE_JSON"
+}
+
 # Host-side one-time setup. Idempotent. Auto-called by `ensure_runtime_dirs`
 # from cmd_run / cmd_shell / cmd_sync when state is missing, so most users
 # never invoke it explicitly.
@@ -189,8 +214,7 @@ cmd_setup() {
 			if engram_usable; then
 				cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
 			else
-				jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
-					"$HOST_CLAUDE_JSON" >"$CONTAINER_CLAUDE_JSON"
+				_refresh_container_claude_json || return 1
 			fi
 			ok "$CONTAINER_CLAUDE_JSON initialized as copy of $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 		else
@@ -320,8 +344,7 @@ cmd_sync() {
 		if engram_usable; then
 			cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
 		else
-			jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
-				"$HOST_CLAUDE_JSON" >"$CONTAINER_CLAUDE_JSON"
+			_refresh_container_claude_json || return 1
 			if host_is_linux; then
 				note "engram not on PATH — skipped its MCP server in the container (no startup noise). Install engram to enable it."
 			else

@@ -417,6 +417,102 @@ setup() {
 	[ -z "$(find "$TMPDIR" -maxdepth 1 -name 'drydock-sync.*' -print -quit)" ]
 }
 
+# ── Audit F5: jq filter must not truncate the container config on failure ────
+# `jq ... >"$CONTAINER_CLAUDE_JSON"` truncated the target BEFORE jq parsed the
+# source: a host ~/.claude.json caught mid-rewrite (invalid JSON) left a 0-byte
+# container config. Worse, the auto-sync path calls `cmd_sync || warn`, which
+# suppresses set -e inside the function — execution fell through to the marker
+# touch and a lying "Sync done". The refresh must be atomic (temp + mv), with
+# an explicit rc check, and failure must return 1 without touching the marker.
+
+@test "cmd_sync: invalid host ~/.claude.json — container config UNCHANGED, no marker, nonzero return" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	# Corrupt the host config — simulates a mid-rewrite read.
+	printf '{"mcpServers": {INVALID' >"$fakehome/.claude.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	# Pre-seed the container config with known-good content.
+	printf '{"keep":"me"}\n' >"$CONTAINER_CLAUDE_JSON"
+	rm -f "$CONTAINER_CLAUDE/.drydock-last-sync"
+
+	run cmd_sync
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"NOT refreshed"* ]]
+	# No lying success path: no "Sync done", no freshness marker.
+	[[ "$output" != *"Sync done"* ]]
+	[ ! -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+	# The pre-existing container config survives byte-for-byte.
+	[ "$(cat "$CONTAINER_CLAUDE_JSON")" = '{"keep":"me"}' ]
+	# No temp file leaked next to the target.
+	[ -z "$(find "$HOME" -maxdepth 1 -name "$(basename "$CONTAINER_CLAUDE_JSON").*" -print -quit)" ]
+}
+
+@test "cmd_sync: valid host ~/.claude.json — filtered config written, marker updated, Sync done" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	printf '{"stale":"content"}\n' >"$CONTAINER_CLAUDE_JSON"
+	rm -f "$CONTAINER_CLAUDE/.drydock-last-sync"
+
+	run cmd_sync
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Sync done"* ]]
+	[ -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+	# Filtered: engram MCP entry stripped, github survives.
+	[ "$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")" = "null" ]
+	[ "$(jq -r '.mcpServers.github.command' "$CONTAINER_CLAUDE_JSON")" = "gh" ]
+	# No temp file leaked next to the target.
+	[ -z "$(find "$HOME" -maxdepth 1 -name "$(basename "$CONTAINER_CLAUDE_JSON").*" -print -quit)" ]
+}
+
+@test "cmd_setup: invalid host ~/.claude.json — no 0-byte container config, no marker, nonzero return" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+	printf 'not json at all' >"$fakehome/.claude.json"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	run cmd_setup
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"NOT refreshed"* ]]
+	# The old idiom left a truncated 0-byte file here.
+	[ ! -e "$CONTAINER_CLAUDE_JSON" ]
+	# Marker must not exist — setup did not complete.
+	[ ! -f "$CONTAINER_CLAUDE/.drydock-last-sync" ]
+	# No temp file leaked next to the target.
+	[ -z "$(find "$HOME" -maxdepth 1 -name "$(basename "$CONTAINER_CLAUDE_JSON").*" -print -quit)" ]
+}
+
 # ── cmd_status: 2-state engram reporting ─────────────────────────────────────
 
 @test "cmd_status: engram not usable — output contains 'not detected (opt-in)'" {
