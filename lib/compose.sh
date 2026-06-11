@@ -494,10 +494,10 @@ resolve_run_mode() {
 # mode overlay, hardening overlay — come FIRST, before any fallible generator
 # (submounts, links). Consumers that miss the producer's failure mid-stream
 # then receive at worst a feature-truncated list, never one missing the
-# security posture. Compose merge is per-key last-wins; none of the feature
-# overlays share keys with the mode/hardening overlays (distinct volume
-# targets vs cap_drop/security_opt/tmpfs/network), so this reorder does not
-# change the effective config.
+# security posture. Compose merge is fine-grained, so the reorder is
+# config-neutral: environment merges per variable name (submount's
+# DRYDOCK_SUBMOUNT_* vs contain's HTTPS_PROXY/NO_PROXY/telemetry — disjoint);
+# volumes merge per target path — targets disjoint across submount/links/dood.
 compose_files() {
 	local project_dir="$1"
 	printf '%s\n' "-f" "$COMPOSE_BASE"

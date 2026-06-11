@@ -127,6 +127,7 @@ _refresh_container_claude_json() {
 		warn "host ~/.claude.json is not valid JSON — container config NOT refreshed"
 		return 1
 	fi
+	chmod 644 "$_tmp"
 	mv "$_tmp" "$CONTAINER_CLAUDE_JSON"
 }
 

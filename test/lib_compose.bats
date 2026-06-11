@@ -1374,6 +1374,7 @@ STUB
 # therefore every `drydock run` — under set -e. gc warns and continues.
 
 @test "gc_orphan_session_dirs: unremovable orphan dir — gc warns, returns 0, continues to next dir" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
 	local fake_home="$BATS_TEST_TMPDIR/gc-home-unremovable-$$"
 	mkdir -p "$fake_home"
 	# Orphan dir aaaa holds a file inside a write-protected subdir → rm -rf fails.
@@ -2196,6 +2197,7 @@ _setup_wiring_home() {
 }
 
 @test "compose_files: generator failure → non-zero exit, mandatory overlays already emitted" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
 	# Sub-mounts detected (fixture) but the overlay path is unwritable → the
 	# generator's redirect fails mid-assembly.
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
@@ -2224,6 +2226,7 @@ _setup_wiring_home() {
 }
 
 @test "compose_files_into: producer failure → hard abort with message, no truncated launch" {
+	[ "$(id -u)" -eq 0 ] && skip "root bypasses chmod 555 — test not meaningful"
 	export MOUNTINFO_FILE="$DRYDOCK_HOME/test/fixtures/mountinfo-drvfs-c.txt"
 	local ro_dir="$BATS_TEST_TMPDIR/ro-cfi-dir-$$"
 	mkdir -p "$ro_dir"
