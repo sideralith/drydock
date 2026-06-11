@@ -186,6 +186,95 @@ setup() {
 	[ -d "$HOME/.config/gh" ]
 }
 
+# ── Audit F6: unconditional ${HOME}-sourced mounts need host-side guards ─────
+# docker-compose.yml mounts ${HOME}/.gitconfig (:ro) and ${HOME}/.local (:rw)
+# with no existence guard: on a fresh machine the Docker daemon (root)
+# auto-creates a missing source as a root-owned DIRECTORY — ~/.gitconfig as a
+# dir breaks host git entirely until a sudo rm. Same class as #71 (hooks) and
+# #109 (~/.config/gh), which ensure_runtime_dirs already pre-creates.
+
+@test "ensure_runtime_dirs: creates ~/.gitconfig as a FILE when absent (audit F6)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	rm -f "$HOME/.gitconfig"
+	cmd_setup() { :; }
+
+	ensure_runtime_dirs
+
+	# Must be a regular FILE — a directory here is exactly the daemon failure
+	# mode this guard prevents.
+	[ -f "$HOME/.gitconfig" ]
+	[ ! -d "$HOME/.gitconfig" ]
+}
+
+@test "ensure_runtime_dirs: leaves an existing ~/.gitconfig untouched (audit F6)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	printf '[user]\n\tname = Real User\n' >"$HOME/.gitconfig"
+	local inode_before
+	inode_before="$(stat -c '%i' "$HOME/.gitconfig")"
+	cmd_setup() { :; }
+
+	ensure_runtime_dirs
+
+	# Content AND inode unchanged — the guard must never rewrite or replace
+	# a host-owned file (INV-1 non-contamination class).
+	[ "$(cat "$HOME/.gitconfig")" = "$(printf '[user]\n\tname = Real User')" ]
+	[ "$(stat -c '%i' "$HOME/.gitconfig")" = "$inode_before" ]
+}
+
+@test "ensure_runtime_dirs: creates ~/.local dir and prototype projects/ when absent (audit F6)" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	# Pre-existing prototype WITHOUT projects/ — the upgrade case where the
+	# shared-store sub-mount source would otherwise be daemon-created as root.
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+	rm -rf "$HOME/.local" "$CONTAINER_CLAUDE/projects"
+	cmd_setup() { :; }
+
+	ensure_runtime_dirs
+
+	[ -d "$HOME/.local" ]
+	[ -d "$CONTAINER_CLAUDE/projects" ]
+}
+
 @test "ensure_runtime_dirs: engram usable + isolated + missing CONTAINER_ENGRAM — DOES trigger cmd_setup" {
 	setup_engram_on_path
 	setup_plain_linux_seams

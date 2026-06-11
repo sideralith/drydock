@@ -44,6 +44,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`drydock doctor` reports the active network/socket mode** (#149) in its
   COMPOSE OVERLAYS section.
 
+### Fixed
+
+- **Session-dir GC no longer reaps live sessions when the Docker daemon is
+  unreachable.** A failed `docker ps -a` produced empty output that was
+  indistinguishable from "no containers", so every session dir — including the
+  bind-mounted `~/.claude` of RUNNING sessions — looked orphaned and was
+  rm -rf'd. GC now checks the command's exit status and skips the pass with a
+  warning when the daemon does not answer.
+- **Session-dir GC survives an unremovable entry.** One entry that could not be
+  removed (e.g. a root-owned file inside a session dir) aborted GC under
+  `set -e` and with it every `drydock run` for every project. The reap loop now
+  warns and continues, honoring GC's returns-0-always contract.
+- **Image bake is immune to the builder's umask.** `COPY` preserves
+  build-context file modes, so building with `umask 077` baked the
+  managed-settings policy JSONs (and the sidecar's `tinyproxy.conf`) as 600
+  root-owned files the non-root runtime user could not read — silently
+  disabling the entire managed-settings guardrail layer (INV-3). Both `COPY`
+  lines now pin `--chmod=644`, with directory traversal pinned explicitly.
+- **A failure while assembling the compose `-f` list aborts the launch instead
+  of silently dropping overlays.** The list was consumed through process
+  substitution, which discards the producer's exit status: a generator dying
+  mid-stream (full disk, unwritable `TMPDIR`) could launch a session with a
+  truncated overlay list — in the worst case missing the hardening AND mode
+  overlays, i.e. a "contained" session with open egress. Mandatory overlays
+  (base, mode, hardening) are now emitted before any fallible generator, and
+  all consumers check the producer's exit status and fail loud.
+- **An invalid host `~/.claude.json` no longer truncates the container config
+  or fakes a successful sync.** The jq filter wrote directly into the target,
+  truncating it before parsing the source; a host config caught mid-rewrite
+  left a 0-byte container config, and the auto-sync path still stamped the
+  freshness marker and printed "Sync done". The refresh is now atomic
+  (same-directory temp file + rename) with an explicit jq exit-status check;
+  on failure the existing container config is left intact, a warning is
+  printed, and no marker or success message is produced.
+- **Fresh hosts no longer get a root-owned `~/.gitconfig` directory or
+  `~/.local` created by the Docker daemon.** Both are unconditional bind-mount
+  sources in the base compose file; when absent, the daemon auto-creates them
+  as root-owned directories — `~/.gitconfig`-as-a-directory breaks host git
+  until a manual `sudo rm`. `ensure_runtime_dirs` now pre-creates them
+  user-owned (file touch / `mkdir -p`), alongside the same guard for the
+  shared conversation-store dir on the upgrade path.
+
 ## [0.3.3] - 2026-06-03
 
 Session-lifecycle completion plus release-hardening. Finishes the #131

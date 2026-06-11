@@ -1324,6 +1324,18 @@ ensure_runtime_dirs() {
 	# hosts without gh installed, the source path is absent; the daemon would
 	# auto-create it as root-owned, later breaking `gh auth login` on host.
 	mkdir -p "$HOME/.config/gh"
+	# Audit F6 — the remaining unconditional ${HOME}-sourced mounts in
+	# docker-compose.yml. A missing source is auto-created by the daemon as a
+	# root-owned DIRECTORY: ~/.gitconfig-as-a-dir breaks host git entirely
+	# until a sudo rm. touch only when absent — never rewrite or replace an
+	# existing host-owned file (INV-1 non-contamination class).
+	[ -e "$HOME/.gitconfig" ] || touch "$HOME/.gitconfig"
+	mkdir -p "$HOME/.local"
+	# Shared conversation-store sub-mount source (${HOME}/.claude-container/
+	# projects). cmd_setup covers fresh-init; this covers prototypes predating
+	# the shared store where migrate_projects_to_shared_store had nothing to
+	# harvest and therefore never created the dir.
+	mkdir -p "$CONTAINER_CLAUDE/projects"
 	# One-time consolidation of pre-upgrade scattered per-session projects/ trees
 	# into the shared store (issue #68). Sentinel-gated; no-op after first run.
 	migrate_projects_to_shared_store
