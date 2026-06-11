@@ -487,18 +487,20 @@ resolve_run_mode() {
 	printf '%s %s\n' "contained" "factory default"
 }
 
-# Print one compose -f arg per line, in order. Caller assembles into array.
+# Print one compose -f arg per line, in order. Caller assembles into array
+# (use compose_files_into — it checks this producer's exit status).
+#
+# Emission order (audit F4): the MANDATORY, infallible -f args — base file,
+# mode overlay, hardening overlay — come FIRST, before any fallible generator
+# (submounts, links). Consumers that miss the producer's failure mid-stream
+# then receive at worst a feature-truncated list, never one missing the
+# security posture. Compose merge is per-key last-wins; none of the feature
+# overlays share keys with the mode/hardening overlays (distinct volume
+# targets vs cap_drop/security_opt/tmpfs/network), so this reorder does not
+# change the effective config.
 compose_files() {
 	local project_dir="$1"
 	printf '%s\n' "-f" "$COMPOSE_BASE"
-	generate_submount_overlay "$project_dir"
-	if [ -f "${SUBMOUNT_OVERLAY:-}" ] && [ -s "${SUBMOUNT_OVERLAY:-}" ]; then
-		printf '%s\n' "-f" "$SUBMOUNT_OVERLAY"
-	fi
-	generate_links_overlay "$project_dir"
-	if [ -f "${LINKS_OVERLAY:-}" ] && [ -s "${LINKS_OVERLAY:-}" ]; then
-		printf '%s\n' "-f" "$LINKS_OVERLAY"
-	fi
 	# Network/socket posture: include EXACTLY ONE of the dood/contain overlays.
 	# Re-derive the project name defensively from project_dir (NOT the exported
 	# PROJECT_NAME) so this works when called directly (e.g. bats) without a prior
@@ -517,6 +519,17 @@ compose_files() {
 	# DRYDOCK_TMPFS_SIZE is interpolated inside the overlay for granular tmpfs sizing.
 	if [ "${DRYDOCK_NO_HARDENING:-0}" != "1" ]; then
 		printf '%s\n' "-f" "$COMPOSE_HARDENING"
+	fi
+	# Fallible generators — explicit propagation: their internal failures (e.g.
+	# an unwritable overlay path) would otherwise be swallowed when this
+	# function runs in an exit-status-checked context (errexit suppressed).
+	generate_submount_overlay "$project_dir" || return 1
+	if [ -f "${SUBMOUNT_OVERLAY:-}" ] && [ -s "${SUBMOUNT_OVERLAY:-}" ]; then
+		printf '%s\n' "-f" "$SUBMOUNT_OVERLAY"
+	fi
+	generate_links_overlay "$project_dir" || return 1
+	if [ -f "${LINKS_OVERLAY:-}" ] && [ -s "${LINKS_OVERLAY:-}" ]; then
+		printf '%s\n' "-f" "$LINKS_OVERLAY"
 	fi
 	# Optional, host opt-in — these vars are set by export_compose_env (called
 	# before this fn) so the -f list and the overlay YAMLs share one decision.
@@ -550,6 +563,26 @@ compose_files() {
 		# it pre-existing; make it idempotently when the parent overlay applies.
 		[ -d "$HOME/.cache/ccstatusline" ] || mkdir -p "$HOME/.cache/ccstatusline"
 	fi
+}
+
+# compose_files_into <array_name> <project_dir> — assemble compose_files'
+# -f list into the named array, FAIL-LOUD (audit F4). The previous consumer
+# idiom `while read ... < <(compose_files ...)` discarded the producer's exit
+# status: a generator dying mid-stream left a TRUNCATED -f list and the
+# session launched with whatever overlays had been emitted so far. Capturing
+# to a temp file first makes the producer's rc observable; combined with the
+# mandatory-first emission order in compose_files, assembly failure now aborts
+# the launch instead of silently degrading it.
+compose_files_into() {
+	local _cfi_dest="$1" _cfi_project_dir="$2" _cfi_tmp
+	_cfi_tmp="$(mktemp "${TMPDIR:-/tmp}/drydock-compose-files.XXXXXX")" ||
+		err "mktemp failed for compose -f list"
+	if ! compose_files "$_cfi_project_dir" >"$_cfi_tmp"; then
+		rm -f "$_cfi_tmp"
+		err "compose file assembly failed — refusing to launch with a truncated overlay list"
+	fi
+	mapfile -t "$_cfi_dest" <"$_cfi_tmp"
+	rm -f "$_cfi_tmp"
 }
 
 # _generate_egress_filter <project_name> <disc>

@@ -524,7 +524,7 @@ cmd_run() {
 		export_compose_env "$project_dir"
 		_emit_mode_banner "$PROJECT_NAME"
 		local compose_args=()
-		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+		compose_files_into compose_args "$project_dir"
 		local _name="$DRYDOCK_SESSION_NAME"
 		# Capture host mux labels to stamp onto the nested container (REQ-4, S-4A-4E).
 		local -a mux_args=()
@@ -561,7 +561,7 @@ cmd_run() {
 		export_compose_env "$project_dir"
 		_emit_mode_banner "$PROJECT_NAME"
 		local compose_args=()
-		while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+		compose_files_into compose_args "$project_dir"
 		_launch_new "$project_dir" compose_args "${passthrough[@]}"
 	elif _drydock_has_tty; then
 		# ── ≥1 sessions + TTY → interactive TUI selector ─────────────────────
@@ -625,7 +625,7 @@ cmd_run() {
 			export_compose_env "$project_dir"
 			_emit_mode_banner "$PROJECT_NAME"
 			local compose_args=()
-			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			compose_files_into compose_args "$project_dir"
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
 			;;
 		"Stop all sessions and start fresh")
@@ -637,7 +637,7 @@ cmd_run() {
 			export_compose_env "$project_dir"
 			_emit_mode_banner "$PROJECT_NAME"
 			local compose_args=()
-			while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+			compose_files_into compose_args "$project_dir"
 			_launch_new "$project_dir" compose_args "${passthrough[@]}"
 			;;
 		Cancel | '')
@@ -776,7 +776,8 @@ _session_has_transcript() {
 # Detects the host multiplexer (zellij → tmux → screen) and emits --label tokens
 # ONE PER LINE so the caller can read them into an array via:
 #   while IFS= read -r a; do args+=("$a"); done < <(_capture_mux_labels)
-# This idiom (used by compose_files) survives session names with spaces.
+# This idiom survives session names with spaces. (compose_files consumers use
+# compose_files_into instead — its producer exit status must not be discarded.)
 # Precedence: zellij ($ZELLIJ/$ZELLIJ_SESSION_NAME) → tmux ($TMUX/tmux display-message)
 # → screen ($STY). When no mux is detected, emits nothing.
 # OQ-3: OMIT the drydock.mux_session token entirely when session name is empty —
@@ -924,7 +925,7 @@ cmd_shell() {
 	_emit_mode_banner "$PROJECT_NAME"
 
 	local compose_args=()
-	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+	compose_files_into compose_args "$project_dir"
 
 	# Per-session container name: export_compose_env generated a fresh discriminator
 	# via collision retry, so this shell session gets its OWN unique discriminator
@@ -2373,7 +2374,7 @@ cmd_new() {
 	_emit_mode_banner "$PROJECT_NAME"
 
 	local compose_args=()
-	while IFS= read -r arg; do compose_args+=("$arg"); done < <(compose_files "$project_dir")
+	compose_files_into compose_args "$project_dir"
 
 	local _name="$DRYDOCK_SESSION_NAME"
 	local _disc="$DRYDOCK_DISCRIMINATOR"
