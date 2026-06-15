@@ -48,7 +48,7 @@ usage() {
 	_dr_help_row "list" "List live sessions for the current project"
 	_dr_help_row "stop [NAME]" "Stop a session (docker rm -f); with no arg, prompts if multiple"
 	_dr_help_row "shell [DIR] [-- CMD]" "Bash shell in container; with -- CMD, run CMD instead"
-	_dr_help_row "build" "Build / rebuild the drydock image"
+	_dr_help_row "build [--no-cache]" "Build / rebuild the drydock image"
 	_dr_help_row "sync" "Sync host ~/.claude/ → ~/.claude-container/"
 	_dr_help_row "status" "Short health snapshot"
 	_dr_help_row "doctor" "Detailed diagnostics + current-project context"
@@ -248,12 +248,32 @@ cmd_setup() {
 # drydock init command no longer adds value. Removed cleanly: no deprecation
 # stub kept (drydock is pre-1.0 and no users depend on it yet).
 
+# cmd_build [--no-cache]
+# Freshness semantics (audit batch 3 F4): both Dockerfiles start FROM unpinned
+# tags that `docker build` never re-pulls on its own, so cached layers (the
+# github.com ssh-keyscan bake among them) live until the base digest changes.
+# --pull is always passed — cheap, re-downloads only on digest change — and
+# `drydock build --no-cache` forwards --no-cache for a full layer rebuild.
 cmd_build() {
+	local _no_cache=""
+	local _arg
+	for _arg in "$@"; do
+		case "$_arg" in
+		--no-cache) _no_cache="--no-cache" ;;
+		--help | -h)
+			printf 'usage: drydock build [--no-cache]\n'
+			printf '  --no-cache  full layer rebuild; --pull is always applied to refresh the base image\n'
+			return 0
+			;;
+		*) err "unknown 'drydock build' argument: $_arg (supported: --no-cache)" ;;
+		esac
+	done
 	ensure_prereqs
 	note "Building $IMAGE from $DRYDOCK_HOME..."
 	# cmd_build shells out to `docker build` directly (not `docker compose`), so
 	# the compose build.args don't reach it — pass USER_NAME explicitly here too.
-	"$DOCKER" build \
+	# shellcheck disable=SC2086  # _no_cache is intentionally word-split ("" or --no-cache)
+	"$DOCKER" build --pull $_no_cache \
 		--build-arg USER_NAME="$(id -un)" \
 		--build-arg USER_UID="$(id -u)" \
 		--build-arg USER_GID="$(id -g)" \
@@ -268,7 +288,8 @@ cmd_build() {
 	# contained-default projects. Pre-build is required because the internal:true
 	# network SERVFAILs external DNS at runtime (design §3, R4.5, §6a).
 	note "Building $EGRESS_IMAGE (egress proxy sidecar)..."
-	"$DOCKER" build -f "$DRYDOCK_HOME/Dockerfile.egress" -t "$EGRESS_IMAGE" "$DRYDOCK_HOME"
+	# shellcheck disable=SC2086  # _no_cache is intentionally word-split ("" or --no-cache)
+	"$DOCKER" build --pull $_no_cache -f "$DRYDOCK_HOME/Dockerfile.egress" -t "$EGRESS_IMAGE" "$DRYDOCK_HOME"
 	ok "Built $EGRESS_IMAGE"
 }
 

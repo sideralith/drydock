@@ -101,8 +101,12 @@ STUB
 	' -- "$DRYDOCK_HOME" "$(_docker_stub_prelude "$log" 0)"
 	[ "$status" -eq 0 ]
 	# Networks pre-existed (inspect rc=0): none created, none removed.
-	! grep -q 'network create' "$log"
-	! grep -q 'network rm' "$log"
+	# run + status check: a bare mid-test `! cmd` is exempt from bats errexit
+	# and can never fail.
+	run grep 'network create' "$log"
+	[ "$status" -ne 0 ]
+	run grep 'network rm' "$log"
+	[ "$status" -ne 0 ]
 }
 
 # ── _write_filter (C1: sidecar must be able to read the filter) ───────────────

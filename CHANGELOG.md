@@ -69,9 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented `example.com` form also matched `example.com.evil.io`. Bare
   hostnames are now anchored exactly (`^example\.com$`); lines containing other
   ERE metacharacters are taken as raw ERE verbatim (expert escape hatch).
-
-### Fixed
-
 - **Session-dir GC no longer reaps live sessions when the Docker daemon is
   unreachable.** A failed `docker ps -a` produced empty output that was
   indistinguishable from "no containers", so every session dir — including the
@@ -174,6 +171,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `git push --dry-run`, and quoted data such as a commit message containing
   `git push --force` are not blocked; known residual: a quoted refspec
   (`git push origin "+main"`) falls through via quoted-data masking.
+- **The installer's rc-file PATH line honors `DRYDOCK_BIN_DIR`.** Accepting
+  the "Add ... to PATH" prompt with a custom `DRYDOCK_BIN_DIR` appended a
+  hardcoded `~/.local/bin` export line that did not put drydock on PATH. The
+  appended line (and the non-interactive hints) are now built from
+  `DRYDOCK_BIN_DIR`: the default keeps the portable `$HOME/.local/bin` form;
+  a custom dir is embedded verbatim.
+- **Re-running install.sh updates an existing clone.** A re-run over an
+  existing install said "skipping clone" and left the old version in place.
+  It now fast-forwards the install branch; a clone that cannot fast-forward
+  cleanly (different branch, detached HEAD, diverged, offline) warns and
+  continues without touching local state.
+- **An aborted install no longer leaves the INV-5 shared-engram opt-in
+  behind.** The `~/.config/drydock/engram-shared` sentinel was written at
+  question time, before the clone and symlink steps; an install failing after
+  the question left a live shared-mode opt-in with no drydock installed. The
+  sentinel is now written only after the install steps succeed.
+- **`drydock build` keeps the base images fresh and gains `--no-cache`.**
+  The build passed no `--pull`, so the unpinned `FROM` tags were never
+  re-pulled and cached layers — including the baked github.com SSH host keys,
+  whose Dockerfile comment falsely claimed a refresh on every build — lived
+  indefinitely. `drydock build` now passes `--pull` (re-downloads only on
+  digest change) and forwards a user-supplied `--no-cache` to both image
+  builds; the keyscan comment states the real refresh semantics.
+
+### Tests
+
+- **Resurrected the dead REQ-N10 session-lifecycle integration gate.**
+  `scripts/test.sh` collected `test/` non-recursively, so
+  `test/integration/session_lifecycle_compose_exec.bats` was never run by the
+  default suite or CI — and its guard called a nonexistent `bats_skip_file`,
+  hard-erroring instead of skipping when `DRYDOCK_INTEGRATION=1` was unset.
+  The default run is now recursive (`bats -r test/`) and the gate uses the
+  real bats-core whole-file skip (`skip` in `setup_file()`); the gate is
+  documented in CONTRIBUTING.md.
+- **Vacuous negated test assertions converted to effective ones.** Mid-test
+  `! cmd` lines are exempt from bats errexit handling and could never fail;
+  seven such assertions (plus a tautological empty-`pkill`-pattern check in
+  the reaper tests) now use the `run` + status-check pattern and are proven
+  able to fail.
+- **CI hygiene.** ci.yml and smoke.yml now run on pushes to `dev` (the
+  integration branch) too; the shellcheck gate covers
+  `test/integration/test_projects_submount.sh`; the bats-action is pinned to
+  a commit SHA; the shfmt download is sha256-verified; CI jobs carry an
+  explicit `permissions: contents: read`; CONTRIBUTING's noexec-redirect path
+  matches the code (`~/.bats-tmp`).
 
 ## [0.3.3] - 2026-06-03
 

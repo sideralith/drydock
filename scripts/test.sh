@@ -12,7 +12,7 @@
 #      fall back to `npx --yes bats`.
 #
 # On a normal host (writable, exec-allowed /tmp; bats installed) this wrapper
-# is transparent — it runs `bats test/` exactly as before.
+# is transparent — it runs `bats -r test/` exactly as before.
 #
 # Usage: scripts/test.sh [bats-args...]   (defaults to `test/`)
 set -euo pipefail
@@ -46,9 +46,11 @@ if ! dir_allows_exec "$tmpdir"; then
 	export TMPDIR=$exec_tmp
 fi
 
-# Default to the whole suite; allow callers to pass specific files or flags.
+# Default to the whole suite — recursively, so test/integration/*.bats is
+# collected too (those files gate themselves behind DRYDOCK_INTEGRATION=1 and
+# skip cleanly in unit mode). Allow callers to pass specific files or flags.
 if [ "$#" -eq 0 ]; then
-	set -- test/
+	set -- -r test/
 fi
 
 if command -v bats >/dev/null 2>&1; then

@@ -501,7 +501,10 @@ setup() {
 	# pattern drydock-sync.XXXXXX.
 	grep -qE -- "-v ${TMPDIR}/drydock-sync\.[A-Za-z0-9]+:/src:ro" "$DOCKER_CALL_LOG"
 	# /src must NOT mount HOST_CLAUDE directly — that's the broken path.
-	! grep -qE -- "-v ${HOST_CLAUDE}:/src:ro" "$DOCKER_CALL_LOG"
+	# run + status check: a bare mid-test `! cmd` is exempt from bats errexit
+	# and can never fail.
+	run grep -E -- "-v ${HOST_CLAUDE}:/src:ro" "$DOCKER_CALL_LOG"
+	[ "$status" -ne 0 ]
 	# Staging dir must be cleaned up after cmd_sync returns (no leak).
 	[ -z "$(find "$TMPDIR" -maxdepth 1 -name 'drydock-sync.*' -print -quit)" ]
 }
@@ -4069,6 +4072,76 @@ STUB
 	log="$(cat "$DOCKER_CALL_LOG")"
 	[[ "$log" == *"drydock:latest"* ]]
 	[[ "$log" == *"Dockerfile.egress"* ]]
+}
+
+# ── Audit batch 3 F4: cmd_build freshness flags ───────────────────────────────
+# The Dockerfile bases (debian:12-slim, Dockerfile.egress) are unpinned tags
+# that docker build never re-pulls on its own, and the ssh-keyscan layer is
+# cached indefinitely. cmd_build must pass --pull (cheap: re-downloads only on
+# digest change) and forward a user-supplied --no-cache to both image builds.
+
+_setup_cmd_build_seams() {
+	local fakehome="$BATS_TEST_TMPDIR/build-flags-home-$$"
+	mkdir -p "$fakehome"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	export DOCKER_CALL_LOG="$BATS_TEST_TMPDIR/build-flags-$$.log"
+	touch "$DOCKER_CALL_LOG"
+	export DOCKER="$DRYDOCK_HOME/test/helpers/mock-docker"
+	unset DRYDOCK_DOOD DRYDOCK_CONTAIN
+}
+
+@test "cmd_build: passes --pull to both image builds (base-image freshness)" {
+	_setup_cmd_build_seams
+
+	cmd_build
+
+	# Both build invocations must carry --pull.
+	run grep -c '^build --pull ' "$DOCKER_CALL_LOG"
+	assert_output 2
+}
+
+@test "cmd_build: default run does NOT pass --no-cache" {
+	_setup_cmd_build_seams
+
+	cmd_build
+
+	run grep -- '--no-cache' "$DOCKER_CALL_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "cmd_build: --no-cache is forwarded to both image builds" {
+	_setup_cmd_build_seams
+
+	cmd_build --no-cache
+
+	local _count
+	_count="$(grep -c -- '--no-cache' "$DOCKER_CALL_LOG")"
+	[ "$_count" -eq 2 ]
+	# --pull stays on alongside --no-cache.
+	run grep -c '^build --pull ' "$DOCKER_CALL_LOG"
+	assert_output 2
+}
+
+@test "cmd_build: unknown flag fails loudly (no silent typo swallow)" {
+	_setup_cmd_build_seams
+
+	run cmd_build --no-cahce
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"--no-cahce"* ]]
+}
+
+@test "cmd_build: --help prints usage and exits 0" {
+	_setup_cmd_build_seams
+
+	run cmd_build --help
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"usage: drydock build"* ]]
 }
 
 # ── Audit batch 2 F5: cmd_sync before first setup ─────────────────────────────

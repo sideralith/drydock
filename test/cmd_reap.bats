@@ -76,8 +76,13 @@ setup() {
 	[ "$status" -eq 0 ]
 	# Must use the broad fallback pattern
 	grep -q "pkill -f claude" "$DOCKER_CALL_LOG"
-	# Must NOT attempt pkill -f "" (empty pattern would match everything)
-	! grep -q "pkill -f \"\"" "$DOCKER_CALL_LOG"
+	# Must NOT attempt an empty-pattern pkill (would match every process,
+	# including PID 1). mock-docker logs `echo "$*"`, so an empty uuid argument
+	# leaves NO quotes in the log — the old `pkill -f ""` grep was tautological.
+	# The empty-pattern failure signature is a logged line ENDING at `pkill -f`
+	# (optionally with trailing whitespace from the empty arg).
+	run grep -E 'pkill -f[[:space:]]*$' "$DOCKER_CALL_LOG"
+	[ "$status" -ne 0 ]
 }
 
 @test "_reap_orphan_claude: empty uuid fallback — still runs unconditionally (D-7)" {

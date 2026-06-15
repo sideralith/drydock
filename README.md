@@ -254,7 +254,7 @@ and [docs/security.md](docs/security.md).
 | `drydock dood <proj> [--remove]` | Pin a project to dood mode (host Docker socket + host network; INV-6 root-equivalent) |
 | `drydock contain <proj> [--remove]` | Pin a project to contained mode (no socket, no host network) |
 | `drydock sync` | Refresh container config (`~/.claude/`, `~/.claude.json`) from host — runs automatically when the container copy is stale (set `DRYDOCK_SKIP_AUTOSYNC=1` to disable) |
-| `drydock build` | Build/rebuild `drydock:latest` |
+| `drydock build [--no-cache]` | Build/rebuild `drydock:latest`; `--pull` is always applied to refresh the base image, `--no-cache` forces a full layer rebuild |
 | `drydock status` / `doctor` | Health snapshot / full diagnostics |
 | `drydock setup` | (advanced) Force host-side init — auto-triggered; rarely explicit |
 | `drydock setup-token` | (advanced) One-time: generate a 1-year Claude OAuth token so container sessions start without a login prompt. See [Persistent auth](#persistent-auth-oauth-token). |

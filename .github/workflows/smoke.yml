@@ -1,8 +1,8 @@
 # Smoke workflow for drydock
 #
-# Runs on every push to main and on PRs that touch Dockerfile, compose files,
-# or the CLI code (bin/ / lib/). Does NOT run on a schedule — it's a build
-# and CLI reachability check, not a health monitor.
+# Runs on every push to main or dev and on PRs that touch Dockerfile, compose
+# files, or the CLI code (bin/ / lib/). Does NOT run on a schedule — it's a
+# build and CLI reachability check, not a health monitor.
 #
 # Smoke does NOT run `drydock run` — that needs a host-mounted `claude` binary
 # and a real `network_mode: host`; smoke only proves the image builds and the
@@ -12,7 +12,9 @@ name: Smoke
 
 on:
   push:
-    branches: [main]
+    # Mirror ci.yml: dev is the integration branch — smoke dev pushes too so
+    # image/CLI breakage surfaces before the release PR.
+    branches: [main, dev]
   pull_request:
     paths:
       - Dockerfile
@@ -30,6 +32,8 @@ jobs:
   smoke:
     name: Smoke (build + CLI)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
