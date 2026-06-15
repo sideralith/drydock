@@ -260,6 +260,11 @@ cmd_build() {
 	for _arg in "$@"; do
 		case "$_arg" in
 		--no-cache) _no_cache="--no-cache" ;;
+		--help | -h)
+			printf 'usage: drydock build [--no-cache]\n'
+			printf '  --no-cache  full layer rebuild; --pull is always applied to refresh the base image\n'
+			return 0
+			;;
 		*) err "unknown 'drydock build' argument: $_arg (supported: --no-cache)" ;;
 		esac
 	done

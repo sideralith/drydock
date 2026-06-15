@@ -4136,6 +4136,14 @@ _setup_cmd_build_seams() {
 	[[ "$output" == *"--no-cahce"* ]]
 }
 
+@test "cmd_build: --help prints usage and exits 0" {
+	_setup_cmd_build_seams
+
+	run cmd_build --help
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"usage: drydock build"* ]]
+}
+
 # ── Audit batch 2 F5: cmd_sync before first setup ─────────────────────────────
 # cmd_sync called only ensure_prereqs + ensure_image, then docker run with
 # -v "$CONTAINER_CLAUDE":/dst:rw. On native Linux a missing bind source is

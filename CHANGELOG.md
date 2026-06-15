@@ -69,9 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented `example.com` form also matched `example.com.evil.io`. Bare
   hostnames are now anchored exactly (`^example\.com$`); lines containing other
   ERE metacharacters are taken as raw ERE verbatim (expert escape hatch).
-
-### Fixed
-
 - **Session-dir GC no longer reaps live sessions when the Docker daemon is
   unreachable.** A failed `docker ps -a` produced empty output that was
   indistinguishable from "no containers", so every session dir — including the
