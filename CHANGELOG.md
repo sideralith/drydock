@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.config/drydock/egress-allowlist` (global) or `egress-allowlist-<project>`
   (per-project); a request to a non-allowlisted host returns 403. `drydock doctor`
   gains an EGRESS section that reports the active allowlist sources.
+- **Optional codegraph support** (mirrors the engram integration). When the
+  `codegraph` binary is on the host `PATH` (Linux only), drydock mounts the host
+  install dir `~/.codegraph` so the container's `~/.local/bin/codegraph` symlink
+  resolves and the codegraph MCP server (`codegraph serve --mcp`) starts. The
+  per-repo `.codegraph/` index is already available through the project mount, so
+  no separate data mount is needed. Fully optional and auto-detected: when
+  codegraph is not usable in the container its MCP entry is filtered from the
+  container's `~/.claude.json` (same mechanism as engram), so Claude Code never
+  tries to spawn a missing binary. `drydock doctor` reports codegraph status. New
+  overlay: `docker-compose.codegraph.yml`.
 - **`drydock default <dood|contain>` / `drydock dood <proj> [--remove]` /
   `drydock contain <proj> [--remove]`** (#149). Manage the network/socket mode: a
   global default sentinel plus mutually-exclusive per-project pins. Resolution is

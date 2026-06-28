@@ -105,30 +105,65 @@ _dr_help_row() {
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-# _refresh_container_claude_json — filter HOST_CLAUDE_JSON into
-# CONTAINER_CLAUDE_JSON with the engram MCP entries stripped (the not-usable
-# branch of cmd_setup / cmd_sync). Atomic (audit F5): jq writes a same-dir
-# temp file; the target is replaced only on success. The old
-# `jq ... >"$CONTAINER_CLAUDE_JSON"` idiom truncated the target BEFORE jq
-# parsed the source — a host ~/.claude.json caught mid-rewrite left a 0-byte
-# container config. The rc check is explicit (if !) rather than relying on
-# set -e: the auto-sync path calls `cmd_sync || warn`, which suppresses
-# errexit inside the whole function, so a jq failure would otherwise fall
-# through to the marker touch and a lying "Sync done".
+# _refresh_container_claude_json — build CONTAINER_CLAUDE_JSON from HOST_CLAUDE_JSON,
+# stripping the MCP server entry of every optional tool NOT usable in the container
+# (binary off the host PATH, or host not Linux) so Claude Code never tries to spawn
+# a missing binary on startup (zero error noise). Each unusable tool's TOP-LEVEL and
+# PER-PROJECT mcpServers entry is removed in a single jq del() pass. Called
+# UNCONDITIONALLY by cmd_setup / cmd_sync; the all-usable case is handled internally
+# by a verbatim cp -a fast path (empty delete-set → no jq rewrite).
+#
+# The jq branch is atomic (audit F5): jq writes a same-dir temp file; the target is
+# replaced only on success. The old `jq ... >"$CONTAINER_CLAUDE_JSON"` idiom
+# truncated the target BEFORE jq parsed the source — a host ~/.claude.json caught
+# mid-rewrite left a 0-byte container config. The cp -a fast path writes the
+# destination directly (matching the original engram-usable path's behavior; it is
+# not tmp+rename). The rc check is explicit (if !) rather than relying on set -e:
+# the auto-sync path calls `cmd_sync || warn`, which suppresses errexit inside the
+# whole function, so a jq failure would otherwise fall through to the marker touch
+# and a lying "Sync done".
 _refresh_container_claude_json() {
+	local -a _del_names=()
+	engram_usable || _del_names+=("engram")
+	codegraph_usable || _del_names+=("codegraph")
+
+	# Fast path: nothing to strip → verbatim copy, no jq reformat.
+	if [ "${#_del_names[@]}" -eq 0 ]; then
+		cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
+		return
+	fi
+
+	# Assemble one del(...) over each unusable tool's top-level + per-project entry.
+	local _del_expr="" _name
+	for _name in "${_del_names[@]}"; do
+		_del_expr="${_del_expr:+$_del_expr, }.mcpServers.${_name}, .projects[]?.mcpServers.${_name}"
+	done
+
 	local _tmp
 	_tmp="$(mktemp "${CONTAINER_CLAUDE_JSON}.XXXXXX")" || {
 		warn "mktemp failed next to $CONTAINER_CLAUDE_JSON — container config NOT refreshed"
 		return 1
 	}
-	if ! jq 'del(.mcpServers.engram, .projects[]?.mcpServers.engram)' \
-		"$HOST_CLAUDE_JSON" >"$_tmp"; then
+	if ! jq "del(${_del_expr})" "$HOST_CLAUDE_JSON" >"$_tmp"; then
 		rm -f "$_tmp"
 		warn "host ~/.claude.json is not valid JSON — container config NOT refreshed"
 		return 1
 	fi
 	chmod 644 "$_tmp"
 	mv "$_tmp" "$CONTAINER_CLAUDE_JSON"
+}
+
+# Emit the informational note for an optional MCP tool whose binary is not usable
+# in the container, so _refresh_container_claude_json filtered its MCP entry — the
+# absence is explained, never a silent surprise. $1 = tool name; $2 = optional
+# extra sentence appended only to the macOS (non-Linux) branch.
+_note_mcp_unusable() {
+	local _tool="$1" _macos_tail="${2:-}"
+	if host_is_linux; then
+		note "$_tool not on PATH — skipped its MCP server in the container (no startup noise). Install $_tool to enable it."
+	else
+		note "$_tool's macOS binary can't run inside the Linux container — skipped its MCP server (no startup noise).${_macos_tail:+ $_macos_tail}"
+	fi
 }
 
 # Host-side one-time setup. Idempotent. Auto-called by `ensure_runtime_dirs`
@@ -159,12 +194,14 @@ cmd_setup() {
 			fi
 		fi
 	else
-		if host_is_linux; then
-			note "engram not on PATH — skipped its MCP server in the container (no startup noise). Install engram to enable it."
-		else
-			note "engram's macOS binary can't run inside the Linux container — skipped its MCP server (no startup noise). A future drydock release may ship a Linux engram in the image."
-		fi
+		_note_mcp_unusable engram "A future drydock release may ship a Linux engram in the image."
 	fi
+
+	# codegraph: no state to seed — the per-repo index <repo>/.codegraph rides the
+	# project mount, and the host install dir ~/.codegraph is bind-mounted by the
+	# overlay so the ~/.local/bin/codegraph symlink resolves. Mirror engram's
+	# informational note when codegraph is not usable (its MCP entry is filtered).
+	codegraph_usable || _note_mcp_unusable codegraph
 
 	if [ ! -d "$CONTAINER_CLAUDE" ]; then
 		note "Copying $HOST_CLAUDE → $CONTAINER_CLAUDE (excluding session state)..."
@@ -207,16 +244,13 @@ cmd_setup() {
 	# onboarding flags, MCP servers, OAuth account). Without a container-specific
 	# copy, Claude Code inside the container can't find it, creates a fresh
 	# ephemeral one, and "config doesn't persist" across sessions.
-	# MCP filter: when engram is not usable in the container, strip the engram
-	# MCP server from the copy so Claude Code doesn't try to spawn a missing
-	# binary on every startup (zero error noise).
+	# MCP filter: _refresh_container_claude_json strips the MCP entry of every
+	# optional tool not usable in the container (engram, codegraph) and otherwise
+	# copies the host file verbatim — so Claude Code never spawns a missing binary
+	# on startup (zero error noise).
 	if [ ! -f "$CONTAINER_CLAUDE_JSON" ]; then
 		if [ -f "$HOST_CLAUDE_JSON" ]; then
-			if engram_usable; then
-				cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
-			else
-				_refresh_container_claude_json || return 1
-			fi
+			_refresh_container_claude_json || return 1
 			ok "$CONTAINER_CLAUDE_JSON initialized as copy of $HOST_CLAUDE_JSON ($(stat -c '%s bytes' "$CONTAINER_CLAUDE_JSON"))"
 		else
 			echo '{}' >"$CONTAINER_CLAUDE_JSON"
@@ -375,19 +409,15 @@ cmd_sync() {
 	# tokens that were copied by pre-exclusion versions of drydock.
 	rm -f "${CONTAINER_CLAUDE:?}/.credentials.json"
 	# Also refresh ~/.claude.json (project list, onboarding flags, MCP servers).
-	# MCP filter: when engram is not usable, strip the engram MCP server entry
-	# so Claude Code in the container sees no startup error.
+	# MCP filter: _refresh_container_claude_json strips the MCP entry of every
+	# optional tool not usable in the container (engram, codegraph) and otherwise
+	# copies the host file verbatim — so Claude Code never spawns a missing binary.
 	if [ -f "$HOST_CLAUDE_JSON" ]; then
-		if engram_usable; then
-			cp -a "$HOST_CLAUDE_JSON" "$CONTAINER_CLAUDE_JSON"
-		else
-			_refresh_container_claude_json || return 1
-			if host_is_linux; then
-				note "engram not on PATH — skipped its MCP server in the container (no startup noise). Install engram to enable it."
-			else
-				note "engram's macOS binary can't run inside the Linux container — skipped its MCP server (no startup noise). A future drydock release may ship a Linux engram in the image."
-			fi
-		fi
+		_refresh_container_claude_json || return 1
+		# Per-tool notes: _refresh filtered the MCP entry of each unusable tool;
+		# tell the user which (and why) so the absence is never a silent surprise.
+		engram_usable || _note_mcp_unusable engram "A future drydock release may ship a Linux engram in the image."
+		codegraph_usable || _note_mcp_unusable codegraph
 		ok "$CONTAINER_CLAUDE_JSON refreshed from host"
 	fi
 	# Stamp last-sync marker AFTER both rsync and the JSON refresh succeed.
@@ -1140,6 +1170,15 @@ cmd_status() {
 	else
 		_dr_item "·" "engram" "not detected" "opt-in — see docs/engram.md"
 	fi
+
+	# codegraph status — no shared/isolated split: the per-repo index rides the
+	# project mount (no separate DB to report). Both install layouts (symlink into
+	# ~/.codegraph, or a real binary in ~/.local/bin) work, so usable → available.
+	if codegraph_usable; then
+		_dr_item "✓" "codegraph" "available" "per-repo index via project mount"
+	else
+		_dr_item "·" "codegraph" "not detected" "opt-in — install codegraph on the host"
+	fi
 }
 
 cmd_doctor() {
@@ -1355,6 +1394,11 @@ cmd_doctor() {
 	# Engram overlay: engram_usable() is the same predicate compose_files() uses.
 	if engram_usable; then
 		_dr_item "✓" "docker-compose.engram.yml" "" "engram on PATH"
+	fi
+	# codegraph overlay: same gate compose_files() uses (usable + install dir),
+	# so this reports exactly when the overlay is actually mounted.
+	if codegraph_usable && [ -d "$HOME/.codegraph" ]; then
+		_dr_item "✓" "docker-compose.codegraph.yml" "" "codegraph on PATH + install dir"
 	fi
 	# OAuth token overlay: a non-empty first line (after whitespace stripping)
 	# drives inclusion — matches the export_compose_env / compose_files

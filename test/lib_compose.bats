@@ -280,6 +280,86 @@ STUB
 	[[ "$output" == *"docker-compose.engram.yml"* ]]
 }
 
+# ── codegraph overlay (compose gate) ─────────────────────────────────────────
+# Unlike engram (gated on the DRYDOCK_ENGRAM_SOURCE export from export_compose_env
+# because of its shared/isolated DB decision), codegraph has no DB and is gated
+# directly in compose_files on codegraph_usable() AND the install dir presence —
+# the same ccstatusline-style "activate only when the host actually has it" idiom.
+
+# Fake codegraph on PATH + plain-Linux seams + a HOME carrying ~/.codegraph.
+_setup_codegraph_usable() {
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin-cg-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/codegraph"
+	chmod +x "$fake_bin/codegraph"
+	export PATH="$fake_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	local plain_osrelease="$BATS_TEST_TMPDIR/osrelease-cg-$$"
+	printf '6.5.0-45-generic\n' >"$plain_osrelease"
+	export OSRELEASE_FILE="$plain_osrelease"
+	local uname_stub_dir="$BATS_TEST_TMPDIR/uname-cg-$$"
+	mkdir -p "$uname_stub_dir"
+	printf '#!/usr/bin/env bash\necho "Linux"\n' >"$uname_stub_dir/uname"
+	chmod +x "$uname_stub_dir/uname"
+	export UNAME="$uname_stub_dir/uname"
+	HOME="$BATS_TEST_TMPDIR/fakehome-cg-$$"
+	mkdir -p "$HOME/.codegraph"
+}
+
+@test "codegraph_usable: codegraph on PATH + Linux — true" {
+	_setup_codegraph_usable
+	run codegraph_usable
+	[ "$status" -eq 0 ]
+}
+
+@test "codegraph_usable: codegraph not on PATH — false" {
+	local empty_bin="$BATS_TEST_TMPDIR/empty-bin-cg-$$"
+	mkdir -p "$empty_bin"
+	export PATH="$empty_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	run codegraph_usable
+	[ "$status" -ne 0 ]
+}
+
+@test "codegraph_usable: macOS host (UNAME→Darwin) — false even with codegraph on PATH" {
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin-cg-mac-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/codegraph"
+	chmod +x "$fake_bin/codegraph"
+	export PATH="$fake_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	local stub_dir="$BATS_TEST_TMPDIR/uname-darwin-cg-$$"
+	mkdir -p "$stub_dir"
+	printf '#!/usr/bin/env bash\necho "Darwin"\n' >"$stub_dir/uname"
+	chmod +x "$stub_dir/uname"
+	export UNAME="$stub_dir/uname"
+	run codegraph_usable
+	[ "$status" -ne 0 ]
+}
+
+@test "compose_files: codegraph usable + ~/.codegraph exists — codegraph overlay present" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	_setup_codegraph_usable
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" == *"docker-compose.codegraph.yml"* ]]
+}
+
+@test "compose_files: codegraph not on PATH — codegraph overlay absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	local empty_bin="$BATS_TEST_TMPDIR/empty-bin-cg2-$$"
+	mkdir -p "$empty_bin"
+	export PATH="$empty_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	HOME="$BATS_TEST_TMPDIR/fakehome-cg-nopath-$$"
+	mkdir -p "$HOME/.codegraph"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.codegraph.yml"* ]]
+}
+
+@test "compose_files: codegraph usable but ~/.codegraph absent — codegraph overlay absent" {
+	export MOUNTS_FILE="$MOUNTS_FILE_NO_DOCS"
+	_setup_codegraph_usable
+	rm -rf "$HOME/.codegraph"
+	run compose_files "$TEST_PROJECT_DIR"
+	[[ "$output" != *"docker-compose.codegraph.yml"* ]]
+}
+
 # ── mcp-auth + ccstatusline opt-in overlays ───────────────────────────────────
 
 @test "compose_files: no ~/.mcp-auth/ — mcp-auth overlay absent" {
