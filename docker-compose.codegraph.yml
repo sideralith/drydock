@@ -1,0 +1,56 @@
+# drydock — optional code-graph overlay (codegraph).
+#
+# Auto-included by the drydock CLI (compose_files in lib/compose.sh) when
+# codegraph is usable in the container: (a) the `codegraph` binary is on the host
+# PATH, (b) the host OS is Linux, AND (c) the host install dir ~/.codegraph
+# exists. The codegraph binary ships statically linked, so a Linux host binary
+# runs unchanged in the Debian container; a macOS Mach-O cannot, so drydock
+# treats macOS as codegraph-effectively-absent and never adds this overlay.
+#
+# What it mounts: ${HOME}/.codegraph:${HOME}/.codegraph:rw
+#   ~/.codegraph is the codegraph INSTALL dir (a versioned-install-manager root,
+#   e.g. versions/<v>/bin/) — the target of the ~/.local/bin/codegraph symlink
+#   that the base ~/.local mount already exposes. The base mount makes the symlink
+#   VISIBLE but never made its target reachable; without this overlay the symlink
+#   dangles and the MCP server (codegraph serve --mcp) cannot start. This is NOT
+#   the per-repo index: that lives at <repo>/.codegraph and already reaches the
+#   container via the project bind-mount (PROJECT_DIR), so no separate data mount
+#   is needed (unlike engram's ~/.engram DB).
+#
+# Mounted read-write (matching the base ~/.local mount). rw is chosen over ro for
+# function-safety: a versioned-install-manager root can hold mutable metadata (a
+# current-version pointer, a version registry, an update-check cache), and
+# `codegraph serve --mcp` writing any of those under a ro mount would hit a
+# read-only filesystem and fail to start. This DOES open a write surface the base
+# ~/.local mount never exposed — it carried the codegraph symlink, never its
+# target — so an accident-class agent (threat model A) could now corrupt the
+# host's codegraph install. That blast radius is bounded and accepted under
+# single-user trust: ~/.local is itself already rw, so the agent can already
+# delete the symlink and every other host tool. Future hardening: once codegraph's
+# serve-time write behavior is confirmed to stay out of the install dir, this mount
+# can be tightened to ro.
+#
+# INV-2 (container state split) is NOT engaged: ~/.codegraph is read-mostly install
+# tooling, not Claude or engram session state. None of INV-2's four hazards apply
+# to it — no ~/.claude.json last-writer-wins clobber, no .credentials.json OAuth
+# refresh race, no destructive MCP-filter mutation, no SQLite engram.db.
+#
+# Residuals (named, not hidden):
+#   1. Install dir ~/.codegraph is now writable from BOTH host and container. Host
+#      version management (install/update) concurrent with a container write is
+#      unlikely during normal `serve` (serve reads/executes; it does not update
+#      versions), but is not impossible; avoid running a host codegraph
+#      install/update while a container session is active.
+#   2. The per-repo index <repo>/.codegraph is writable from both host and
+#      container via the (rw) project mount. Before codegraph became usable in the
+#      container the container-side symlink dangled, so no container codegraph
+#      writer existed; this change introduces one. If that index is SQLite,
+#      concurrent host+container indexing of the same repo on a WSL2 9P / macOS
+#      virtiofs mount carries the same WAL-corruption hazard as INV-5. The index
+#      cannot be isolated — it must match the repo, already shared rw via
+#      PROJECT_DIR — so under single-user trust this is accepted, not eliminated.
+#      Avoid indexing the same repo from host and container at the same time.
+services:
+  drydock:
+    volumes:
+      - "${HOME}/.codegraph:${HOME}/.codegraph:rw"

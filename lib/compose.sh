@@ -18,6 +18,7 @@ COMPOSE_BASE="$DRYDOCK_HOME/docker-compose.yml"
 COMPOSE_SSH="$DRYDOCK_HOME/docker-compose.ssh.yml"
 COMPOSE_GPG="$DRYDOCK_HOME/docker-compose.gpg.yml"
 COMPOSE_ENGRAM="$DRYDOCK_HOME/docker-compose.engram.yml"
+COMPOSE_CODEGRAPH="$DRYDOCK_HOME/docker-compose.codegraph.yml"
 COMPOSE_MCP_AUTH="$DRYDOCK_HOME/docker-compose.mcp-auth.yml"
 COMPOSE_CCSTATUSLINE="$DRYDOCK_HOME/docker-compose.ccstatusline.yml"
 COMPOSE_HARDENING="$DRYDOCK_HOME/docker-compose.hardening.yml"
@@ -38,6 +39,16 @@ EGRESS_IMAGE="drydock-egress:latest"
 # binary cannot run in the Linux container — treated as effectively absent.
 engram_usable() {
 	command -v engram >/dev/null 2>&1 && host_is_linux
+}
+
+# Returns 0 when codegraph can run inside the container: binary on host PATH AND
+# host OS is Linux. Same gate shape as engram_usable. The codegraph binary ships
+# statically linked, so any Linux host binary runs unchanged in the Debian
+# container; a macOS Mach-O cannot, so macOS is treated as effectively absent.
+# The overlay that mounts the install dir is additionally gated on ~/.codegraph
+# existing (see compose_files); this predicate alone drives the MCP filter.
+codegraph_usable() {
+	command -v codegraph >/dev/null 2>&1 && host_is_linux
 }
 
 # sanitize_project_name — pure transform: directory basename → Docker Compose-safe
@@ -562,6 +573,17 @@ compose_files() {
 		# auto-creates its cache dir at first invocation, but bind mounts need
 		# it pre-existing; make it idempotently when the parent overlay applies.
 		[ -d "$HOME/.cache/ccstatusline" ] || mkdir -p "$HOME/.cache/ccstatusline"
+	fi
+	# Optional codegraph overlay — mounts the host install dir ~/.codegraph so the
+	# ~/.local/bin/codegraph symlink (already visible via the base ~/.local mount)
+	# resolves inside the container; without it the symlink dangles and the MCP
+	# server fails to start. Gated on codegraph_usable (binary on PATH + Linux)
+	# AND the install dir actually existing — a plain real-binary install in
+	# ~/.local/bin (no ~/.codegraph) already works via the ~/.local mount, so it
+	# must NOT try to bind a missing source. The per-repo index <repo>/.codegraph
+	# travels in via the project mount — no data mount needed (unlike engram's DB).
+	if codegraph_usable && [ -d "$HOME/.codegraph" ]; then
+		printf '%s\n' "-f" "$COMPOSE_CODEGRAPH"
 	fi
 }
 

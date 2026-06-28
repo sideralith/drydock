@@ -57,6 +57,38 @@ setup_no_engram_on_path() {
 	export PATH="$empty_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 }
 
+# Put a fake codegraph binary on PATH (engram absent) — exercises the
+# "codegraph usable, engram not" independence branch of the MCP filter.
+setup_codegraph_on_path() {
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin-codegraph-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/codegraph"
+	chmod +x "$fake_bin/codegraph"
+	export PATH="$fake_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+}
+
+# Put BOTH engram and codegraph on PATH — exercises the cp -a verbatim fast path
+# (delete-set empty) where every optional MCP server survives.
+setup_engram_and_codegraph_on_path() {
+	local fake_bin="$BATS_TEST_TMPDIR/fake-bin-both-$$"
+	mkdir -p "$fake_bin"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/engram"
+	printf '#!/usr/bin/env bash\n' >"$fake_bin/codegraph"
+	chmod +x "$fake_bin/engram" "$fake_bin/codegraph"
+	export PATH="$fake_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+}
+
+# Like setup_fake_home but the host ~/.claude.json ALSO carries a codegraph MCP
+# server (top-level AND under /p1), so codegraph-filter assertions have an entry
+# to strip or keep alongside engram.
+setup_fake_home_codegraph() {
+	local fakehome="$BATS_TEST_TMPDIR/fakehome-cg"
+	mkdir -p "$fakehome/.claude"
+	printf '{"mcpServers":{"engram":{"type":"stdio","command":"engram","args":["mcp"]},"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]},"github":{"type":"stdio","command":"gh","args":["mcp"]}},"projects":{"/p1":{"mcpServers":{"engram":{"type":"stdio","command":"engram"},"codegraph":{"type":"stdio","command":"codegraph"},"other":{"type":"stdio","command":"other"}}}}}\n' \
+		>"$fakehome/.claude.json"
+	echo "$fakehome"
+}
+
 setup() {
 	# Source order mirrors bin/drydock: common → paths → compose → commands.
 	# shellcheck disable=SC1090
@@ -734,6 +766,100 @@ setup() {
 	local engram_entry
 	engram_entry="$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")"
 	[ "$engram_entry" != "null" ]
+}
+
+# ── MCP filter: codegraph × ~/.claude-container.json ─────────────────────────
+# Independent from engram: each tool's MCP entry is stripped iff that tool is
+# not usable in the container. codegraph lives only at top-level + per-project
+# mcpServers (no mcp/codegraph.json file), so no rsync/find/rm parity is needed.
+
+@test "cmd_setup: codegraph not usable — mcpServers.codegraph absent in container JSON" {
+	setup_no_engram_on_path # minimal PATH → neither engram nor codegraph present
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home_codegraph)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	# Top-level AND per-project codegraph entries filtered out
+	[ "$(jq '.mcpServers.codegraph' "$CONTAINER_CLAUDE_JSON")" = "null" ]
+	[ "$(jq '.projects["/p1"].mcpServers.codegraph' "$CONTAINER_CLAUDE_JSON")" = "null" ]
+	# Unrelated servers survive
+	[ "$(jq '.mcpServers.github' "$CONTAINER_CLAUDE_JSON")" != "null" ]
+	[ "$(jq '.projects["/p1"].mcpServers.other' "$CONTAINER_CLAUDE_JSON")" != "null" ]
+}
+
+@test "cmd_setup: codegraph usable but engram not — codegraph survives, engram stripped" {
+	setup_codegraph_on_path # codegraph present, engram absent
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home_codegraph)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+
+	run cmd_setup
+	[ -f "$CONTAINER_CLAUDE_JSON" ]
+	# Independence: codegraph kept (usable), engram removed (not usable)
+	[ "$(jq '.mcpServers.codegraph' "$CONTAINER_CLAUDE_JSON")" != "null" ]
+	[ "$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")" = "null" ]
+}
+
+@test "cmd_sync: codegraph not usable — mcpServers.codegraph absent + note emitted" {
+	setup_no_engram_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home_codegraph)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_sync
+	[ "$(jq '.mcpServers.codegraph' "$CONTAINER_CLAUDE_JSON")" = "null" ]
+	[[ "$output" == *"codegraph not on PATH"* ]]
+}
+
+@test "cmd_sync: engram and codegraph both usable — both survive (cp -a fast path)" {
+	setup_engram_and_codegraph_on_path
+	setup_plain_linux_seams
+
+	local fakehome
+	fakehome="$(setup_fake_home_codegraph)"
+	export HOME="$fakehome"
+
+	source "$DRYDOCK_HOME/lib/paths.sh"
+	source "$DRYDOCK_HOME/lib/compose.sh"
+	source "$DRYDOCK_HOME/lib/commands.sh"
+	ensure_prereqs() { :; }
+	ensure_image() { :; }
+
+	mkdir -p "$CONTAINER_CLAUDE"
+	touch "$CONTAINER_CLAUDE_JSON"
+
+	run cmd_sync
+	[ "$(jq '.mcpServers.codegraph' "$CONTAINER_CLAUDE_JSON")" != "null" ]
+	[ "$(jq '.mcpServers.engram' "$CONTAINER_CLAUDE_JSON")" != "null" ]
+	# Fast path emits no "not on PATH" note for either tool
+	[[ "$output" != *"not on PATH"* ]]
 }
 
 # ── MCP filter: cmd_setup × mcp/engram.json ──────────────────────────────────

@@ -121,6 +121,7 @@ session inside drydock logs in once — see
 | Tool | What it adds |
 |------|--------------|
 | **`engram`** on host `PATH` | Persistent memory MCP server. Auto-detected per INV-4; everything works without it. |
+| **`codegraph`** on host `PATH` | Code-graph MCP server (`codegraph_explore`). Auto-detected like engram (Linux host only): the host install dir `~/.codegraph` is mounted so the binary resolves, and the per-repo `.codegraph/` index rides the project mount. Everything works without it. |
 | **`gh`** CLI authenticated | Needed if you want the agent (or you) to do GitHub work from inside the container. Also required by the Homebrew tap publish script for maintainers. |
 | **GPG agent** + key | Only needed if you want signed commits inside the container; enabled via the GPG overlay. |
 | **[`gum`](https://github.com/charmbracelet/gum)** | Premium interactive session selector (arrow navigation, colors, borders). Install: `brew install gum` or `apt install gum`. Falls back to `fzf` or built-in ANSI selector if absent. |
@@ -298,6 +299,13 @@ If a sub-mount does not appear inside the container, see
 > **Optional — engram memory:** drydock integrates the [engram](docs/engram.md)
 > persistent-memory MCP server if it is already installed on your host. Entirely
 > optional — see [docs/engram.md](docs/engram.md).
+
+> **Optional — codegraph:** drydock exposes the `codegraph` code-graph MCP server
+> inside the container when it is installed on your host (`~/.local/bin/codegraph`,
+> Linux only). The host install dir `~/.codegraph` is bind-mounted so the binary
+> resolves; the per-repo `.codegraph/` index travels in with the project mount.
+> Auto-detected and entirely optional — when codegraph is absent its MCP entry is
+> filtered from the container's config, exactly like engram.
 
 ## Persistent auth (OAuth token)
 
