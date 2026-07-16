@@ -85,7 +85,9 @@ Read(//**/.env.production)
 Read(//**/.env.development)
 Read(//**/.env.test)
 Read(//**/.env.staging)
-# Edit(...) and Write(...) variants present for every entry — see 00-secrets.json
+# Edit(...) variants present for every entry — see 00-secrets.json.
+# Edit(path) covers ALL file-editing tools (Edit, Write, NotebookEdit) since
+# Claude Code 2.1.208; separate Write(...) rules are dead and warn at startup.
 ```
 
 **Why explicit `.env*` variants instead of a `.env.*` glob.** `.env.example`,
@@ -109,14 +111,18 @@ intentional: drydock-state paths only need to be denied under the container's
 model — credential files like `.ssh/` can appear anywhere in a sibling tree,
 but drydock-state paths are only meaningful under `$HOME`.
 
-**Read/Edit/Write symmetry.** All three verbs are denied for each credential
-path — not just `Read`:
+**Read/Edit symmetry.** Both verbs are denied for each credential path — not
+just `Read`:
 
 - `Read` prevents exfiltration.
-- `Edit` and `Write` prevent accidental overwrite or corruption of credential
-  files (threat model A, [INV-7](../CLAUDE.md)) — for example, an agent that
-  tries to "update" a `.env` file it mistook for project config cannot silently
+- `Edit` prevents accidental overwrite or corruption of credential files
+  (threat model A, [INV-7](../CLAUDE.md)) — for example, an agent that tries
+  to "update" a `.env` file it mistook for project config cannot silently
   corrupt a `.docker/config.json` that happens to live in the sibling tree.
+  Since Claude Code 2.1.208, `Edit(path)` rules match ALL built-in
+  file-editing tools (Edit, Write, NotebookEdit); separate `Write(path)` rules
+  are no longer evaluated and only produce startup warnings, so drydock ships
+  `Edit` rules only.
 
 **The `.claude-container*` glob is load-bearing.** It covers both the legacy
 single-session `.claude-container/` directory and the per-session

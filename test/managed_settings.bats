@@ -708,8 +708,8 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
         "$SECRETS_FILE" >/dev/null
 }
 
-@test "00-secrets: Edit and Write rules for credential dirs use //**/ root-anchor" {
-    for verb in "Edit" "Write"; do
+@test "00-secrets: Edit rules for credential dirs use //**/ root-anchor" {
+    for verb in "Edit"; do
         for dir in ".ssh" ".aws" ".gnupg" ".kube"; do
             jq -e --arg rule "${verb}(//**/${dir}/**)" \
                 '.permissions.deny | map(select(. == $rule)) | length >= 1' \
@@ -718,14 +718,16 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     done
 }
 
-@test "00-secrets: Edit and Write rules for credential FILE paths use //**/ root-anchor" {
+@test "00-secrets: Edit rules for credential FILE paths use //**/ root-anchor" {
     # Symmetric with the directory-glob test above. Credential FILE paths cover:
     #   .docker/config.json                   — Docker registry creds
     #   .claude/.credentials.json             — Claude Code's own OAuth token
     #   .claude-container*/.credentials.json  — drydock per-session OAuth tokens
-    # All three need R/E/W coverage: Read prevents exfiltration, Edit/Write
-    # prevent accidental overwrite/corruption (threat model A, INV-7).
-    for verb in "Edit" "Write"; do
+    # All three need R/E coverage: Read prevents exfiltration, Edit prevents
+    # accidental overwrite/corruption (threat model A, INV-7). Edit(path) rules
+    # cover ALL built-in file-editing tools (Edit, Write, NotebookEdit) since
+    # Claude Code 2.1.208 — separate Write() rules are dead and warn at startup.
+    for verb in "Edit"; do
         for path in ".docker/config.json" ".claude/.credentials.json" ".claude-container*/.credentials.json"; do
             jq -e --arg rule "${verb}(//**/${path})" \
                 '.permissions.deny | map(select(. == $rule)) | length >= 1' \
@@ -735,8 +737,8 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 }
 
 @test "00-secrets: drydock-state rules keep __HOME__ anchor (NOT root-anchored)" {
-    # .config/drydock Read/Edit/Write must still use __HOME__
-    for verb in "Read" "Edit" "Write"; do
+    # .config/drydock Read/Edit must still use __HOME__
+    for verb in "Read" "Edit"; do
         jq -e --arg rule "${verb}(__HOME__/.config/drydock/**)" \
             '.permissions.deny | map(select(. == $rule)) | length >= 1' \
             "$SECRETS_FILE" >/dev/null
@@ -754,14 +756,14 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     [ "$home_cred_rules" -eq 0 ]
 }
 
-@test "00-secrets: R/E/W deny for .env and its common variants" {
+@test "00-secrets: R/E deny for .env and its common variants" {
     # v0.2.1+: .env-family files are denied by drydock's managed-settings layer.
     # Conservative variant enumeration — explicit names instead of a .env.* glob
     # so .env.example / .env.template / .env.sample (template files, not secrets)
     # remain readable. Closes the gap previously documented in security.md's
     # "what drydock does NOT protect against" section.
     local variant verb
-    for verb in "Read" "Edit" "Write"; do
+    for verb in "Read" "Edit"; do
         for variant in ".env" ".env.local" ".env.production" ".env.development" ".env.test" ".env.staging"; do
             jq -e --arg rule "${verb}(//**/${variant})" \
                 '.permissions.deny | map(select(. == $rule)) | length >= 1' \
@@ -781,6 +783,18 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     [ "$glob_rules" -eq 0 ]
 }
 
+@test "00-secrets: SCOPE GUARD — no dead Write() rules in deny list" {
+    # Claude Code 2.1.208 made Edit(path) rules cover ALL built-in file-editing
+    # tools (Edit, Write, NotebookEdit); Write(path) rules are no longer matched
+    # by file permission checks, and 2.1.210+ prints a startup warning for each
+    # one. Every former Write() rule had an identical Edit() twin, so removing
+    # them lost no coverage. This guard catches a regression that reintroduces
+    # dead Write() rules (startup noise, false sense of an independent layer).
+    local write_rules
+    write_rules="$(jq '[.permissions.deny[] | select(startswith("Write("))] | length' "$SECRETS_FILE")"
+    [ "$write_rules" -eq 0 ]
+}
+
 # ── T19: INV-1 runtime integration — //**/ rules baked into the running image ───
 #
 # These tests require a built drydock:latest image. They are gated by
@@ -792,14 +806,16 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 # This is drydock's contract (INV-3 tamper-proof bake step), NOT a test of
 # Claude Code's permission engine (which requires external auth and is upstream).
 #
-# T19-A covers the four symmetric DIRECTORY globs (.ssh/.aws/.gnupg/.kube) R/E/W.
-# T19-B covers the three single-FILE credential paths R/E/W (closed in v0.2.0):
+# T19-A covers the four symmetric DIRECTORY globs (.ssh/.aws/.gnupg/.kube) R/E.
+# T19-B covers the three single-FILE credential paths R/E (closed in v0.2.0):
 #   .docker/config.json, .claude/.credentials.json, .claude-container*/.credentials.json.
 # The earlier Read-only asymmetry on .docker/config.json and .credentials.json
 # was closed alongside the link-sibling-projects deny-rule rewrite (the per-session
 # .claude-container-<disc>/.credentials.json gap also fixed via the '*' glob).
+# Write() rules were dropped when Claude Code 2.1.208 folded the Write tool
+# into Edit(path) matching — Edit rules carry the full file-write coverage.
 
-@test "00-secrets: //**/ root-anchored R/E/W rules baked into running image (integration)" {
+@test "00-secrets: //**/ root-anchored R/E rules baked into running image (integration)" {
     [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
         || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
 
@@ -809,8 +825,8 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 
     local deployed_json="$output"
 
-    # Four symmetric dirs: Read, Edit, Write must all use //**/ anchor
-    for verb in "Read" "Edit" "Write"; do
+    # Four symmetric dirs: Read and Edit must both use //**/ anchor
+    for verb in "Read" "Edit"; do
         for dir in ".ssh" ".aws" ".gnupg" ".kube"; do
             local rule="${verb}(//**/${dir}/**)"
             echo "$deployed_json" | jq -e --arg r "$rule" \
@@ -821,7 +837,7 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
     done
 }
 
-@test "00-secrets: //**/ credential FILE-path R/E/W rules baked into running image (integration)" {
+@test "00-secrets: //**/ credential FILE-path R/E rules baked into running image (integration)" {
     [[ "${DRYDOCK_INTEGRATION:-}" == "1" ]] \
         || skip "requires DRYDOCK_INTEGRATION=1 + built drydock:latest"
 
@@ -831,8 +847,8 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 
     local deployed_json="$output"
 
-    # Symmetric R/E/W coverage for all three single-file credential paths.
-    for verb in "Read" "Edit" "Write"; do
+    # Symmetric R/E coverage for all three single-file credential paths.
+    for verb in "Read" "Edit"; do
         for path in ".docker/config.json" ".claude/.credentials.json" ".claude-container*/.credentials.json"; do
             local rule="${verb}(//**/${path})"
             echo "$deployed_json" | jq -e --arg r "$rule" \
@@ -936,7 +952,7 @@ SECRETS_FILE="$DRYDOCK_HOME/templates/managed-settings.d/00-secrets.json"
 #
 # Glob convention. The `Bash(<cmd> *<path>*)` form uses Claude Code's
 # argv-glob — `*` matches any substring within the assembled command-line
-# string. This is intentionally distinct from the `Read/Edit/Write(<path>)`
+# string. This is intentionally distinct from the `Read/Edit(<path>)`
 # form, which uses a path-glob where `**` is the recursive wildcard. Every
 # Bash deny entry across `templates/managed-settings.d/` (00-secrets.json,
 # 10-git-safety.json, 30-os-safety.json) uses single `*`; `**` never
