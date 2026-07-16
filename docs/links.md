@@ -272,8 +272,9 @@ Summary:
    dirs are never linked in the first place.
 2. **`:ro` / `:rw` mount** — RO siblings block writes at the OS layer. RW
    siblings allow writes but only to the sibling directory itself.
-3. **`//**/`-anchored deny rules** — `00-secrets.json` denies Read/Edit/Write
-   on all `~/.config/drydock/**` paths (which covers the managed SSH config and
+3. **`//**/`-anchored deny rules** — `00-secrets.json` denies Read/Edit
+   (Edit covers all file-editing tools since Claude Code 2.1.208) on all
+   `~/.config/drydock/**` paths (which covers the managed SSH config and
    all deploy keys) at any mount depth, including inside sibling trees.
 
 The per-sibling deploy key and managed SSH config live under
